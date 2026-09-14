@@ -10,16 +10,13 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@vitejs/plugin-react": "^4.3.4",
-    "vite": "^6.0.7",
-    "react": "^18.3.1",
-    "react-dom": "^18.3.1",
-    "lucide-react": "^0.468.0",
-    "express": "^5.1.0",
-    "cors": "^2.8.5",
-    "pg": "^8.16.3",
-    "bcryptjs": "^3.0.2",
-    "jsonwebtoken": "^9.0.2"
-  },
+  "@vitejs/plugin-react": "^4.3.4",
+  "vite": "^6.0.7",
+  "react": "^18.3.1",
+  "react-dom": "^18.3.1",
+  "lucide-react": "^0.468.0",
+  "bcryptjs": "^2.4.3",
+  "jsonwebtoken": "^9.0.2"
+},
   "devDependencies": {}
 }
