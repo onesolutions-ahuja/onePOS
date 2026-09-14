@@ -5,6 +5,7 @@ import jwt from "jsonwebtoken";
 import pg from "pg";
 import path from "path";
 import { fileURLToPath } from "url";
+import { initializeDatabase } from "./database/init.js";
 
 const { Pool } = pg;
 
@@ -770,6 +771,21 @@ app.get("/api/setup/database", async (req, res) => {
 |--------------------------------------------------------------------------
 */
 
-app.listen(PORT, "0.0.0.0", () => {
-  console.log(`onePOS running on port ${PORT}`);
-});
+async function startServer() {
+  try {
+    if (pool) {
+      await initializeDatabase(pool);
+    } else {
+      console.log("onePOS: DATABASE_URL is not configured");
+    }
+
+    app.listen(PORT, "0.0.0.0", () => {
+      console.log(`onePOS running on port ${PORT}`);
+    });
+  } catch (error) {
+    console.error("onePOS startup failed:", error);
+    process.exit(1);
+  }
+}
+
+startServer();
