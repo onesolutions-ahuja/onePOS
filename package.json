@@ -16,7 +16,10 @@
     "react-dom": "^18.3.1",
     "lucide-react": "^0.468.0",
     "express": "^5.1.0",
-    "cors": "^2.8.5"
+    "cors": "^2.8.5",
+    "pg": "^8.16.3",
+    "bcryptjs": "^3.0.2",
+    "jsonwebtoken": "^9.0.2"
   },
   "devDependencies": {}
 }
