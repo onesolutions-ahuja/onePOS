@@ -37,6 +37,14 @@ const __dirname = path.dirname(__filename);
 */
 
 app.use(cors());
+
+/*
+ * Deliveroo webhooks are HMAC-signed over the RAW request body - parse it
+ * before the global JSON parser consumes the stream (express.raw sets
+ * req.body to a Buffer; express.json then skips the already-parsed body).
+ */
+app.use("/api/online/deliveroo/webhook", express.raw({ type: "*/*", limit: "1mb" }));
+
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ limit: "10mb", extended: true }));
 

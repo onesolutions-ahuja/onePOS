@@ -1,7 +1,7 @@
 import express from "express";
 
 import { getPlatformService, isOnlinePlatform } from "../services/onlineOrders/index.js";
-import { loadPlatformConfig } from "../services/onlineOrders/platformConfig.js";
+import { loadPlatformConfig, decryptSecret } from "../services/onlineOrders/platformConfig.js";
 import { logPlatformApiCall } from "../services/onlineOrders/platformLogger.js";
 
 /*
@@ -1224,6 +1224,197 @@ export default function createOnlineRouter({
         service.completeOrder(order, (req.body && req.body.otp) || "", runtime),
       buildMessage: (order) => `Order completed - OTP verified by platform, inventory permanently consumed (${order.platform})`,
     });
+  });
+
+  /*
+   * Writes the webhook audit row and returns the transport acknowledgement
+   * to Deliveroo (HTTP 202 - a genuine receipt ack, not a simulated platform
+   * API response).
+   */
+  async function acknowledgeDeliverooWebhook(res, { companyId, environment, action, payload, signatureHeader, signatureState, attachedOrderId }) {
+    await logPlatformApiCall(db, {
+      companyId,
+      platform: "deliveroo",
+      environment: environment || null,
+      action,
+      endpoint: "/api/online/deliveroo/webhook",
+      httpMethod: "POST",
+      requestPayload: payload,
+      requestHeaders: {
+        "x-deliveroo-signature": signatureHeader ? "(present)" : "(absent)",
+        signature_state: signatureState,
+      },
+      responseStatus: 202,
+      responseBody: { status: "received", order_attached: Boolean(attachedOrderId) },
+      success: true,
+      orderId: attachedOrderId,
+    });
+
+    return res.status(202).json({ status: "received" });
+  }
+
+  /*
+   * POST /api/online/deliveroo/webhook
+   *
+   * Deliveroo Sandbox webhook receiver (public, unauthenticated endpoint -
+   * authenticity is enforced via HMAC signature whenever a webhook secret is
+   * configured in Settings -> Online Platforms -> Deliveroo). Receive-only:
+   * no Deliveroo API is called and no platform response is simulated.
+   *
+   * The raw body is provided by the express.raw parser mounted in server.js
+   * before the global JSON parser (needed for signature verification).
+   */
+  router.post("/online/deliveroo/webhook", async (req, res) => {
+    const rawBody = Buffer.isBuffer(req.body) ? req.body : Buffer.from(JSON.stringify(req.body || {}));
+    const signatureHeader = req.headers["x-deliveroo-signature"] || null;
+
+    let payload = null;
+    try {
+      payload = JSON.parse(rawBody.toString("utf8"));
+    } catch {
+      payload = null;
+    }
+
+    const deliveroo = getPlatformService("deliveroo");
+    let integrations = null;
+
+    try {
+      integrations = await db(
+        "SELECT company_id, active, configuration FROM integrations WHERE provider = 'deliveroo' ORDER BY created_at"
+      );
+
+      if (!integrations.rows.length) {
+        console.error("Deliveroo webhook received but no Deliveroo integration is configured");
+        return res.status(500).json({ error: "no_deliveroo_configuration" });
+      }
+
+      /*
+       * Resolve the company: prefer the integration whose webhook secret
+       * verifies the HMAC signature. If a secret is configured somewhere but
+       * NOTHING verifies -> reject (401). If no secret is configured at all
+       * (sandbox setup stage), fall back to the first active integration and
+       * record the event as signature-unverified - transparently, never
+       * pretending it was verified.
+       */
+      let matched = null;
+      let signatureState = "unverified_no_secret_configured";
+
+      for (const row of integrations.rows) {
+        const secret = decryptSecret(row.configuration && row.configuration.webhook_secret);
+
+        if (secret && signatureHeader && deliveroo.verifyWebhookSignature(rawBody, signatureHeader, secret)) {
+          matched = row;
+          signatureState = "verified";
+          break;
+        }
+      }
+
+      if (!matched) {
+        const anySecretConfigured = integrations.rows.some(
+          (row) => row.configuration && decryptSecret(row.configuration.webhook_secret)
+        );
+
+        if (anySecretConfigured) {
+          await logPlatformApiCall(db, {
+            companyId: integrations.rows[0].company_id,
+            platform: "deliveroo",
+            environment:
+              (integrations.rows[0].configuration && integrations.rows[0].configuration.environment) || null,
+            action: "WEBHOOK_REJECTED",
+            endpoint: "/api/online/deliveroo/webhook",
+            httpMethod: "POST",
+            requestPayload: payload,
+            requestHeaders: {
+              "x-deliveroo-signature": signatureHeader ? "(present - did not verify)" : "(absent)",
+            },
+            responseStatus: 401,
+            responseBody: { error: "invalid_signature" },
+            success: false,
+            errorMessage: "Deliveroo webhook signature verification failed",
+          });
+
+          return res.status(401).json({ error: "invalid_signature" });
+        }
+
+        matched = integrations.rows.find((row) => row.active !== false) || integrations.rows[0];
+      }
+
+      const companyId = matched.company_id;
+      const configuration = matched.configuration || {};
+      const event = payload ? deliveroo.parseWebhookEvent(payload) : null;
+
+      const action = `WEBHOOK_${String((event && event.eventType) || "UNKNOWN")
+        .toUpperCase()
+        .replace(/[^A-Z0-9]+/g, "_")
+        .slice(0, 80)}`;
+
+      /*
+       * Lifecycle preparation: when the payload identifies an order that
+       * already exists (created via the online-order intake), attach the
+       * event to it. The event type is stored verbatim - status transitions
+       * stay with the existing lifecycle endpoints until Deliveroo's real
+       * event schema is observed in sandbox.
+       */
+      let attachedOrderId = null;
+
+      if (event && event.externalOrderId) {
+        const orderRow = await db(
+          "SELECT id, status FROM online_orders WHERE company_id = $1 AND platform = 'deliveroo' AND external_order_id = $2 LIMIT 1",
+          [companyId, event.externalOrderId]
+        );
+
+        if (orderRow.rows.length) {
+          attachedOrderId = orderRow.rows[0].id;
+
+          await db(
+            `INSERT INTO online_order_events (order_id, event_type, from_status, to_status, message, platform_response)
+             VALUES ($1, $2, $3, $4, $5, $6)`,
+            [
+              attachedOrderId,
+              String(event.eventType || "WEBHOOK_RECEIVED")
+                .toUpperCase()
+                .replace(/[^A-Z0-9]+/g, "_")
+                .slice(0, 50),
+              orderRow.rows[0].status,
+              null,
+              `Deliveroo webhook received (${signatureState})`,
+              JSON.stringify(payload),
+            ]
+          );
+        }
+      }
+
+      return await acknowledgeDeliverooWebhook(res, {
+        companyId,
+        environment: configuration.environment || null,
+        action,
+        payload,
+        signatureHeader,
+        signatureState,
+        attachedOrderId,
+      });
+    } catch (error) {
+      console.error("Deliveroo webhook error:", error);
+
+      try {
+        await logPlatformApiCall(db, {
+          companyId: integrations && integrations.rows.length ? integrations.rows[0].company_id : null,
+          platform: "deliveroo",
+          action: "WEBHOOK_ERROR",
+          endpoint: "/api/online/deliveroo/webhook",
+          httpMethod: "POST",
+          requestPayload: payload,
+          responseStatus: 500,
+          responseBody: { error: "webhook_processing_failed" },
+          success: false,
+          errorMessage: error.message,
+        });
+      } catch {
+        /* logging must never mask the response */
+      }
+
+      return res.status(500).json({ error: "webhook_processing_failed" });
+    }
   });
 
   return router;

@@ -439,6 +439,20 @@ function OnlinePlatformSettings({ onMessage, onError }) {
           {platform.brand_id ? <> &nbsp;|&nbsp; Saved Brand ID: <span className="font-mono">{platform.brand_id}</span></> : null}
         </p>
       )}
+      {platform.platform === "deliveroo" && (
+        <div className="mt-4 text-xs text-slate-500 bg-slate-50 border border-slate-200 rounded-lg p-3">
+          <p>
+            <span className="font-medium">Webhook URL (configure in the Deliveroo developer portal):</span>{" "}
+            <span className="font-mono select-all">{String(window.location.origin)}/api/online/deliveroo/webhook</span>
+          </p>
+          <p className="mt-1">
+            Deliveroo signs each webhook with HMAC-SHA256 using your webhook secret - store the same secret in the
+            &quot;Webhook secret&quot; field above. Events are signature-verified when the secret is configured; until
+            then they are stored and marked unverified. Every webhook request/response is recorded in the platform API
+            audit log.
+          </p>
+        </div>
+      )}
       <div className="grid grid-cols-2 gap-3">
         <label className="text-sm text-slate-600"><span className="block mb-1 font-medium">Environment</span>
           <select value={form.environment || "sandbox"} onChange={(event) => update(platform.platform, "environment", event.target.value)} className="w-full h-10 px-2 border border-slate-200 rounded-lg bg-white"><option value="sandbox">Sandbox</option><option value="production">Production</option></select>
