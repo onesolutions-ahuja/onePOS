@@ -1,5 +1,5 @@
-import { useEffect, useState, useRef } from "react";
-import { Percent, X } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { Percent, ShoppingBag, X } from "lucide-react";
 import { apiRequest } from "../../services/api.js";
 import { normaliseProduct } from "../../utils/formatters.js";
 import BottomStatusBar from "../../components/BottomStatusBar.jsx";
@@ -13,7 +13,7 @@ import CustomerSelectorModal from "./CustomerSelectorModal.jsx";
    POS / TILL
 ========================================================= */
 
-function POS({ onAdmin, onLogout }) {
+function POS({ onAdmin, onOpenOnlineOrders, onLogout }) {
   const [category, setCategory] = useState("All");
   const [search, setSearch] = useState("");
   const [basket, setBasket] = useState([]);
@@ -31,6 +31,31 @@ function POS({ onAdmin, onLogout }) {
   const [showTill, setShowTill] = useState(false);
   const [loadingTill, setLoadingTill] = useState(true);
   const [storeName, setStoreName] = useState("");
+
+  /*
+   * Non-blocking online-order notification state. Polled; when the real Uber
+   * webhook lands it can call notifyNewOnlineOrder() directly - the till is
+   * never blocked and the current sale is never interrupted.
+   */
+  const [onlineOrderCount, setOnlineOrderCount] = useState(0);
+  const [onlineOrderToast, setOnlineOrderToast] = useState(null);
+
+  const loadOnlineOrderCount = async () => {
+    try {
+      const data = await apiRequest("/api/online/orders?status=RECEIVED&limit=50");
+      if (data.success) {
+        const next = Array.isArray(data.data) ? data.data.length : 0;
+        setOnlineOrderCount((previous) => {
+          if (next > previous) {
+            setOnlineOrderToast({ message: "New Uber Eats Order" });
+          }
+          return next;
+        });
+      }
+    } catch (error) {
+      console.error("Load online order count error:", error);
+    }
+  };
 
   const [products, setProducts] = useState([]);
   const [loadingProducts, setLoadingProducts] = useState(true);
@@ -96,6 +121,7 @@ function POS({ onAdmin, onLogout }) {
   useEffect(() => {
     loadProducts();
     loadCurrentTill();
+    loadOnlineOrderCount();
 
     apiRequest("/api/settings")
       .then((data) => {
@@ -110,6 +136,9 @@ function POS({ onAdmin, onLogout }) {
       .catch((error) => {
         console.error("onePOS settings loading error:", error);
       });
+
+    const onlineOrderTimer = setInterval(loadOnlineOrderCount, 15000);
+    return () => clearInterval(onlineOrderTimer);
   }, []);
 
   const productsRef = useRef(products);
@@ -352,8 +381,31 @@ function POS({ onAdmin, onLogout }) {
         till={till}
         onManageTill={() => setShowTill(true)}
         onAdmin={onAdmin}
+        onOpenOnlineOrders={onOpenOnlineOrders}
         onLogout={onLogout}
+        onlineOrderCount={onlineOrderCount}
       />
+
+      {/* Non-blocking new-online-order notification: a small toast over the
+          till that never interrupts the current sale. Auto-dismisses. */}
+      {onlineOrderToast && (
+        <ToastAutoDismiss onDone={() => setOnlineOrderToast(null)}>
+          <div className="fixed top-16 right-4 z-50">
+            <div className="bg-white border border-slate-200 shadow-lg rounded-lg px-4 py-3 text-sm">
+              <span className="flex items-start gap-2">
+                <ShoppingBag size={16} className="text-blue-600 mt-0.5" />
+                <button onClick={onOpenOnlineOrders} className="text-left">
+                  <span className="font-medium">{onlineOrderToast.message}</span>
+                  <span className="block text-xs text-slate-500 mt-0.5">Click to open Online Orders</span>
+                </button>
+                <button onClick={() => setOnlineOrderToast(null)} className="p-1 hover:bg-slate-100 rounded">
+                  <X size={14} className="text-slate-400" />
+                </button>
+              </span>
+            </div>
+          </div>
+        </ToastAutoDismiss>
+      )}
 
       <div className="flex-1 flex min-h-0 pb-8">
         <ProductGrid
@@ -455,3 +507,13 @@ function HeldSalesModal({ sales, onClose, onResume }) {
 }
 
 export default POS;
+
+/* Auto-dismisses its children after 10 seconds (non-blocking notification). */
+function ToastAutoDismiss({ onDone, timeoutMs = 10000, children }) {
+  useEffect(() => {
+    const timer = setTimeout(onDone, timeoutMs);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  return children;
+}

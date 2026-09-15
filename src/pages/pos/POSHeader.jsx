@@ -1,6 +1,6 @@
-import { LogOut } from "lucide-react";
+import { LogOut, ShoppingBag } from "lucide-react";
 
-function POSHeader({ loadingTill, till, onManageTill, onAdmin, onLogout }) {
+function POSHeader({ loadingTill, till, onManageTill, onAdmin, onOpenOnlineOrders, onLogout, onlineOrderCount = 0 }) {
   return (
     <header className="h-[58px] bg-slate-900 text-white flex items-center justify-between px-4 shrink-0">
       <div className="flex items-center gap-4">
@@ -43,6 +43,21 @@ function POSHeader({ loadingTill, till, onManageTill, onAdmin, onLogout }) {
           className="px-3 py-2 bg-slate-800 rounded-md text-sm hover:bg-slate-700"
         >
           Manage Till
+        </button>
+
+        <button
+          onClick={onOpenOnlineOrders}
+          className="relative px-3 py-2 bg-slate-800 rounded-md text-sm hover:bg-slate-700"
+        >
+          <span className="flex items-center gap-2">
+            <ShoppingBag size={15} />
+            Online Orders
+            {onlineOrderCount > 0 && (
+              <span className="absolute -top-1.5 -right-1.5 min-w-[18px] h-[18px] px-1 bg-red-600 text-white text-[11px] font-bold rounded-full flex items-center justify-center">
+                {onlineOrderCount > 99 ? "99+" : onlineOrderCount}
+              </span>
+            )}
+          </span>
         </button>
 
         <button

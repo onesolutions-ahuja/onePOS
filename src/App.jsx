@@ -13,6 +13,8 @@ export default function App() {
   const [view, setView] =
     useState("pos");
 
+  const [adminInitialPage, setAdminInitialPage] = useState("Dashboard");
+
   useEffect(() => {
     const verifySession = async () => {
       const token = localStorage.getItem("onepos_token");
@@ -75,15 +77,21 @@ export default function App() {
           setView("pos")
         }
         onLogout={logout}
+        initialPage={adminInitialPage}
       />
     );
   }
 
   return (
     <POS
-      onAdmin={() =>
-        setView("admin")
-      }
+      onAdmin={() => {
+        setAdminInitialPage("Dashboard");
+        setView("admin");
+      }}
+      onOpenOnlineOrders={() => {
+        setAdminInitialPage("Online Orders");
+        setView("admin");
+      }}
       onLogout={logout}
     />
   );

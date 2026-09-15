@@ -1,5 +1,6 @@
-import { useState } from "react";
-import { BarChart3, Calculator, CreditCard, FileText, Grid3X3, Home, LogOut, Package, Percent, Receipt, RefreshCw, Settings, ShoppingBag, Store, Tag, Users } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
+import { BarChart3, Bell, Calculator, CreditCard, FileText, Grid3X3, Home, LogOut, Package, Percent, Receipt, RefreshCw, Settings, ShoppingBag, Store, Tag, Users, X } from "lucide-react";
+import { apiRequest } from "../../services/api.js";
 import BottomStatusBar from "../../components/BottomStatusBar.jsx";
 import Dashboard from "../dashboard/Dashboard.jsx";
 import ProductsAdmin from "../products/ProductsAdmin.jsx";
@@ -14,9 +15,49 @@ import ReturnsAdmin, { SupplierReturnsAdmin } from "../returns/ReturnsAdmin.jsx"
 import CustomersAdmin from "../customers/CustomersAdmin.jsx";
 import OnlineOrdersAdmin from "../online/OnlineOrdersAdmin.jsx";
 
-export default function AdminLayout({ onPOS, onLogout }) {
-  const [page, setPage] = useState("Dashboard");
+export default function AdminLayout({ onPOS, onLogout, initialPage = "Dashboard" }) {
+  const [page, setPage] = useState(initialPage);
   const [productCreateRequested, setProductCreateRequested] = useState(false);
+
+  /* Non-blocking online-order notifications (Uber Eats / Deliveroo). */
+  const [onlineOrderCount, setOnlineOrderCount] = useState(0);
+  const [onlineOrderToast, setOnlineOrderToast] = useState(null);
+
+  /*
+   * Polls the online-order count (RECEIVED = pending acceptance / new).
+   * This is webhook-ready: when the real Uber webhook lands, the receive
+   * endpoint will push the same state and this polling remains as fallback.
+   */
+  const loadOnlineOrderCount = useCallback(async () => {
+    try {
+      const data = await apiRequest("/api/online/orders?status=RECEIVED&limit=50");
+      if (data.success) {
+        setOnlineOrderCount(Array.isArray(data.data) ? data.data.length : 0);
+      }
+    } catch (error) {
+      console.error("Load online order count error:", error);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadOnlineOrderCount();
+    const timer = setInterval(loadOnlineOrderCount, 15000);
+    return () => clearInterval(timer);
+  }, [loadOnlineOrderCount]);
+
+  const openOnlineOrders = () => {
+    setOnlineOrderToast(null);
+    setPage("Online Orders");
+  };
+
+  /* Surfaces a new-order toast without blocking the admin/till workflow. */
+  const notifyNewOnlineOrder = useCallback((payload = {}) => {
+    setOnlineOrderToast({
+      message: payload.message || "New Uber Eats Order",
+      externalOrderId: payload.externalOrderId || null,
+    });
+    loadOnlineOrderCount();
+  }, [loadOnlineOrderCount]);
 
   const items = [
     ["Dashboard", Home],
@@ -29,7 +70,6 @@ export default function AdminLayout({ onPOS, onLogout }) {
     ["Suppliers", Users],
     ["Inventory", Grid3X3],
     ["Customers", Users],
-    ["Online Orders", ShoppingBag],
     ["Employees", Users],
     ["Stores", Store],
     ["Payments", CreditCard],
@@ -38,7 +78,7 @@ export default function AdminLayout({ onPOS, onLogout }) {
   ];
 
   return (
-    <div className="h-screen bg-slate-100 flex">
+    <div className="h-screen bg-slate-100 flex relative">
       {/* SIDEBAR */}
       <aside className="w-60 bg-slate-950 text-white shrink-0">
         <div className="h-16 flex items-center px-5 border-b border-slate-800">
@@ -90,6 +130,21 @@ export default function AdminLayout({ onPOS, onLogout }) {
 
           <div className="flex items-center gap-3">
             <button
+              onClick={openOnlineOrders}
+              className="relative px-4 py-2 bg-slate-800 text-white rounded-md text-sm hover:bg-slate-700"
+            >
+              <span className="flex items-center gap-2">
+                <ShoppingBag size={16} />
+                Online Orders
+                {onlineOrderCount > 0 && (
+                  <span className="absolute -top-1.5 -right-1.5 min-w-[18px] h-[18px] px-1 bg-red-600 text-white text-[11px] font-bold rounded-full flex items-center justify-center">
+                    {onlineOrderCount > 99 ? "99+" : onlineOrderCount}
+                  </span>
+                )}
+              </span>
+            </button>
+
+            <button
               onClick={onPOS}
               className="px-4 py-2 bg-blue-600 text-white rounded-md text-sm hover:bg-blue-700"
             >
@@ -104,6 +159,36 @@ export default function AdminLayout({ onPOS, onLogout }) {
             </button>
           </div>
         </header>
+
+        {/* Non-blocking new-online-order notification (never blocks the UI). */}
+        {onlineOrderToast && (
+          <button
+            onClick={openOnlineOrders}
+            className="absolute top-20 right-6 z-50 bg-white border border-slate-200 shadow-lg rounded-lg px-4 py-3 text-sm text-left hover:border-blue-400"
+          >
+            <span className="flex items-start gap-2">
+              <Bell size={16} className="text-blue-600 mt-0.5" />
+              <span>
+                <span className="font-medium">{onlineOrderToast.message}</span>
+                {onlineOrderToast.externalOrderId ? (
+                  <span className="block text-xs text-slate-500 mt-0.5">
+                    Order {onlineOrderToast.externalOrderId} - click to view
+                  </span>
+                ) : (
+                  <span className="block text-xs text-slate-500 mt-0.5">Click to open Online Orders</span>
+                )}
+              </span>
+              <X
+                size={14}
+                className="text-slate-400 ml-2 mt-0.5"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  setOnlineOrderToast(null);
+                }}
+              />
+            </span>
+          </button>
+        )}
 
         <div className="p-6 flex-1 overflow-y-auto pb-14">
           {page ===

@@ -371,6 +371,7 @@ function OnlinePlatformSettings({ onMessage, onError }) {
         storeLocationId: platform.store_location_id || "",
         storeId: platform.store_id || "",
         brandId: platform.brand_id || "",
+        orderAcceptance: platform.order_acceptance === "auto" ? "auto" : "manual",
         apiKey: "",
         webhookSecret: "",
         notes: platform.notes || "",
@@ -394,6 +395,7 @@ function OnlinePlatformSettings({ onMessage, onError }) {
       body.storeLocationId = body.storeLocationId || null;
       body.storeId = body.storeId || null;
       body.brandId = body.brandId || null;
+      body.orderAcceptance = body.orderAcceptance === "auto" ? "auto" : "manual";
       body.notes = body.notes || null;
       const data = await apiRequest(`/api/settings/online-platforms/${platform}`, { method: "PUT", body: JSON.stringify(body) });
       if (!data.success) throw new Error(data.message || "Unable to save configuration");
@@ -447,7 +449,21 @@ function OnlinePlatformSettings({ onMessage, onError }) {
             <input type={type} autoComplete="new-password" value={form[field] || ""} placeholder={platform[configuredKey] ? "Leave blank to keep current value" : "Not set"} onChange={(event) => update(platform.platform, field, event.target.value)} className="w-full h-10 px-3 border border-slate-200 rounded-lg" />
           </label>
         ))}
-        <label className="text-sm text-slate-600 col-span-2"><span className="block mb-1 font-medium">Notes</span>
+        {platform.platform === "uber" && (
+        <label className="text-sm text-slate-600 col-span-2">
+          <span className="block mb-1 font-medium">Order acceptance</span>
+          <select
+            value={form.orderAcceptance || "manual"}
+            onChange={(event) => update(platform.platform, "orderAcceptance", event.target.value)}
+            className="w-full h-10 px-2 border border-slate-200 rounded-lg bg-white"
+          >
+            <option value="manual">Manual acceptance</option>
+            <option value="auto">Auto-accept orders</option>
+          </select>
+          <span className="block mt-1 text-xs text-slate-400">Auto-accept immediately accepts new {platform.name} orders after they are received. Stored locally; synced to the platform when Uber supports it via API.</span>
+        </label>
+      )}
+      <label className="text-sm text-slate-600 col-span-2"><span className="block mb-1 font-medium">Notes</span>
           <textarea rows="2" value={form.notes || ""} onChange={(event) => update(platform.platform, "notes", event.target.value)} className="w-full px-3 py-2 border border-slate-200 rounded-lg" />
         </label>
       </div>
