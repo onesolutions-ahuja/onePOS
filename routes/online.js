@@ -837,20 +837,77 @@ export default function createOnlineRouter({
         actorUserId: req.user.id,
       });
 
+      /*
+       * AUTO-ACCEPT (Settings -> Online Platforms -> Order acceptance):
+       * a freshly received order is immediately accepted through the SAME
+       * platform service used by the manual endpoint - no duplicated Uber
+       * API logic. Acceptance failure leaves the order in RECEIVED (pending
+       * manual acceptance). Inventory stays reserved either way.
+       */
+      let autoAccepted = false;
+
+      if (runtime.order_acceptance === "auto") {
+        const service = getPlatformService(platform);
+        const acceptResponse = await service.acceptOrder(order, runtime);
+
+        await logSimulatedPlatformCall({
+          companyId: req.user.companyId,
+          platform,
+          environment: runtime.environment,
+          action: "ACCEPT_ORDER",
+          response: acceptResponse,
+          orderId: order.id,
+          requestPayload: { external_order_id: order.external_order_id, trigger: "auto_accept" },
+        });
+
+        if (acceptResponse && acceptResponse.success === true) {
+          await client.query(
+            "UPDATE online_orders SET status = 'ACCEPTED', accepted_at = NOW(), updated_at = NOW() WHERE id = $1 AND company_id = $2 AND status = 'RECEIVED'",
+            [order.id, req.user.companyId]
+          );
+          await recordEvent(client, {
+            orderId: order.id,
+            eventType: "ORDER_ACCEPTED",
+            fromStatus: "RECEIVED",
+            toStatus: "ACCEPTED",
+            message: "Order auto-accepted (auto-accept mode enabled in Settings)",
+            platformResponse: acceptResponse,
+            actorUserId: req.user.id,
+          });
+          autoAccepted = true;
+        } else {
+          // Acceptance (stub or real) did not confirm - order stays RECEIVED
+          // for manual acceptance; the failure is recorded for the audit.
+          await recordEvent(client, {
+            orderId: order.id,
+            eventType: "PLATFORM_CALL_FAILED",
+            fromStatus: "RECEIVED",
+            message: `Auto-accept did not confirm${acceptResponse && acceptResponse.code ? ` (${acceptResponse.code})` : ""}`,
+            platformResponse: acceptResponse,
+            actorUserId: req.user.id,
+          });
+        }
+      }
+
       if (writeAudit) {
         await writeAudit(req.user.companyId, req.user.id, "online_order_received", "online_order", order.id, {
           platform,
           externalOrderId: externalId,
           total: order.total,
+          autoAccepted,
         });
       }
 
       await client.query("COMMIT");
 
+      const finalOrder = await loadOrder(order.id, req.user.companyId);
+
       res.status(201).json({
         success: true,
-        message: "Online order received and inventory reserved",
-        data: { order, items: resolvedItems },
+        message: autoAccepted
+          ? "Online order received, inventory reserved and auto-accepted"
+          : "Online order received and inventory reserved",
+        data: { order: finalOrder, items: resolvedItems, autoAccepted },
       });
     } catch (error) {
       if (transactionStarted) {

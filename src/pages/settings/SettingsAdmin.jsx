@@ -346,7 +346,6 @@ function OnlinePlatformSettings({ onMessage, onError }) {
   const [saving, setSaving] = useState("");
   const [loading, setLoading] = useState(true);
   const [uberTest, setUberTest] = useState({ busy: false, result: null });
-
   const runUberConnectionTest = async () => {
     setUberTest({ busy: true, result: null });
     try {
