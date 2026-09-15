@@ -60,6 +60,24 @@ const pool = process.env.DATABASE_URL
       ssl: {
         rejectUnauthorized: false,
       },
+      /*
+       * Startup safety: without these bounds a single abandoned connection
+       * (e.g. a transaction left "idle in transaction" while an outbound
+       * platform HTTP call never returns) keeps its row locks forever, every
+       * later query - including the schema DDL run at boot - waits on it
+       * indefinitely, app.listen() is never reached and the platform reports
+       * "No open ports detected".
+       *
+       *   - connectionTimeoutMillis: fail fast instead of hanging on connect
+       *   - idle_in_transaction_session_timeout: Postgres aborts an abandoned
+       *     open transaction (releasing its locks) instead of keeping it
+       *   - lock_timeout / statement_timeout: a blocked query errors out
+       *     rather than waiting forever
+       */
+      connectionTimeoutMillis: 15000,
+      idle_in_transaction_session_timeout: 30000,
+      lock_timeout: 15000,
+      statement_timeout: 120000,
     })
   : null;
 
@@ -1176,11 +1194,26 @@ async function startServer() {
     if (pool) {
       console.log("onePOS: checking database...");
 
-      await db("SELECT NOW()");
+      /*
+       * Database initialization must never leave the process without an open
+       * port: Render reports "No open ports detected" and kills the deploy if
+       * the HTTP listener is not reached. Failures/timeouts are therefore
+       * logged and the server still starts (API calls that need the database
+       * surface their own error), which keeps the deployment alive and
+       * diagnosable instead of hanging or crash-looping.
+       */
+      try {
+        await db("SELECT NOW()");
 
-      await initializeDatabase(pool);
+        await initializeDatabase(pool);
 
-      console.log("onePOS: database ready");
+        console.log("onePOS: database ready");
+      } catch (dbError) {
+        console.error(
+          "onePOS: database initialization failed - starting server anyway:",
+          dbError.message
+        );
+      }
     } else {
       console.log(
         "onePOS: DATABASE_URL is not configured"

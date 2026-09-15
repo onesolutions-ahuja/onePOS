@@ -1,4 +1,5 @@
 import express from "express";
+import crypto from "crypto";
 
 import { getPlatformService, isOnlinePlatform } from "../services/onlineOrders/index.js";
 import { loadPlatformConfig, decryptSecret } from "../services/onlineOrders/platformConfig.js";
@@ -1268,6 +1269,21 @@ export default function createOnlineRouter({
   }
 
   /*
+   * GET /api/online/deliveroo/webhook/health
+   *
+   * TEMPORARY reachability probe (no authentication, no side effects): proving
+   * this URL answers from the deployed server shows that the webhook path is
+   * being served - used while diagnosing Deliveroo sandbox delivery.
+   */
+  router.get("/online/deliveroo/webhook/health", (req, res) => {
+    res.status(200).json({
+      success: true,
+      service: "deliveroo-webhook",
+      status: "reachable",
+    });
+  });
+
+  /*
    * POST /api/online/deliveroo/webhook
    *
    * Deliveroo Sandbox webhook receiver (public, unauthenticated endpoint -
@@ -1279,6 +1295,29 @@ export default function createOnlineRouter({
    * before the global JSON parser (needed for signature verification).
    */
   router.post("/online/deliveroo/webhook", async (req, res) => {
+    /*
+     * TEMPORARY DIAGNOSTIC (remove once Deliveroo sandbox reachability is
+     * confirmed). Runs before signature verification and before any other
+     * processing, so even a request whose signature is rejected - or whose
+     * processing fails - proves that it reached this deployed server.
+     *
+     * Logged: timestamp, request id, method, URL, content-type,
+     * content-length and the PRESENCE (never the value) of the three
+     * Deliveroo signature headers. The webhook secret, tokens, the request
+     * body and authentication headers are never logged.
+     */
+    const diagnosticRequestId = crypto.randomUUID();
+
+    console.log(
+      `[DELIVEROO-WEBHOOK-DIAG] ${new Date().toISOString()} id=${diagnosticRequestId} ` +
+        `method=${req.method} url=${req.originalUrl} ` +
+        `content-type=${req.headers["content-type"] || "(none)"} ` +
+        `content-length=${req.headers["content-length"] ?? "(none)"} ` +
+        `x-deliveroo-sequence-guid=${req.headers["x-deliveroo-sequence-guid"] ? "present" : "absent"} ` +
+        `x-deliveroo-hmac-sha256=${req.headers["x-deliveroo-hmac-sha256"] ? "present" : "absent"} ` +
+        `x-deliveroo-signature=${req.headers["x-deliveroo-signature"] ? "present" : "absent"}`
+    );
+
     const rawBody = Buffer.isBuffer(req.body) ? req.body : Buffer.from(JSON.stringify(req.body || {}));
     const signatureHeader = req.headers["x-deliveroo-signature"] || null;
     const sequenceGuidHeader = req.headers["x-deliveroo-sequence-guid"] || null;
