@@ -679,22 +679,33 @@ ON online_orders(company_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_online_orders_status
 ON online_orders(company_id, status, created_at);
 
+/*
+ * An incoming platform item may arrive WITHOUT a onePOS product mapping (e.g.
+ * a Deliveroo item whose POS id is not yet linked in Products). Such an item
+ * must never be dropped or fail the whole order, so product_id is nullable and
+ * mapping_status records whether the link exists (MAPPED / UNMAPPED). Items
+ * are matched by product_id and by external_item_id (the platform POS id).
+ */
 CREATE TABLE IF NOT EXISTS online_order_items (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     order_id UUID NOT NULL REFERENCES online_orders(id) ON DELETE CASCADE,
-    product_id UUID NOT NULL REFERENCES products(id),
+    product_id UUID REFERENCES products(id),
     external_item_id VARCHAR(255),
     product_name VARCHAR(255) NOT NULL,
     quantity NUMERIC(12,3) NOT NULL,
     unit_price NUMERIC(12,2) NOT NULL,
     tax NUMERIC(12,2) NOT NULL DEFAULT 0,
     total NUMERIC(12,2) NOT NULL,
+    mapping_status VARCHAR(20) NOT NULL DEFAULT 'MAPPED',
     platform_data JSONB,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE INDEX IF NOT EXISTS idx_online_order_items_order
 ON online_order_items(order_id);
+
+CREATE INDEX IF NOT EXISTS idx_online_order_items_external
+ON online_order_items(external_item_id);
 
 CREATE TABLE IF NOT EXISTS online_order_events (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

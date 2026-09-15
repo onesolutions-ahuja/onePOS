@@ -275,19 +275,34 @@ export async function initializeDatabase(pool) {
     CREATE TABLE IF NOT EXISTS online_order_items (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       order_id UUID NOT NULL REFERENCES online_orders(id) ON DELETE CASCADE,
-      product_id UUID NOT NULL REFERENCES products(id),
+      product_id UUID REFERENCES products(id),
       external_item_id VARCHAR(255),
       product_name VARCHAR(255) NOT NULL,
       quantity NUMERIC(12,3) NOT NULL,
       unit_price NUMERIC(12,2) NOT NULL,
       tax NUMERIC(12,2) NOT NULL DEFAULT 0,
       total NUMERIC(12,2) NOT NULL,
+      mapping_status VARCHAR(20) NOT NULL DEFAULT 'MAPPED',
       platform_data JSONB,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
 
     CREATE INDEX IF NOT EXISTS idx_online_order_items_order
     ON online_order_items(order_id);
+
+    CREATE INDEX IF NOT EXISTS idx_online_order_items_external
+    ON online_order_items(external_item_id);
+
+    /*
+     * Incoming platform items may arrive WITHOUT a onePOS product mapping;
+     * those are stored (never dropped) with product_id NULL and
+     * mapping_status 'UNMAPPED' so the mapping UI can be built later.
+     */
+    ALTER TABLE online_order_items
+      ALTER COLUMN product_id DROP NOT NULL;
+
+    ALTER TABLE online_order_items
+      ADD COLUMN IF NOT EXISTS mapping_status VARCHAR(20) NOT NULL DEFAULT 'MAPPED';
 
     CREATE TABLE IF NOT EXISTS online_order_events (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

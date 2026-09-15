@@ -1228,6 +1228,332 @@ export default function createOnlineRouter({
   });
 
   /*
+   * Resolves the store a Deliveroo order belongs to. Deliveroo identifies the
+   * site with location_id (e.g. "D101"), which is stored in the Deliveroo
+   * integration configuration (store_location_id) - never invented. Falls back
+   * to the company's default store so an order is still recorded when the
+   * location cannot be matched.
+   */
+  async function resolveDeliverooStoreId(companyId, normalized) {
+    const locationId = normalized && normalized.locationId;
+
+    // Match the Deliveroo location_id against the store code first (a store
+    // code is the only free-form store identifier the project carries today).
+    if (locationId) {
+      const matchedStore = await db(
+        "SELECT id FROM stores WHERE company_id = $1 AND code = $2 LIMIT 1",
+        [companyId, String(locationId)]
+      );
+
+      if (matchedStore.rows.length) {
+        return matchedStore.rows[0].id;
+      }
+    }
+
+    const fallback = await db(
+      "SELECT id FROM stores WHERE company_id = $1 ORDER BY created_at LIMIT 1",
+      [companyId]
+    );
+
+    return fallback.rows.length ? fallback.rows[0].id : null;
+  }
+
+  /*
+   * Maps Deliveroo order items onto onePOS products WITHOUT ever failing the
+   * order: an item whose Deliveroo pos_item_id is not linked to a product is
+   * kept (mapping_status 'UNMAPPED') so the mapping UI can be built from real
+   * data later. Matching reuses the existing platform item id column
+   * (products.deliveroo_item_id).
+   */
+  async function resolveDeliverooItems(client, companyId, normalized) {
+    const mapped = [];
+    const unmapped = [];
+
+    for (const item of normalized.items || []) {
+      const externalItemId = item.posItemId !== undefined && item.posItemId !== null ? String(item.posItemId) : null;
+
+      let product = null;
+
+      if (externalItemId) {
+        const productResult = await client.query(
+          `
+          SELECT id, name, price, vat_rate, track_stock
+          FROM products
+          WHERE company_id = $1
+            AND active = true
+            AND deliveroo_item_id = $2
+          LIMIT 1
+          `,
+          [companyId, externalItemId]
+        );
+
+        product = productResult.rows[0] || null;
+      }
+
+      const quantity = Number(item.quantity) > 0 ? Number(item.quantity) : 1;
+      const unitPrice = Number(item.unitPrice) || 0;
+      const lineTotal = Number(item.totalPrice) || Number((unitPrice * quantity).toFixed(2));
+
+      const platformData = {
+        source: "deliveroo_webhook",
+        external_item_id: externalItemId,
+        operational_name: item.operationalName,
+        modifiers: item.modifiers,
+        discount_amount: item.discountAmount,
+        raw: item.raw,
+      };
+
+      if (product) {
+        mapped.push({
+          productId: product.id,
+          productName: product.name,
+          externalItemId,
+          quantity,
+          unitPrice,
+          tax: Number(((unitPrice * quantity * Number(product.vat_rate || 0)) / 100).toFixed(2)),
+          total: lineTotal,
+          trackStock: product.track_stock,
+          mappingStatus: "MAPPED",
+          platformData,
+        });
+      } else {
+        unmapped.push({
+          productId: null,
+          productName: item.name || item.operationalName || externalItemId || "Unmapped Deliveroo item",
+          externalItemId,
+          quantity,
+          unitPrice,
+          tax: 0,
+          total: lineTotal,
+          trackStock: false,
+          mappingStatus: "UNMAPPED",
+          platformData,
+        });
+      }
+    }
+
+    return { items: [...mapped, ...unmapped], mapped, unmapped };
+  }
+
+  /*
+   * Creates the online_orders row for a verified Deliveroo ORDER NEW webhook.
+   *
+   * IDEMPOTENT: online_orders has UNIQUE (company_id, platform,
+   * external_order_id); INSERT ... ON CONFLICT DO NOTHING returns no row when
+   * the order already exists, so repeated webhook deliveries can never create
+   * a duplicate. The row enters the project's normal initial lifecycle state
+   * (RECEIVED) - onePOS never auto-accepts or auto-rejects a Deliveroo order.
+   *
+   * INVENTORY: exactly the existing behaviour is preserved - tracked, MAPPED
+   * items are reserved from the shared stock pool via the same
+   * reserveOrderInventory helper used by the manual online-order intake (which
+   * itself skips untracked items). Unmapped items have no product to reserve.
+   */
+  async function createDeliverooOrder({
+    companyId,
+    normalized,
+    storeId,
+    loggedPayload,
+    signatureState,
+  }) {
+    if (!pool) {
+      return { created: false, reason: "database_not_configured", orderId: null, unmappedCount: 0 };
+    }
+
+    const client = await pool.connect();
+    let transactionStarted = false;
+
+    try {
+      await client.query("BEGIN");
+      transactionStarted = true;
+
+      const { items, mapped, unmapped } = await resolveDeliverooItems(client, companyId, normalized);
+
+      const subtotal = mapped.reduce((sum, item) => sum + item.total, 0);
+      const tax = mapped.reduce((sum, item) => sum + item.tax, 0);
+      const deliveryFee = Number(normalized.deliveryFee) || 0;
+      const total = normalized.total || Number((subtotal + deliveryFee).toFixed(2));
+
+      const orderResult = await client.query(
+        `
+        INSERT INTO online_orders (
+          company_id, store_id, platform, external_order_id, external_reference,
+          status, customer_name, customer_phone, fulfilment_type, otp_code, currency,
+          subtotal, tax, delivery_fee, total, notes, platform_data, inventory_reserved
+        )
+        VALUES ($1,$2,'deliveroo',$3,$4,'RECEIVED',$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,FALSE)
+        ON CONFLICT (company_id, platform, external_order_id) DO NOTHING
+        RETURNING *
+        `,
+        [
+          companyId,
+          storeId,
+          normalized.externalOrderId,
+          normalized.externalReference || null,
+          normalized.customer.name || null,
+          normalized.customer.phone || null,
+          normalized.fulfilmentType || "DELIVERY",
+          normalized.customer.otp ? String(normalized.customer.otp) : null,
+          normalized.currency || "GBP",
+          Number(normalized.subtotal || subtotal).toFixed(2),
+          tax.toFixed(2),
+          deliveryFee.toFixed(2),
+          Number(total).toFixed(2),
+          normalized.notes || null,
+          JSON.stringify({
+            received_via: "deliveroo_webhook",
+            event: normalized.eventType,
+            signature_state: signatureState,
+            location_id: normalized.locationId,
+            deliveroo_status: normalized.status,
+            unmapped_item_count: unmapped.length,
+          }),
+        ]
+      );
+
+      if (!orderResult.rows.length) {
+        // Duplicate delivery: no new row may be created.
+        await client.query("ROLLBACK");
+        transactionStarted = false;
+
+        const existing = await db(
+          "SELECT id, status FROM online_orders WHERE company_id = $1 AND platform = 'deliveroo' AND external_order_id = $2 LIMIT 1",
+          [companyId, normalized.externalOrderId]
+        );
+
+        return {
+          created: false,
+          reason: "duplicate",
+          orderId: existing.rows.length ? existing.rows[0].id : null,
+          orderStatus: existing.rows.length ? existing.rows[0].status : null,
+          unmappedCount: 0,
+        };
+      }
+
+      const order = orderResult.rows[0];
+
+      for (const item of items) {
+        await client.query(
+          `
+          INSERT INTO online_order_items (
+            order_id, product_id, external_item_id, product_name, quantity, unit_price, tax, total, mapping_status, platform_data
+          )
+          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+          `,
+          [
+            order.id,
+            item.productId,
+            item.externalItemId,
+            item.productName,
+            item.quantity,
+            item.unitPrice.toFixed(2),
+            item.tax.toFixed(2),
+            item.total.toFixed(2),
+            item.mappingStatus,
+            JSON.stringify(item.platformData),
+          ]
+        );
+      }
+
+      // Preserve the existing inventory design: only MAPPED, tracked items are
+      // reserved (the shared helper already skips untracked products).
+      const reservable = mapped.filter((item) => item.trackStock);
+      let inventoryReserved = false;
+
+      if (reservable.length) {
+        await reserveOrderInventory(client, {
+          companyId,
+          storeId,
+          order,
+          items: reservable,
+          userId: null,
+        });
+        await client.query(
+          "UPDATE online_orders SET inventory_reserved = TRUE, updated_at = NOW() WHERE id = $1",
+          [order.id]
+        );
+        inventoryReserved = true;
+      }
+
+      // Full incoming payload preserved in the existing event/audit structure.
+      await recordEvent(client, {
+        orderId: order.id,
+        eventType: `DELIVEROO_${String(normalized.eventType || "ORDER_NEW")
+          .toUpperCase()
+          .replace(/[^A-Z0-9]+/g, "_")
+          .slice(0, 40)}`,
+        toStatus: "RECEIVED",
+        message:
+          `Deliveroo order created from webhook (${signatureState})` +
+          (unmapped.length ? `; ${unmapped.length} item(s) without a onePOS mapping` : "") +
+          (inventoryReserved ? "; inventory reserved" : ""),
+        platformResponse: loggedPayload,
+        actorUserId: null,
+      });
+
+      await client.query("COMMIT");
+
+      return {
+        created: true,
+        reason: null,
+        orderId: order.id,
+        orderStatus: order.status,
+        unmappedCount: unmapped.length,
+        unmapped,
+        inventoryReserved,
+      };
+    } catch (error) {
+      if (transactionStarted) {
+        await client.query("ROLLBACK");
+      }
+
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  /*
+   * Records a Deliveroo status-update (or any later) webhook against an
+   * existing order. If no order exists yet the event is still stored safely -
+   * as a webhook audit row in platform_api_logs (written by the caller) - and
+   * NO order is fabricated, so a status update arriving before ORDER NEW can
+   * never create a corrupt order. Status transitions are deliberately left to
+   * the existing lifecycle endpoints (accept/reject/...), which the platform
+   * response drives; this only attaches the event to the order.
+   */
+  async function attachDeliverooEvent({ companyId, event, loggedPayload, signatureState }) {
+    const orderRow = await db(
+      "SELECT id, status FROM online_orders WHERE company_id = $1 AND platform = 'deliveroo' AND external_order_id = $2 LIMIT 1",
+      [companyId, event.externalOrderId]
+    );
+
+    if (!orderRow.rows.length) {
+      return { orderId: null, recorded: false };
+    }
+
+    const order = orderRow.rows[0];
+
+    await db(
+      `INSERT INTO online_order_events (order_id, event_type, from_status, to_status, message, platform_response)
+       VALUES ($1, $2, $3, $4, $5, $6)`,
+      [
+        order.id,
+        String(event.eventType || "WEBHOOK_RECEIVED")
+          .toUpperCase()
+          .replace(/[^A-Z0-9]+/g, "_")
+          .slice(0, 50),
+        order.status,
+        null,
+        `Deliveroo webhook received (${signatureState})`,
+        JSON.stringify(loggedPayload),
+      ]
+    );
+
+    return { orderId: order.id, recorded: true };
+  }
+
+  /*
    * Writes the webhook audit row and returns the transport acknowledgement
    * to Deliveroo.
    *
@@ -1443,38 +1769,64 @@ export default function createOnlineRouter({
         .slice(0, 80)}`;
 
       /*
-       * Lifecycle preparation: when the payload identifies an order that
-       * already exists (created via the online-order intake), attach the
-       * event to it. The event type is stored verbatim - status transitions
-       * stay with the existing lifecycle endpoints until Deliveroo's real
-       * event schema is observed in sandbox.
+       * ORDER INTAKE.
+       *
+       *   order.new          -> create the online_orders row (idempotently) in
+       *                         the project's initial lifecycle state (RECEIVED)
+       *                         and store the full payload as an event. The
+       *                         Deliveroo order is NEVER auto-accepted/rejected.
+       *   order.status_update-> attach the event to the existing order. If the
+       *                         order does not exist yet (update arrived first)
+       *                         the event is only stored in the webhook audit
+       *                         log - no order is fabricated.
+       *
+       * A failure to build the local order must not break the transport
+       * acknowledgement Deliveroo requires: the error is logged and HTTP 200
+       * is still returned (the webhook can safely be re-delivered).
        */
       let attachedOrderId = null;
+      let intakeResult = null;
 
-      if (event && event.externalOrderId) {
-        const orderRow = await db(
-          "SELECT id, status FROM online_orders WHERE company_id = $1 AND platform = 'deliveroo' AND external_order_id = $2 LIMIT 1",
-          [companyId, event.externalOrderId]
-        );
+      if (event && event.eventKind === "order_new") {
+        const normalized = deliveroo.normalizeIncomingOrder(payload);
 
-        if (orderRow.rows.length) {
-          attachedOrderId = orderRow.rows[0].id;
+        if (normalized) {
+          try {
+            const storeId = await resolveDeliverooStoreId(companyId, normalized);
 
-          await db(
-            `INSERT INTO online_order_events (order_id, event_type, from_status, to_status, message, platform_response)
-             VALUES ($1, $2, $3, $4, $5, $6)`,
-            [
-              attachedOrderId,
-              String(event.eventType || "WEBHOOK_RECEIVED")
-                .toUpperCase()
-                .replace(/[^A-Z0-9]+/g, "_")
-                .slice(0, 50),
-              orderRow.rows[0].status,
-              null,
-              `Deliveroo webhook received (${signatureState})`,
-              JSON.stringify(loggedPayload),
-            ]
-          );
+            intakeResult = await createDeliverooOrder({
+              companyId,
+              normalized,
+              storeId,
+              loggedPayload,
+              signatureState,
+            });
+
+            attachedOrderId = intakeResult.orderId;
+
+            console.log(
+              `[DELIVEROO-WEBHOOK] order intake external_order_id=${normalized.externalOrderId} ` +
+                `created=${intakeResult.created} reason=${intakeResult.reason || "n/a"} ` +
+                `unmapped_items=${intakeResult.unmappedCount}`
+            );
+          } catch (intakeError) {
+            console.error("Deliveroo order intake failed:", intakeError);
+          }
+        } else {
+          console.error("Deliveroo ORDER NEW webhook could not be normalised - no order created");
+        }
+      } else if (event && event.externalOrderId) {
+        try {
+          const attached = await attachDeliverooEvent({
+            companyId,
+            event,
+            loggedPayload,
+            signatureState,
+          });
+
+          attachedOrderId = attached.orderId;
+        } catch (attachError) {
+          console.error("Deliveroo webhook event attach failed:", attachError);
         }
       }
 
