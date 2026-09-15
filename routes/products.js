@@ -217,6 +217,10 @@ export default function createProductsRouter({ authenticate, authorize, db, pool
           p.stock_quantity,
           p.low_stock_level,
           p.track_stock,
+          p.available_on_uber,
+          p.available_on_deliveroo,
+          p.uber_item_id,
+          p.deliveroo_item_id,
           p.category_id,
           p.active,
           c.name AS category_name,
@@ -325,6 +329,10 @@ export default function createProductsRouter({ authenticate, authorize, db, pool
         lowStockLevel = 0,
         trackStock = true,
         categoryId = null,
+        availableOnUber = false,
+        availableOnDeliveroo = false,
+        uberItemId = null,
+        deliverooItemId = null,
       } = req.body;
 
       if (!name || !name.trim()) {
@@ -394,10 +402,14 @@ export default function createProductsRouter({ authenticate, authorize, db, pool
           stock_quantity,
           low_stock_level,
           track_stock,
-          active
+          active,
+          available_on_uber,
+          available_on_deliveroo,
+          uber_item_id,
+          deliveroo_item_id
         )
         VALUES (
-          $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,true
+          $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,true,$13,$14,$15,$16
         )
         RETURNING
           id,
@@ -411,6 +423,10 @@ export default function createProductsRouter({ authenticate, authorize, db, pool
           stock_quantity,
           low_stock_level,
           track_stock,
+          available_on_uber,
+          available_on_deliveroo,
+          uber_item_id,
+          deliveroo_item_id,
           category_id,
           active,
           created_at,
@@ -429,6 +445,10 @@ export default function createProductsRouter({ authenticate, authorize, db, pool
           0,
           Number(lowStockLevel) || 0,
           Boolean(trackStock),
+          Boolean(availableOnUber),
+          Boolean(availableOnDeliveroo),
+          uberItemId || null,
+          deliverooItemId || null,
         ]
       );
 
@@ -488,6 +508,10 @@ export default function createProductsRouter({ authenticate, authorize, db, pool
         lowStockLevel = 0,
         trackStock = true,
         categoryId = null,
+        availableOnUber = false,
+        availableOnDeliveroo = false,
+        uberItemId = null,
+        deliverooItemId = null,
       } = req.body;
 
       if (!name || !name.trim()) {
@@ -580,9 +604,13 @@ export default function createProductsRouter({ authenticate, authorize, db, pool
           vat_rate = $8,
           low_stock_level = $9,
           track_stock = $10,
+          available_on_uber = $11,
+          available_on_deliveroo = $12,
+          uber_item_id = $13,
+          deliveroo_item_id = $14,
           updated_at = NOW()
-        WHERE id = $11
-          AND company_id = $12
+        WHERE id = $15
+          AND company_id = $16
         RETURNING
           id,
           name,
@@ -595,6 +623,10 @@ export default function createProductsRouter({ authenticate, authorize, db, pool
           stock_quantity,
           low_stock_level,
           track_stock,
+          available_on_uber,
+          available_on_deliveroo,
+          uber_item_id,
+          deliveroo_item_id,
           category_id,
           active,
           created_at,
@@ -611,6 +643,10 @@ export default function createProductsRouter({ authenticate, authorize, db, pool
           Number(vatRate) || 0,
           Number(lowStockLevel) || 0,
           Boolean(trackStock),
+          Boolean(availableOnUber),
+          Boolean(availableOnDeliveroo),
+          uberItemId || null,
+          deliverooItemId || null,
           req.params.id,
           req.user.companyId,
         ]

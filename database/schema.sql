@@ -213,6 +213,10 @@ CREATE TABLE IF NOT EXISTS products (
     stock_quantity NUMERIC(12,3) NOT NULL DEFAULT 0,
     low_stock_level NUMERIC(12,3) NOT NULL DEFAULT 0,
     track_stock BOOLEAN NOT NULL DEFAULT TRUE,
+    available_on_uber BOOLEAN NOT NULL DEFAULT FALSE,
+    available_on_deliveroo BOOLEAN NOT NULL DEFAULT FALSE,
+    uber_item_id VARCHAR(255),
+    deliveroo_item_id VARCHAR(255),
     active BOOLEAN NOT NULL DEFAULT TRUE,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -246,7 +250,9 @@ CREATE TABLE IF NOT EXISTS inventory_movements (
             'ADJUSTMENT_IN',
             'ADJUSTMENT_OUT',
             'RETURN_IN',
-            'RETURN_OUT'
+            'RETURN_OUT',
+            'ONLINE_RESERVE',
+            'ONLINE_RELEASE'
         )
     ),
     quantity_change NUMERIC(12,3) NOT NULL,
@@ -618,8 +624,127 @@ CREATE TABLE IF NOT EXISTS integrations (
     provider VARCHAR(100) NOT NULL,
     configuration JSONB,
     active BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS ux_integrations_company_provider
+ON integrations(company_id, provider);
+
+-- ============================================================
+-- ONLINE ORDERS (UBER EATS / DELIVEROO)
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS online_orders (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+    store_id UUID REFERENCES stores(id) ON DELETE SET NULL,
+    platform VARCHAR(20) NOT NULL CHECK (platform IN ('uber', 'deliveroo')),
+    external_order_id VARCHAR(255) NOT NULL,
+    external_reference VARCHAR(255),
+    status VARCHAR(30) NOT NULL DEFAULT 'RECEIVED' CHECK (
+        status IN ('RECEIVED', 'ACCEPTED', 'PREPARING', 'READY', 'COMPLETED', 'REJECTED', 'CANCELLED')
+    ),
+    customer_name VARCHAR(255),
+    customer_phone VARCHAR(50),
+    customer_email VARCHAR(255),
+    delivery_address TEXT,
+    fulfilment_type VARCHAR(20) NOT NULL DEFAULT 'DELIVERY',
+    otp_code VARCHAR(20),
+    otp_verified_at TIMESTAMPTZ,
+    currency VARCHAR(10) NOT NULL DEFAULT 'GBP',
+    subtotal NUMERIC(12,2) NOT NULL DEFAULT 0,
+    tax NUMERIC(12,2) NOT NULL DEFAULT 0,
+    delivery_fee NUMERIC(12,2) NOT NULL DEFAULT 0,
+    total NUMERIC(12,2) NOT NULL DEFAULT 0,
+    notes TEXT,
+    cancel_reason TEXT,
+    inventory_reserved BOOLEAN NOT NULL DEFAULT FALSE,
+    inventory_released BOOLEAN NOT NULL DEFAULT FALSE,
+    platform_data JSONB,
+    accepted_at TIMESTAMPTZ,
+    preparing_at TIMESTAMPTZ,
+    ready_at TIMESTAMPTZ,
+    completed_at TIMESTAMPTZ,
+    cancelled_at TIMESTAMPTZ,
+    completed_by UUID REFERENCES users(id) ON DELETE SET NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT online_orders_platform_external_unique UNIQUE (company_id, platform, external_order_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_online_orders_company
+ON online_orders(company_id, created_at);
+
+CREATE INDEX IF NOT EXISTS idx_online_orders_status
+ON online_orders(company_id, status, created_at);
+
+CREATE TABLE IF NOT EXISTS online_order_items (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    order_id UUID NOT NULL REFERENCES online_orders(id) ON DELETE CASCADE,
+    product_id UUID NOT NULL REFERENCES products(id),
+    external_item_id VARCHAR(255),
+    product_name VARCHAR(255) NOT NULL,
+    quantity NUMERIC(12,3) NOT NULL,
+    unit_price NUMERIC(12,2) NOT NULL,
+    tax NUMERIC(12,2) NOT NULL DEFAULT 0,
+    total NUMERIC(12,2) NOT NULL,
+    platform_data JSONB,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+CREATE INDEX IF NOT EXISTS idx_online_order_items_order
+ON online_order_items(order_id);
+
+CREATE TABLE IF NOT EXISTS online_order_events (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    order_id UUID NOT NULL REFERENCES online_orders(id) ON DELETE CASCADE,
+    event_type VARCHAR(50) NOT NULL,
+    from_status VARCHAR(30),
+    to_status VARCHAR(30),
+    message TEXT,
+    platform_response JSONB,
+    actor_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_online_order_events_order
+ON online_order_events(order_id, created_at);
+
+-- ============================================================
+-- PLATFORM API AUDIT LOG (UBER / DELIVEROO)
+-- Every platform API request/response, secrets redacted by
+-- services/onlineOrders/platformLogger.js before insert.
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS platform_api_logs (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+    platform VARCHAR(20) NOT NULL CHECK (platform IN ('uber', 'deliveroo')),
+    environment VARCHAR(20),
+    action VARCHAR(100) NOT NULL,
+    endpoint VARCHAR(500),
+    http_method VARCHAR(10),
+    request_payload JSONB,
+    request_headers JSONB,
+    response_status INTEGER,
+    response_body JSONB,
+    success BOOLEAN,
+    error_message TEXT,
+    duration_ms INTEGER,
+    order_id UUID REFERENCES online_orders(id) ON DELETE SET NULL,
+    product_id UUID REFERENCES products(id) ON DELETE SET NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_platform_api_logs_company
+ON platform_api_logs(company_id, created_at);
+
+CREATE INDEX IF NOT EXISTS idx_platform_api_logs_platform
+ON platform_api_logs(company_id, platform, created_at);
+
+CREATE INDEX IF NOT EXISTS idx_platform_api_logs_order
+ON platform_api_logs(order_id);
 
 -- ============================================================
 -- PERMISSIONS
@@ -661,6 +786,10 @@ VALUES
 ('role.manage', 'Manage Roles', 'Manage roles'),
 ('payment.manage', 'Manage Payments', 'Manage payment settings'),
 ('integration.manage', 'Manage Integrations', 'Manage integrations'),
-('settings.manage', 'Manage Settings', 'Manage settings')
+('settings.manage', 'Manage Settings', 'Manage settings'),
+
+('online_orders.view', 'View Online Orders', 'View online platform orders'),
+('online_orders.manage', 'Manage Online Orders', 'Accept, reject, cancel and complete online orders'),
+('online_orders.configure', 'Configure Online Platforms', 'Configure product availability on Uber Eats / Deliveroo')
 
 ON CONFLICT (code) DO NOTHING;

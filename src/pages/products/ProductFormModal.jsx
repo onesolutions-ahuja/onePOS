@@ -12,12 +12,16 @@ export default function ProductFormModal({ product, categories, saving, error, o
     lowStockLevel: product?.lowStockLevel ?? 0,
     vatRate: product?.vatRate ?? 20,
     trackStock: product?.trackStock ?? true,
+    availableOnUber: product?.availableOnUber ?? false,
+    availableOnDeliveroo: product?.availableOnDeliveroo ?? false,
+    uberItemId: product?.uberItemId || "",
+    deliverooItemId: product?.deliverooItemId || "",
   });
 
   const updateField = (field, value) => setForm((current) => ({ ...current, [field]: value }));
   const submit = (event) => {
     event.preventDefault();
-    onSave({ ...form, name: form.name.trim(), sku: form.sku.trim() || null, barcode: form.barcode.trim() || null, categoryId: form.categoryId || null, price: Number(form.price) || 0, costPrice: Number(form.costPrice) || 0, lowStockLevel: Number(form.lowStockLevel) || 0, vatRate: Number(form.vatRate) || 0 });
+    onSave({ ...form, name: form.name.trim(), sku: form.sku.trim() || null, barcode: form.barcode.trim() || null, categoryId: form.categoryId || null, price: Number(form.price) || 0, costPrice: Number(form.costPrice) || 0, lowStockLevel: Number(form.lowStockLevel) || 0, vatRate: Number(form.vatRate) || 0, availableOnUber: Boolean(form.availableOnUber), availableOnDeliveroo: Boolean(form.availableOnDeliveroo), uberItemId: form.uberItemId.trim() || null, deliverooItemId: form.deliverooItemId.trim() || null });
   };
 
   const fields = [
@@ -58,6 +62,31 @@ export default function ProductFormModal({ product, categories, saving, error, o
               Track stock for this product
             </label>
           </div>
+
+          <div className="mt-5 pt-4 border-t border-slate-200">
+            <p className="text-sm font-semibold text-slate-700 mb-3">Online platforms (Uber Eats / Deliveroo)</p>
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <label className="flex items-center gap-2 text-sm text-slate-600">
+                  <input type="checkbox" checked={form.availableOnUber} onChange={(event) => updateField("availableOnUber", event.target.checked)} className="w-4 h-4 accent-blue-600" />
+                  Available on Uber Eats
+                </label>
+                {form.availableOnUber && (
+                  <input placeholder="Uber item ID (optional)" value={form.uberItemId} onChange={(event) => updateField("uberItemId", event.target.value)} className="w-full h-10 px-3 border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-blue-500 text-sm" />
+                )}
+              </div>
+              <div className="space-y-2">
+                <label className="flex items-center gap-2 text-sm text-slate-600">
+                  <input type="checkbox" checked={form.availableOnDeliveroo} onChange={(event) => updateField("availableOnDeliveroo", event.target.checked)} className="w-4 h-4 accent-blue-600" />
+                  Available on Deliveroo
+                </label>
+                {form.availableOnDeliveroo && (
+                  <input placeholder="Deliveroo item ID (optional)" value={form.deliverooItemId} onChange={(event) => updateField("deliverooItemId", event.target.value)} className="w-full h-10 px-3 border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-blue-500 text-sm" />
+                )}
+              </div>
+            </div>
+          </div>
+
           <div className="flex justify-end gap-2 mt-6 pt-4 border-t border-slate-200">
             <button type="button" onClick={onClose} disabled={saving} className="h-10 px-4 border border-slate-200 rounded-lg text-sm hover:bg-slate-50">Cancel</button>
             <button type="submit" disabled={saving || !form.name.trim()} className="h-10 px-5 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700">{saving ? "Saving..." : product ? "Save changes" : "Create product"}</button>

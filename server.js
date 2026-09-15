@@ -19,6 +19,7 @@ import createReportsRouter from "./routes/reports.js";
 import createSettingsRouter from "./routes/settings.js";
 import createAdminRouter from "./routes/admin.js";
 import createDashboardRouter from "./routes/dashboard.js";
+import createOnlineRouter from "./routes/online.js";
 
 const { Pool } = pg;
 
@@ -258,6 +259,8 @@ const inventoryMovementTypes = new Set([
   "ADJUSTMENT_OUT",
   "RETURN_IN",
   "RETURN_OUT",
+  "ONLINE_RESERVE",
+  "ONLINE_RELEASE",
 ]);
 
 async function createInventoryMovement(client, {
@@ -718,6 +721,24 @@ app.use("/api", createAdminRouter({ authenticate, authorize, db, pool, canViewCo
 
 app.use("/api", createReportsRouter({ authenticate, db }));
 
+/*
+| Online Orders (Uber Eats / Deliveroo foundation) - product platform
+| configuration and online order lifecycle. Platform-specific logic stays
+| isolated in services/onlineOrders/* (stubbed until real API credentials).
+*/
+
+app.use(
+  "/api",
+  createOnlineRouter({
+    authenticate,
+    authorize,
+    db,
+    pool,
+    writeAudit,
+    createInventoryMovement,
+  })
+);
+
 
 app.get("/api/held-sales", authenticate, authorize("sale.hold"), async (req, res) => {
   try {
@@ -1078,6 +1099,9 @@ app.get("/api/setup/database", async (req, res) => {
       ["payment.manage", "Manage Payments"],
       ["integration.manage", "Manage Integrations"],
       ["settings.manage", "Manage Settings"],
+      ["online_orders.view", "View Online Orders"],
+      ["online_orders.manage", "Manage Online Orders"],
+      ["online_orders.configure", "Configure Online Platforms"],
     ];
 
     for (const [code, name] of permissions) {

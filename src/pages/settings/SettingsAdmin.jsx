@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { Edit, Plus, RefreshCw, Save, X } from "lucide-react";
 import { apiRequest } from "../../services/api.js";
 function SettingsAdmin() {
-  const tabs = ["General", "Company", "Store & Till", "Tax / VAT", "Payment Terminals", "Hardware", "Receipts", "Users & Permissions", "Integrations"];
+  const tabs = ["General", "Company", "Store & Till", "Tax / VAT", "Payment Terminals", "Hardware", "Receipts", "Users & Permissions", "Integrations", "Online Platforms"];
   const [tab, setTab] = useState("General");
   const [settings, setSettings] = useState(null);
   const [terminals, setTerminals] = useState([]);
@@ -83,7 +83,7 @@ setForm({
 
   if (!settings || !form) return <div className="bg-white border border-slate-200 rounded-xl p-8 max-w-2xl"><h2 className="font-semibold text-red-700">Settings are unavailable</h2><p className="text-sm text-slate-600 mt-2">No settings data was returned by the server.</p><button onClick={load} className="mt-5 h-10 px-4 bg-blue-600 text-white rounded-lg text-sm font-medium flex items-center gap-2"><RefreshCw size={16} /> Retry</button></div>;
 
-  return <div><div className="mb-5"><h1 className="text-2xl font-bold">Settings</h1><p className="text-sm text-slate-500 mt-1">Company, till, tax, hardware and integration configuration.</p></div><div className="flex gap-1 border-b border-slate-200 mb-5 overflow-x-auto">{tabs.map((item) => <button key={item} onClick={() => { setTab(item); setMessage(""); setError(""); }} className={`px-3 py-2 text-sm whitespace-nowrap border-b-2 ${tab === item ? "border-blue-600 text-blue-700 font-medium" : "border-transparent text-slate-500 hover:text-slate-800"}`}>{item}</button>)}</div>{message && <div className="mb-4 px-4 py-3 bg-emerald-50 border border-emerald-200 text-emerald-700 rounded-lg text-sm">{message}</div>}{error && <div className="mb-4 px-4 py-3 bg-red-50 border border-red-200 text-red-700 rounded-lg text-sm">{error}</div>}{["General", "Company", "Tax / VAT"].includes(tab) && <SettingsForm tab={tab} form={form} setForm={setForm} onSave={saveSettings} />}{tab === "Store & Till" && <StoreTillSettings settings={settings} onMessage={setMessage} onError={setError} />}{tab === "Payment Terminals" && <PaymentTerminalSettings terminals={terminals} onSaved={load} onMessage={setMessage} onError={setError} />}{tab === "Hardware" && <HardwareSettings hardware={hardware} onSave={saveHardware} onTest={testHardware} />}{tab === "Integrations" && <IntegrationHealth health={health} />}{tab === "Users & Permissions" && <UsersPermissionsSettings onMessage={setMessage} onError={setError} />}{tab === "Receipts" && <ReceiptSettings settings={settings} form={form} setForm={setForm} onSave={saveSettings} />}</div>;
+  return <div><div className="mb-5"><h1 className="text-2xl font-bold">Settings</h1><p className="text-sm text-slate-500 mt-1">Company, till, tax, hardware and integration configuration.</p></div><div className="flex gap-1 border-b border-slate-200 mb-5 overflow-x-auto">{tabs.map((item) => <button key={item} onClick={() => { setTab(item); setMessage(""); setError(""); }} className={`px-3 py-2 text-sm whitespace-nowrap border-b-2 ${tab === item ? "border-blue-600 text-blue-700 font-medium" : "border-transparent text-slate-500 hover:text-slate-800"}`}>{item}</button>)}</div>{message && <div className="mb-4 px-4 py-3 bg-emerald-50 border border-emerald-200 text-emerald-700 rounded-lg text-sm">{message}</div>}{error && <div className="mb-4 px-4 py-3 bg-red-50 border border-red-200 text-red-700 rounded-lg text-sm">{error}</div>}{["General", "Company", "Tax / VAT"].includes(tab) && <SettingsForm tab={tab} form={form} setForm={setForm} onSave={saveSettings} />}{tab === "Store & Till" && <StoreTillSettings settings={settings} onMessage={setMessage} onError={setError} />}{tab === "Payment Terminals" && <PaymentTerminalSettings terminals={terminals} onSaved={load} onMessage={setMessage} onError={setError} />}{tab === "Hardware" && <HardwareSettings hardware={hardware} onSave={saveHardware} onTest={testHardware} />}{tab === "Integrations" && <IntegrationHealth health={health} />}{tab === "Online Platforms" && <OnlinePlatformSettings onMessage={setMessage} onError={setError} />}{tab === "Users & Permissions" && <UsersPermissionsSettings onMessage={setMessage} onError={setError} />}{tab === "Receipts" && <ReceiptSettings settings={settings} form={form} setForm={setForm} onSave={saveSettings} />}</div>;
 }
 
 function UsersPermissionsSettings({ onMessage, onError }) {
@@ -340,4 +340,170 @@ function IntegrationHealth({ health }) {
   return <div className="bg-white border border-slate-200 rounded-xl overflow-hidden max-w-2xl"><div className="p-4 border-b font-semibold">Device and integration health</div>{Object.entries(health || {}).map(([name, value]) => <div key={name} className="flex justify-between px-4 py-3 border-b border-slate-100 text-sm"><span className="capitalize">{name.replace(/([A-Z])/g, " $1")}</span><span className={value === "Connected" || value === "Configured" ? "text-emerald-700" : "text-slate-500"}>{value}</span></div>)}</div>;
 }
 
+function OnlinePlatformSettings({ onMessage, onError }) {
+  const [platforms, setPlatforms] = useState([]);
+  const [forms, setForms] = useState({});
+  const [saving, setSaving] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [uberTest, setUberTest] = useState({ busy: false, result: null });
+
+  const runUberConnectionTest = async () => {
+    setUberTest({ busy: true, result: null });
+    try {
+      const data = await apiRequest("/api/online/uber/test-connection");
+      setUberTest({ busy: false, result: data });
+    } catch (err) {
+      setUberTest({ busy: false, result: { success: false, message: err.message || "Test connection failed" } });
+    }
+  };
+
+  const load = async () => {
+    try {
+      setLoading(true);
+      const data = await apiRequest("/api/settings/online-platforms");
+      if (!data.success) throw new Error(data.message || "Unable to load online platform settings");
+      const list = data.data || [];
+      setPlatforms(list);
+      setForms(Object.fromEntries(list.map((platform) => [platform.platform, {
+        enabled: platform.enabled === true,
+        environment: platform.environment || "sandbox",
+        clientId: platform.client_id || "",
+        clientSecret: "",
+        storeLocationId: platform.store_location_id || "",
+        storeId: platform.store_id || "",
+        brandId: platform.brand_id || "",
+        apiKey: "",
+        webhookSecret: "",
+        notes: platform.notes || "",
+      }])));
+    } catch (err) { onError(err.message || "Unable to load online platform settings"); }
+    finally { setLoading(false); }
+  };
+
+  useEffect(() => { load(); }, []);
+
+  const update = (platform, field, value) => setForms((current) => ({ ...current, [platform]: { ...current[platform], [field]: value } }));
+
+  const save = async (platform, overrides = {}) => {
+    try {
+      setSaving(platform);
+      const body = { ...forms[platform], ...overrides };
+      for (const secretField of ["clientSecret", "apiKey", "webhookSecret"]) {
+        if (!body[secretField]) delete body[secretField];
+      }
+      body.clientId = body.clientId || null;
+      body.storeLocationId = body.storeLocationId || null;
+      body.storeId = body.storeId || null;
+      body.brandId = body.brandId || null;
+      body.notes = body.notes || null;
+      const data = await apiRequest(`/api/settings/online-platforms/${platform}`, { method: "PUT", body: JSON.stringify(body) });
+      if (!data.success) throw new Error(data.message || "Unable to save configuration");
+      onMessage(data.message || "Configuration saved.");
+      await load();
+    } catch (err) { onError(err.message || "Unable to save configuration"); }
+    finally { setSaving(""); }
+  };
+
+  if (loading) return <div className="p-8 text-center text-slate-400">Loading online platform settings...</div>;
+
+  const fields = [
+    ["clientId", "API / Client ID", "text", "client_id", null],
+    ["clientSecret", "Client secret", "password", "client_secret_configured", "client_secret_masked"],
+    ["storeLocationId", "Store / location ID", "text", "store_location_id", null],
+    ["storeId", "Store ID", "text", "store_id", null],
+    ["brandId", "Brand ID", "text", "brand_id", null],
+    ["apiKey", "API key / access token", "password", "api_key_configured", "api_key_masked"],
+    ["webhookSecret", "Webhook secret", "password", "webhook_secret_configured", "webhook_secret_masked"],
+  ];
+
+  return <div className="space-y-4">{platforms.map((platform) => {
+    const form = forms[platform.platform] || {};
+    const configured = platform.client_id || platform.client_secret_configured || platform.api_key_configured;
+    return <div key={platform.platform} className="bg-white border border-slate-200 rounded-xl p-5">
+      <div className="flex items-center justify-between mb-1 flex-wrap gap-2">
+        <h2 className="font-semibold">{platform.name}</h2>
+        <div className="flex items-center gap-3">
+          <span className={`px-2 py-1 rounded-full text-xs font-medium ${platform.enabled ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-500"}`}>{platform.enabled ? "Enabled" : "Disabled"}</span>
+          <span className={`px-2 py-1 rounded-full text-xs font-medium ${configured ? "bg-amber-50 text-amber-700" : "bg-slate-100 text-slate-500"}`}>{configured ? "Stub (credentials ready)" : "Not configured"}</span>
+          <label className="flex items-center gap-2 text-sm text-slate-600">
+            <input type="checkbox" checked={Boolean(form.enabled)} onChange={(event) => update(platform.platform, "enabled", event.target.checked)} className="w-4 h-4 accent-blue-600" />
+            Enabled
+          </label>
+        </div>
+      </div>
+      <p className="text-xs text-slate-500 mb-4">Credentials are stored encrypted and never leave the server. Order actions use the real {platform.name} API once credentials are configured (stub mode until then); menu sync and webhooks are not yet connected.</p>
+      {platform.platform === "uber" && (platform.store_id || platform.brand_id) && (
+        <p className="text-xs text-slate-600 mb-4">
+          Saved Store ID: <span className="font-mono">{platform.store_id || "not set"}</span>
+          {platform.brand_id ? <> &nbsp;|&nbsp; Saved Brand ID: <span className="font-mono">{platform.brand_id}</span></> : null}
+        </p>
+      )}
+      <div className="grid grid-cols-2 gap-3">
+        <label className="text-sm text-slate-600"><span className="block mb-1 font-medium">Environment</span>
+          <select value={form.environment || "sandbox"} onChange={(event) => update(platform.platform, "environment", event.target.value)} className="w-full h-10 px-2 border border-slate-200 rounded-lg bg-white"><option value="sandbox">Sandbox</option><option value="production">Production</option></select>
+        </label>
+        {fields.map(([field, label, type, configuredKey, maskedKey]) => (
+          <label key={field} className="text-sm text-slate-600">
+            <span className="block mb-1 font-medium">{label}{platform[configuredKey] ? <span className="ml-2 text-xs text-emerald-600 font-normal">{(maskedKey && platform[maskedKey]) || "stored"}</span> : null}</span>
+            <input type={type} autoComplete="new-password" value={form[field] || ""} placeholder={platform[configuredKey] ? "Leave blank to keep current value" : "Not set"} onChange={(event) => update(platform.platform, field, event.target.value)} className="w-full h-10 px-3 border border-slate-200 rounded-lg" />
+          </label>
+        ))}
+        <label className="text-sm text-slate-600 col-span-2"><span className="block mb-1 font-medium">Notes</span>
+          <textarea rows="2" value={form.notes || ""} onChange={(event) => update(platform.platform, "notes", event.target.value)} className="w-full px-3 py-2 border border-slate-200 rounded-lg" />
+        </label>
+      </div>
+      <button onClick={() => save(platform.platform)} disabled={saving === platform.platform} className="mt-4 h-10 px-4 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50">{saving === platform.platform ? "Saving..." : `Save ${platform.name} configuration`}</button>
+      {platform.platform === "uber" && (
+        <div className="mt-4 border-t border-slate-200 pt-4">
+          <div className="flex items-center gap-3 flex-wrap">
+            <button onClick={runUberConnectionTest} disabled={uberTest.busy} className="h-9 px-4 border border-slate-300 rounded-lg text-sm hover:bg-slate-50 disabled:opacity-50">
+              {uberTest.busy ? "Testing connection..." : "Test connection / Get sandbox IDs"}
+            </button>
+            <button onClick={runUberConnectionTest} disabled={uberTest.busy} className="h-9 px-4 border border-slate-300 rounded-lg text-sm hover:bg-slate-50 disabled:opacity-50">
+              {uberTest.busy ? "Refreshing..." : "Refresh stores"}
+            </button>
+            <span className="text-xs text-slate-400">Calls the official Uber Get Stores endpoint (GET /v1/eats/stores) with the stored credentials and returns the real store/brand IDs.</span>
+          </div>
+          {uberTest.result && (
+            <div className={`mt-3 rounded-lg border p-3 text-sm ${uberTest.result.success ? "bg-emerald-50 border-emerald-200" : "bg-amber-50 border-amber-200"}`}>
+              <p className={`font-medium ${uberTest.result.success ? "text-emerald-800" : "text-amber-800"}`}>{uberTest.result.message || (uberTest.result.success ? "Connection OK" : "Connection failed")}</p>
+              {(uberTest.result.data?.attempts || []).map((attempt, index) => (
+                <div key={index} className="mt-2 bg-white rounded-lg border border-slate-200 p-2">
+                  <p className="text-xs font-medium text-slate-700">
+                    {String(attempt.environment).toUpperCase()} attempt - {attempt.success ? "OK" : "FAILED"}{attempt.httpStatus ? ` - HTTP ${attempt.httpStatus}` : ""}{attempt.code ? ` - ${attempt.code}` : ""}
+                  </p>
+                  {attempt.message && <p className="text-xs text-slate-500 mt-1">{attempt.message}</p>}
+                  {attempt.success && (attempt.stores || []).length === 0 && (
+                    <p className="text-xs mt-1 font-medium text-amber-800">No Sandbox stores are currently provisioned for this application.</p>
+                  )}
+                  {(attempt.stores || []).length > 0 && (
+                    <ul className="mt-2 space-y-2">
+                      {attempt.stores.map((store, storeIndex) => (
+                        <li key={storeIndex} className="text-xs font-mono text-slate-700 flex items-center justify-between gap-2 flex-wrap">
+                          <span>
+                            Store ID: {store.storeId}{store.name ? ` (${store.name})` : ""}{store.brandId ? ` | Brand ID: ${store.brandId}${store.brandName ? ` (${store.brandName})` : ""}` : ""}{store.status ? ` | Status: ${store.status}` : ""}{store.integrationEnabled !== null && store.integrationEnabled !== undefined ? ` | Integration: ${store.integrationEnabled ? "enabled" : "disabled"}` : ""}
+                          </span>
+                          {store.storeId && (
+                            <button onClick={() => save("uber", { storeId: store.storeId, brandId: store.brandId || null })} disabled={saving === "uber"} className="h-7 px-2 border border-slate-300 rounded text-xs hover:bg-slate-50 disabled:opacity-50 shrink-0">
+                              {saving === "uber" ? "Saving..." : "Save this Store ID"}
+                            </button>
+                          )}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                  {attempt.uberResponse != null && (
+                    <pre className="mt-2 max-h-56 overflow-auto bg-slate-50 rounded p-2 text-xs whitespace-pre-wrap text-slate-600">{JSON.stringify(attempt.uberResponse, null, 2)}</pre>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>;
+  })}</div>;
+}
+
 export default SettingsAdmin;
+

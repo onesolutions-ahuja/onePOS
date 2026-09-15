@@ -1,5 +1,11 @@
 import express from "express";
 
+import {
+  loadPlatformConfig,
+  buildStoredConfiguration,
+  maskConfiguration,
+} from "../services/onlineOrders/platformConfig.js";
+
 export default function createSettingsRouter({
   authenticate,
   db,
@@ -243,6 +249,141 @@ export default function createSettingsRouter({
     try { await db("SELECT 1"); database = "Connected"; } catch { database = "Unavailable"; }
     const terminals = await db("SELECT COUNT(*)::int AS count FROM payment_terminals WHERE company_id=$1 AND active=true", [req.user.companyId]);
     res.json({ success: true, data: { database, api: "Connected", paymentTerminal: terminals.rows[0].count ? "Configured" : "Not configured", barcodeScanner: "Not configured", cashDrawer: "Not configured", receiptPrinter: "Not configured" } });
+  });
+
+  /*
+   * ------------------------------------------------------------------
+   * Online platform configuration (Uber Eats / Deliveroo)
+   *
+   * Credentials/details are stored per company in the `integrations` table;
+   * secret fields are encrypted at rest and never returned to the client.
+   * The platform services read this configuration via
+   * services/onlineOrders/platformConfig.js when real API calls are added.
+   * ------------------------------------------------------------------
+   */
+
+  router.get("/settings/online-platforms", authenticate, async (req, res) => {
+    try {
+      const names = { uber: "Uber Eats", deliveroo: "Deliveroo" };
+      const data = [];
+
+      for (const platform of ["uber", "deliveroo"]) {
+        const runtime = await loadPlatformConfig(db, req.user.companyId, platform);
+
+        data.push({
+          platform,
+          name: names[platform],
+          enabled: runtime.enabled === true,
+          ...maskConfiguration(runtime),
+        });
+      }
+
+      res.json({ success: true, data });
+    } catch (error) {
+      console.error("Load online platform settings error:", error);
+      res.status(500).json({ success: false, message: "Unable to load online platform settings" });
+    }
+  });
+
+  router.put("/settings/online-platforms/:platform", authenticate, async (req, res) => {
+    const platform = req.params.platform;
+    const names = { uber: "Uber Eats", deliveroo: "Deliveroo" };
+
+    if (!names[platform]) {
+      return res.status(400).json({ success: false, message: "Platform must be 'uber' or 'deliveroo'" });
+    }
+
+    if (!pool) {
+      return res.status(500).json({ success: false, message: "DATABASE_URL is not configured" });
+    }
+
+    const {
+      enabled = false,
+      environment = "sandbox",
+      clientId,
+      clientSecret,
+      storeLocationId,
+      storeId,
+      brandId,
+      orderAcceptance,
+      apiKey,
+      webhookSecret,
+      notes,
+    } = req.body;
+
+    const client = await pool.connect();
+
+    try {
+      await client.query("BEGIN");
+
+      const existing = await client.query(
+        "SELECT configuration FROM integrations WHERE company_id = $1 AND provider = $2 FOR UPDATE",
+        [req.user.companyId, platform]
+      );
+
+      const existingConfiguration = existing.rows.length ? existing.rows[0].configuration || {} : {};
+
+      const configuration = buildStoredConfiguration(
+        {
+          environment: environment === "production" ? "production" : "sandbox",
+          client_id: clientId,
+          client_secret: clientSecret,
+          store_location_id: storeLocationId,
+          store_id: storeId,
+          brand_id: brandId,
+          order_acceptance:
+            orderAcceptance === undefined ? undefined : orderAcceptance === "auto" ? "auto" : "manual",
+          api_key: apiKey,
+          webhook_secret: webhookSecret,
+          notes,
+        },
+        existingConfiguration
+      );
+
+      const result = await client.query(
+        `
+        INSERT INTO integrations (company_id, name, provider, configuration, active)
+        VALUES ($1, $2, $3, $4, $5)
+        ON CONFLICT (company_id, provider) DO UPDATE SET
+          name = EXCLUDED.name,
+          configuration = EXCLUDED.configuration,
+          active = EXCLUDED.active,
+          updated_at = NOW()
+        RETURNING id, active
+        `,
+        [req.user.companyId, names[platform], platform, JSON.stringify(configuration), enabled === true]
+      );
+
+      await writeAudit(
+        req.user.companyId,
+        req.user.id,
+        "online_platform_settings.updated",
+        "integration",
+        result.rows[0].id,
+        { platform, enabled: enabled === true, environment: configuration.environment }
+      );
+
+      await client.query("COMMIT");
+
+      const runtime = await loadPlatformConfig(db, req.user.companyId, platform);
+
+      res.json({
+        success: true,
+        message: `${names[platform]} configuration saved`,
+        data: {
+          platform,
+          name: names[platform],
+          enabled: runtime.enabled === true,
+          ...maskConfiguration(runtime),
+        },
+      });
+    } catch (error) {
+      await client.query("ROLLBACK");
+      console.error("Update online platform settings error:", error);
+      res.status(500).json({ success: false, message: "Unable to save online platform settings" });
+    } finally {
+      client.release();
+    }
   });
 
   return router;

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { BarChart3, Calculator, CreditCard, FileText, Grid3X3, Home, LogOut, Package, Percent, Receipt, RefreshCw, Settings, Store, Tag, Users } from "lucide-react";
+import { BarChart3, Calculator, CreditCard, FileText, Grid3X3, Home, LogOut, Package, Percent, Receipt, RefreshCw, Settings, ShoppingBag, Store, Tag, Users } from "lucide-react";
 import BottomStatusBar from "../../components/BottomStatusBar.jsx";
 import Dashboard from "../dashboard/Dashboard.jsx";
 import ProductsAdmin from "../products/ProductsAdmin.jsx";
@@ -12,6 +12,7 @@ import SalesAdmin from "../sales/SalesAdmin.jsx";
 import ReportsAdmin from "../reports/ReportsAdmin.jsx";
 import ReturnsAdmin, { SupplierReturnsAdmin } from "../returns/ReturnsAdmin.jsx";
 import CustomersAdmin from "../customers/CustomersAdmin.jsx";
+import OnlineOrdersAdmin from "../online/OnlineOrdersAdmin.jsx";
 
 export default function AdminLayout({ onPOS, onLogout }) {
   const [page, setPage] = useState("Dashboard");
@@ -28,6 +29,7 @@ export default function AdminLayout({ onPOS, onLogout }) {
     ["Suppliers", Users],
     ["Inventory", Grid3X3],
     ["Customers", Users],
+    ["Online Orders", ShoppingBag],
     ["Employees", Users],
     ["Stores", Store],
     ["Payments", CreditCard],
@@ -143,6 +145,9 @@ export default function AdminLayout({ onPOS, onLogout }) {
           ) : page ===
             "Customers" ? (
             <CustomersAdmin />
+          ) : page ===
+            "Online Orders" ? (
+            <OnlineOrdersAdmin />
           ) : page ===
             "Settings" ? (
             <SettingsAdmin />

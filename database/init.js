@@ -164,6 +164,12 @@ export async function initializeDatabase(pool) {
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
 
+    ALTER TABLE products
+      ADD COLUMN IF NOT EXISTS available_on_uber BOOLEAN NOT NULL DEFAULT FALSE,
+      ADD COLUMN IF NOT EXISTS available_on_deliveroo BOOLEAN NOT NULL DEFAULT FALSE,
+      ADD COLUMN IF NOT EXISTS uber_item_id VARCHAR(255),
+      ADD COLUMN IF NOT EXISTS deliveroo_item_id VARCHAR(255);
+
     CREATE TABLE IF NOT EXISTS inventory_movements (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
@@ -179,7 +185,9 @@ export async function initializeDatabase(pool) {
           'ADJUSTMENT_IN',
           'ADJUSTMENT_OUT',
           'RETURN_IN',
-          'RETURN_OUT'
+          'RETURN_OUT',
+          'ONLINE_RESERVE',
+          'ONLINE_RELEASE'
         )
       ),
       quantity_change NUMERIC(12,3) NOT NULL,
@@ -200,7 +208,8 @@ export async function initializeDatabase(pool) {
         movement_type IN (
           'OPENING', 'PURCHASE', 'SALE', 'CUSTOMER_RETURN',
           'SUPPLIER_RETURN', 'ADJUSTMENT_IN', 'ADJUSTMENT_OUT',
-          'RETURN_IN', 'RETURN_OUT'
+          'RETURN_IN', 'RETURN_OUT',
+          'ONLINE_RESERVE', 'ONLINE_RELEASE'
         )
       );
 
@@ -212,6 +221,130 @@ export async function initializeDatabase(pool) {
 
     CREATE INDEX IF NOT EXISTS idx_inventory_movements_type
     ON inventory_movements(movement_type, created_at);
+
+    /*
+     * ONLINE ORDERS FOUNDATION
+     *
+     * Online orders received from delivery platforms (Uber Eats / Deliveroo).
+     * Kept fully separate from POS sales; inventory is reserved from the
+     * same products.stock_quantity pool the POS uses, via ONLINE_RESERVE /
+     * ONLINE_RELEASE inventory movements.
+     */
+    CREATE TABLE IF NOT EXISTS online_orders (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+      store_id UUID REFERENCES stores(id) ON DELETE SET NULL,
+      platform VARCHAR(20) NOT NULL CHECK (platform IN ('uber', 'deliveroo')),
+      external_order_id VARCHAR(255) NOT NULL,
+      external_reference VARCHAR(255),
+      status VARCHAR(30) NOT NULL DEFAULT 'RECEIVED' CHECK (
+        status IN ('RECEIVED', 'ACCEPTED', 'PREPARING', 'READY', 'COMPLETED', 'REJECTED', 'CANCELLED')
+      ),
+      customer_name VARCHAR(255),
+      customer_phone VARCHAR(50),
+      customer_email VARCHAR(255),
+      delivery_address TEXT,
+      fulfilment_type VARCHAR(20) NOT NULL DEFAULT 'DELIVERY',
+      otp_code VARCHAR(20),
+      otp_verified_at TIMESTAMPTZ,
+      currency VARCHAR(10) NOT NULL DEFAULT 'GBP',
+      subtotal NUMERIC(12,2) NOT NULL DEFAULT 0,
+      tax NUMERIC(12,2) NOT NULL DEFAULT 0,
+      delivery_fee NUMERIC(12,2) NOT NULL DEFAULT 0,
+      total NUMERIC(12,2) NOT NULL DEFAULT 0,
+      notes TEXT,
+      cancel_reason TEXT,
+      platform_data JSONB,
+      accepted_at TIMESTAMPTZ,
+      preparing_at TIMESTAMPTZ,
+      ready_at TIMESTAMPTZ,
+      completed_at TIMESTAMPTZ,
+      cancelled_at TIMESTAMPTZ,
+      completed_by UUID REFERENCES users(id) ON DELETE SET NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      CONSTRAINT online_orders_platform_external_unique UNIQUE (company_id, platform, external_order_id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_online_orders_company
+    ON online_orders(company_id, created_at);
+
+    CREATE INDEX IF NOT EXISTS idx_online_orders_status
+    ON online_orders(company_id, status, created_at);
+
+    CREATE TABLE IF NOT EXISTS online_order_items (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      order_id UUID NOT NULL REFERENCES online_orders(id) ON DELETE CASCADE,
+      product_id UUID NOT NULL REFERENCES products(id),
+      external_item_id VARCHAR(255),
+      product_name VARCHAR(255) NOT NULL,
+      quantity NUMERIC(12,3) NOT NULL,
+      unit_price NUMERIC(12,2) NOT NULL,
+      tax NUMERIC(12,2) NOT NULL DEFAULT 0,
+      total NUMERIC(12,2) NOT NULL,
+      platform_data JSONB,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_online_order_items_order
+    ON online_order_items(order_id);
+
+    CREATE TABLE IF NOT EXISTS online_order_events (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      order_id UUID NOT NULL REFERENCES online_orders(id) ON DELETE CASCADE,
+      event_type VARCHAR(50) NOT NULL,
+      from_status VARCHAR(30),
+      to_status VARCHAR(30),
+      message TEXT,
+      platform_response JSONB,
+      actor_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_online_order_events_order
+    ON online_order_events(order_id, created_at);
+
+    ALTER TABLE online_orders
+      ADD COLUMN IF NOT EXISTS inventory_reserved BOOLEAN NOT NULL DEFAULT FALSE,
+      ADD COLUMN IF NOT EXISTS inventory_released BOOLEAN NOT NULL DEFAULT FALSE;
+
+    /*
+     * PLATFORM API AUDIT LOG (Uber / Deliveroo)
+     *
+     * Every outbound platform API request and its response is recorded here
+     * for debugging/auditing. Request payloads and headers are stored
+     * REDACTED - client secrets, access tokens, API keys and Authorization
+     * headers are replaced before insert (see
+     * services/onlineOrders/platformLogger.js).
+     */
+    CREATE TABLE IF NOT EXISTS platform_api_logs (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+      platform VARCHAR(20) NOT NULL CHECK (platform IN ('uber', 'deliveroo')),
+      environment VARCHAR(20),
+      action VARCHAR(100) NOT NULL,
+      endpoint VARCHAR(500),
+      http_method VARCHAR(10),
+      request_payload JSONB,
+      request_headers JSONB,
+      response_status INTEGER,
+      response_body JSONB,
+      success BOOLEAN,
+      error_message TEXT,
+      duration_ms INTEGER,
+      order_id UUID REFERENCES online_orders(id) ON DELETE SET NULL,
+      product_id UUID REFERENCES products(id) ON DELETE SET NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_platform_api_logs_company
+    ON platform_api_logs(company_id, created_at);
+
+    CREATE INDEX IF NOT EXISTS idx_platform_api_logs_platform
+    ON platform_api_logs(company_id, platform, created_at);
+
+    CREATE INDEX IF NOT EXISTS idx_platform_api_logs_order
+    ON platform_api_logs(order_id);
 
     INSERT INTO inventory_movements (
       company_id, product_id, store_id, movement_type,
@@ -502,6 +635,24 @@ export async function initializeDatabase(pool) {
       active BOOLEAN NOT NULL DEFAULT TRUE,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
+
+    /*
+     * Online platform (Uber / Deliveroo) settings are stored here, one row
+     * per company + provider. Secrets inside the "configuration" JSONB are
+     * encrypted by the application (AES-256-GCM, see
+     * services/onlineOrders/platformConfig.js).
+     */
+    ALTER TABLE integrations
+      ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+
+    DELETE FROM integrations a
+    USING integrations b
+    WHERE a.company_id = b.company_id
+      AND a.provider = b.provider
+      AND (a.created_at, a.id) < (b.created_at, b.id);
+
+    CREATE UNIQUE INDEX IF NOT EXISTS ux_integrations_company_provider
+    ON integrations(company_id, provider);
   `);
 
   const permissions = [
@@ -532,7 +683,10 @@ export async function initializeDatabase(pool) {
     ["role.manage", "Manage Roles"],
     ["payment.manage", "Manage Payments"],
     ["integration.manage", "Manage Integrations"],
-    ["settings.manage", "Manage Settings"]
+    ["settings.manage", "Manage Settings"],
+    ["online_orders.view", "View Online Orders"],
+    ["online_orders.manage", "Manage Online Orders"],
+    ["online_orders.configure", "Configure Online Platforms"]
   ];
 
   for (const [code, name] of permissions) {
