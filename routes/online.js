@@ -1228,10 +1228,21 @@ export default function createOnlineRouter({
 
   /*
    * Writes the webhook audit row and returns the transport acknowledgement
-   * to Deliveroo (HTTP 202 - a genuine receipt ack, not a simulated platform
-   * API response).
+   * to Deliveroo.
+   *
+   * Deliveroo REQUIRES an HTTP 200 OK acknowledgement:
+   *   - "Listening for Order Events": the webhook endpoint in your
+   *     integration must respond with an HTTP status 200 OK to our requests.
+   *   - "Order Integration": send a HTTP 200 response to Deliveroo.
+   *   - Legacy POS webhook doc: "It will only work if you send a 200."
+   * A 4xx/5xx (or a non-200 such as the previous 202) is treated as a
+   * failure / invalid response and triggers retries. This is a genuine
+   * transport acknowledgement - it does not simulate any Deliveroo API
+   * response and no Deliveroo API is called here.
    */
   async function acknowledgeDeliverooWebhook(res, { companyId, environment, action, payload, signatureHeader, signatureState, attachedOrderId }) {
+    const acknowledgement = { status: "ok" };
+
     await logPlatformApiCall(db, {
       companyId,
       platform: "deliveroo",
@@ -1244,13 +1255,13 @@ export default function createOnlineRouter({
         "x-deliveroo-signature": signatureHeader ? "(present)" : "(absent)",
         signature_state: signatureState,
       },
-      responseStatus: 202,
-      responseBody: { status: "received", order_attached: Boolean(attachedOrderId) },
+      responseStatus: 200,
+      responseBody: { ...acknowledgement, order_attached: Boolean(attachedOrderId) },
       success: true,
       orderId: attachedOrderId,
     });
 
-    return res.status(202).json({ status: "received" });
+    return res.status(200).json(acknowledgement);
   }
 
   /*
@@ -1267,13 +1278,21 @@ export default function createOnlineRouter({
   router.post("/online/deliveroo/webhook", async (req, res) => {
     const rawBody = Buffer.isBuffer(req.body) ? req.body : Buffer.from(JSON.stringify(req.body || {}));
     const signatureHeader = req.headers["x-deliveroo-signature"] || null;
+    const rawBodyText = rawBody.toString("utf8");
 
     let payload = null;
     try {
-      payload = JSON.parse(rawBody.toString("utf8"));
+      payload = JSON.parse(rawBodyText);
     } catch {
       payload = null;
     }
+
+    /*
+     * The raw webhook payload must never be lost: when the body is not valid
+     * JSON the raw text is logged verbatim (parsed payload preferred when
+     * available). Signature verification above/below is unaffected.
+     */
+    const loggedPayload = payload !== null ? payload : rawBodyText || null;
 
     const deliveroo = getPlatformService("deliveroo");
     let integrations = null;
@@ -1323,7 +1342,7 @@ export default function createOnlineRouter({
             action: "WEBHOOK_REJECTED",
             endpoint: "/api/online/deliveroo/webhook",
             httpMethod: "POST",
-            requestPayload: payload,
+            requestPayload: loggedPayload,
             requestHeaders: {
               "x-deliveroo-signature": signatureHeader ? "(present - did not verify)" : "(absent)",
             },
@@ -1378,7 +1397,7 @@ export default function createOnlineRouter({
               orderRow.rows[0].status,
               null,
               `Deliveroo webhook received (${signatureState})`,
-              JSON.stringify(payload),
+              JSON.stringify(loggedPayload),
             ]
           );
         }
@@ -1388,7 +1407,7 @@ export default function createOnlineRouter({
         companyId,
         environment: configuration.environment || null,
         action,
-        payload,
+        payload: loggedPayload,
         signatureHeader,
         signatureState,
         attachedOrderId,
@@ -1403,7 +1422,7 @@ export default function createOnlineRouter({
           action: "WEBHOOK_ERROR",
           endpoint: "/api/online/deliveroo/webhook",
           httpMethod: "POST",
-          requestPayload: payload,
+          requestPayload: loggedPayload,
           responseStatus: 500,
           responseBody: { error: "webhook_processing_failed" },
           success: false,
