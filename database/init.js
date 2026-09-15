@@ -14,10 +14,13 @@ export async function initializeDatabase(pool) {
       phone VARCHAR(50),
       currency VARCHAR(10) NOT NULL DEFAULT 'GBP',
       timezone VARCHAR(100) NOT NULL DEFAULT 'Europe/London',
+      logo_url TEXT,
       active BOOLEAN NOT NULL DEFAULT TRUE,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
+
+    ALTER TABLE companies ADD COLUMN IF NOT EXISTS logo_url TEXT;
 
     CREATE TABLE IF NOT EXISTS stores (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -43,6 +46,57 @@ export async function initializeDatabase(pool) {
       active BOOLEAN NOT NULL DEFAULT TRUE,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
+
+    CREATE TABLE IF NOT EXISTS company_settings (
+      company_id UUID PRIMARY KEY REFERENCES companies(id) ON DELETE CASCADE,
+      date_format VARCHAR(40) NOT NULL DEFAULT 'DD/MM/YYYY',
+      vat_enabled BOOLEAN NOT NULL DEFAULT TRUE,
+      default_vat_rate NUMERIC(5,2) NOT NULL DEFAULT 20,
+      updated_by UUID,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+    CREATE TABLE IF NOT EXISTS payment_terminals (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+      store_id UUID NOT NULL REFERENCES stores(id) ON DELETE CASCADE,
+      provider VARCHAR(100) NOT NULL,
+      name VARCHAR(100) NOT NULL,
+      terminal_identifier VARCHAR(255),
+      connection_url VARCHAR(500),
+      api_credentials TEXT,
+      active BOOLEAN NOT NULL DEFAULT TRUE,
+      last_test_result VARCHAR(100),
+      last_tested_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_payment_terminals_company
+    ON payment_terminals(company_id, store_id);
+
+    CREATE TABLE IF NOT EXISTS hardware_configurations (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+      store_id UUID NOT NULL REFERENCES stores(id) ON DELETE CASCADE,
+      device_type VARCHAR(30) NOT NULL CHECK (
+        device_type IN ('BARCODE_SCANNER', 'CASH_DRAWER', 'RECEIPT_PRINTER')
+      ),
+      device_name VARCHAR(150),
+      connection_type VARCHAR(50),
+      connection_address VARCHAR(500),
+      paper_width VARCHAR(20),
+      is_default BOOLEAN NOT NULL DEFAULT FALSE,
+      active BOOLEAN NOT NULL DEFAULT TRUE,
+      last_test_result VARCHAR(150),
+      last_tested_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE (company_id, store_id, device_type)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_hardware_configurations_store
+    ON hardware_configurations(company_id, store_id);
 
     CREATE TABLE IF NOT EXISTS roles (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -110,6 +164,169 @@ export async function initializeDatabase(pool) {
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
 
+    CREATE TABLE IF NOT EXISTS inventory_movements (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+      product_id UUID NOT NULL REFERENCES products(id),
+      store_id UUID REFERENCES stores(id) ON DELETE SET NULL,
+      movement_type VARCHAR(30) NOT NULL CHECK (
+        movement_type IN (
+          'OPENING',
+          'PURCHASE',
+          'SALE',
+          'CUSTOMER_RETURN',
+          'SUPPLIER_RETURN',
+          'ADJUSTMENT_IN',
+          'ADJUSTMENT_OUT',
+          'RETURN_IN',
+          'RETURN_OUT'
+        )
+      ),
+      quantity_change NUMERIC(12,3) NOT NULL,
+      balance_after NUMERIC(12,3) NOT NULL,
+      reference_type VARCHAR(50),
+      reference_id UUID,
+      reason TEXT,
+      notes TEXT,
+      created_by UUID REFERENCES users(id) ON DELETE SET NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+    ALTER TABLE inventory_movements
+      DROP CONSTRAINT IF EXISTS inventory_movements_movement_type_check;
+
+    ALTER TABLE inventory_movements
+      ADD CONSTRAINT inventory_movements_movement_type_check CHECK (
+        movement_type IN (
+          'OPENING', 'PURCHASE', 'SALE', 'CUSTOMER_RETURN',
+          'SUPPLIER_RETURN', 'ADJUSTMENT_IN', 'ADJUSTMENT_OUT',
+          'RETURN_IN', 'RETURN_OUT'
+        )
+      );
+
+    CREATE INDEX IF NOT EXISTS idx_inventory_movements_product
+    ON inventory_movements(product_id, created_at);
+
+    CREATE INDEX IF NOT EXISTS idx_inventory_movements_company
+    ON inventory_movements(company_id, created_at);
+
+    CREATE INDEX IF NOT EXISTS idx_inventory_movements_type
+    ON inventory_movements(movement_type, created_at);
+
+    INSERT INTO inventory_movements (
+      company_id, product_id, store_id, movement_type,
+      quantity_change, balance_after, reference_type, reason
+    )
+    SELECT
+      p.company_id, p.id, store.id, 'OPENING',
+      p.stock_quantity, p.stock_quantity, 'MIGRATION',
+      'Opening balance migrated from products.stock_quantity'
+    FROM products p
+    LEFT JOIN LATERAL (
+      SELECT id
+      FROM stores
+      WHERE company_id = p.company_id
+        AND active = true
+      ORDER BY created_at, id
+      LIMIT 1
+    ) store ON true
+    WHERE NOT EXISTS (
+      SELECT 1
+      FROM inventory_movements existing
+      WHERE existing.product_id = p.id
+    );
+
+    CREATE TABLE IF NOT EXISTS suppliers (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+      name VARCHAR(200) NOT NULL,
+      phone VARCHAR(50),
+      email VARCHAR(255),
+      address TEXT,
+      notes TEXT,
+      active BOOLEAN NOT NULL DEFAULT TRUE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+    ALTER TABLE suppliers
+      ADD COLUMN IF NOT EXISTS notes TEXT,
+      ADD COLUMN IF NOT EXISTS active BOOLEAN NOT NULL DEFAULT TRUE;
+
+    CREATE INDEX IF NOT EXISTS idx_suppliers_company
+    ON suppliers(company_id);
+
+    CREATE TABLE IF NOT EXISTS purchases (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+      store_id UUID NOT NULL REFERENCES stores(id),
+      supplier_id UUID REFERENCES suppliers(id) ON DELETE SET NULL,
+      supplier_name VARCHAR(200),
+      reference_number VARCHAR(100),
+      purchase_date DATE NOT NULL DEFAULT CURRENT_DATE,
+      notes TEXT,
+      status VARCHAR(20) NOT NULL DEFAULT 'DRAFT' CHECK (
+        status IN ('DRAFT', 'RECEIVED', 'CANCELLED')
+      ),
+      subtotal NUMERIC(12,2) NOT NULL DEFAULT 0,
+      total NUMERIC(12,2) NOT NULL DEFAULT 0,
+      created_by UUID REFERENCES users(id) ON DELETE SET NULL,
+      received_by UUID REFERENCES users(id) ON DELETE SET NULL,
+      received_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE (company_id, reference_number)
+    );
+
+    CREATE TABLE IF NOT EXISTS purchase_items (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      purchase_id UUID NOT NULL REFERENCES purchases(id) ON DELETE CASCADE,
+      product_id UUID NOT NULL REFERENCES products(id),
+      quantity NUMERIC(12,3) NOT NULL CHECK (quantity > 0),
+      unit_cost NUMERIC(12,2) NOT NULL CHECK (unit_cost >= 0),
+      line_total NUMERIC(12,2) NOT NULL DEFAULT 0
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_purchases_company_date
+    ON purchases(company_id, purchase_date DESC);
+
+    CREATE INDEX IF NOT EXISTS idx_purchase_items_purchase
+    ON purchase_items(purchase_id);
+
+    CREATE TABLE IF NOT EXISTS stock_returns (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+      store_id UUID NOT NULL REFERENCES stores(id),
+      return_type VARCHAR(20) NOT NULL CHECK (return_type IN ('CUSTOMER', 'SUPPLIER')),
+      sale_id UUID,
+      purchase_id UUID,
+      supplier_id UUID,
+      request_key VARCHAR(100),
+      reason TEXT,
+      created_by UUID REFERENCES users(id) ON DELETE SET NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_stock_returns_request
+    ON stock_returns(company_id, request_key)
+    WHERE request_key IS NOT NULL;
+
+    CREATE TABLE IF NOT EXISTS stock_return_items (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      return_id UUID NOT NULL REFERENCES stock_returns(id) ON DELETE CASCADE,
+      product_id UUID NOT NULL REFERENCES products(id),
+      sale_item_id UUID,
+      purchase_item_id UUID,
+      quantity NUMERIC(12,3) NOT NULL CHECK (quantity > 0),
+      reason TEXT
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_stock_returns_company
+    ON stock_returns(company_id, created_at);
+
+    CREATE INDEX IF NOT EXISTS idx_stock_return_items_return
+    ON stock_return_items(return_id);
+
     CREATE TABLE IF NOT EXISTS customers (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
@@ -117,11 +334,36 @@ export async function initializeDatabase(pool) {
       email VARCHAR(255),
       phone VARCHAR(50),
       address TEXT,
+      postcode VARCHAR(30),
       loyalty_number VARCHAR(100),
       notes TEXT,
       active BOOLEAN NOT NULL DEFAULT TRUE,
-      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
+
+    ALTER TABLE customers
+      ADD COLUMN IF NOT EXISTS postcode VARCHAR(30),
+      ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+
+    CREATE INDEX IF NOT EXISTS idx_customers_company
+    ON customers(company_id);
+
+    CREATE TABLE IF NOT EXISTS customer_stores (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      customer_id UUID NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
+      store_id UUID NOT NULL REFERENCES stores(id) ON DELETE CASCADE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      last_purchase_at TIMESTAMPTZ,
+      active BOOLEAN NOT NULL DEFAULT TRUE,
+      UNIQUE (customer_id, store_id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_customer_stores_store
+    ON customer_stores(store_id, active);
+
+    CREATE INDEX IF NOT EXISTS idx_customer_stores_customer
+    ON customer_stores(customer_id, active);
 
     CREATE TABLE IF NOT EXISTS sales (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -141,6 +383,23 @@ export async function initializeDatabase(pool) {
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       completed_at TIMESTAMPTZ
     );
+
+    INSERT INTO customer_stores (customer_id, store_id, last_purchase_at)
+    SELECT
+      s.customer_id,
+      s.store_id,
+      MAX(COALESCE(s.completed_at, s.created_at))
+    FROM sales s
+    INNER JOIN customers c ON c.id = s.customer_id
+    WHERE s.customer_id IS NOT NULL
+      AND s.store_id IS NOT NULL
+    GROUP BY s.customer_id, s.store_id
+    ON CONFLICT (customer_id, store_id) DO UPDATE SET
+      last_purchase_at = CASE
+        WHEN customer_stores.last_purchase_at IS NULL THEN EXCLUDED.last_purchase_at
+        WHEN EXCLUDED.last_purchase_at > customer_stores.last_purchase_at THEN EXCLUDED.last_purchase_at
+        ELSE customer_stores.last_purchase_at
+      END;
 
     CREATE TABLE IF NOT EXISTS sale_items (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -166,6 +425,22 @@ export async function initializeDatabase(pool) {
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
 
+    CREATE TABLE IF NOT EXISTS held_sales (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+      store_id UUID NOT NULL REFERENCES stores(id) ON DELETE CASCADE,
+      user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      customer_id UUID REFERENCES customers(id) ON DELETE SET NULL,
+      items JSONB NOT NULL,
+      discount_type VARCHAR(20),
+      discount_value NUMERIC(12,2) NOT NULL DEFAULT 0,
+      notes TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_held_sales_store
+    ON held_sales(company_id, store_id, created_at);
+
     CREATE TABLE IF NOT EXISTS refunds (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       sale_id UUID NOT NULL REFERENCES sales(id),
@@ -178,7 +453,9 @@ export async function initializeDatabase(pool) {
 
     CREATE TABLE IF NOT EXISTS till_sessions (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      company_id UUID REFERENCES companies(id) ON DELETE CASCADE,
       terminal_id UUID NOT NULL REFERENCES terminals(id),
+      store_id UUID REFERENCES stores(id) ON DELETE SET NULL,
       user_id UUID NOT NULL REFERENCES users(id),
       opening_cash NUMERIC(12,2) NOT NULL DEFAULT 0,
       closing_cash NUMERIC(12,2),
@@ -186,10 +463,16 @@ export async function initializeDatabase(pool) {
       cash_difference NUMERIC(12,2),
       status VARCHAR(50) NOT NULL DEFAULT 'open',
       opened_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      closed_at TIMESTAMPTZ
+      closed_at TIMESTAMPTZ,
+      closed_by UUID REFERENCES users(id) ON DELETE SET NULL
     );
 
-    CREATE TABLE IF NOT EXISTS cash_movements (
+    ALTER TABLE till_sessions
+      ADD COLUMN IF NOT EXISTS company_id UUID REFERENCES companies(id) ON DELETE CASCADE,
+      ADD COLUMN IF NOT EXISTS store_id UUID REFERENCES stores(id) ON DELETE SET NULL,
+      ADD COLUMN IF NOT EXISTS closed_by UUID REFERENCES users(id) ON DELETE SET NULL;
+
+     CREATE TABLE IF NOT EXISTS cash_movements (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       till_session_id UUID NOT NULL REFERENCES till_sessions(id),
       user_id UUID NOT NULL REFERENCES users(id),

@@ -1,0 +1,32 @@
+export function normaliseProduct(product) {
+  return {
+    id: product.id,
+    categoryId: product.category_id || product.categoryId || "",
+    name: product.name || product.product_name || "Unnamed Product",
+    sku: product.sku || product.code || "",
+    barcode: product.barcode || product.ean || "",
+    price: Number(product.price ?? product.selling_price ?? product.unit_price ?? 0),
+    cost: Number(product.cost ?? product.cost_price ?? 0),
+    vatRate: Number(product.vat_rate ?? product.vatRate ?? 20),
+    lowStockLevel: Number(product.low_stock_level ?? product.lowStockLevel ?? 0),
+    trackStock: product.track_stock !== false && product.trackStock !== false,
+    category: product.category || product.category_name || "All",
+    stock: Number(product.stock_quantity ?? product.stock ?? product.quantity ?? 0),
+    active: product.active !== false && product.is_active !== false,
+  };
+}
+
+export function getStockStatus(product) {
+  if (product.stock <= 0) {
+    return { label: "Out of Stock", className: "bg-red-50 text-red-700" };
+  }
+  const lowStockLevel = product.lowStockLevel > 0 ? product.lowStockLevel : 5;
+  if (product.stock <= lowStockLevel) {
+    return { label: "Low Stock", className: "bg-orange-50 text-orange-700" };
+  }
+  return { label: "In Stock", className: "bg-emerald-50 text-emerald-700" };
+}
+
+export function fmt(v) {
+  return `£${Number(v || 0).toFixed(2)}`;
+}

@@ -1,3 +1,4 @@
+import "dotenv/config";
 import express from "express";
 import cors from "cors";
 import bcrypt from "bcryptjs";
@@ -6,6 +7,18 @@ import pg from "pg";
 import path from "path";
 import { fileURLToPath } from "url";
 import { initializeDatabase } from "./database/init.js";
+import createTillRouter from "./routes/till.js";
+import createCustomersRouter from "./routes/customers.js";
+import createProductsRouter from "./routes/products.js";
+import createSuppliersRouter from "./routes/suppliers.js";
+import createPurchasesRouter from "./routes/purchases.js";
+import createInventoryRouter from "./routes/inventory.js";
+import createSalesRouter from "./routes/sales.js";
+import createReturnsRouter from "./routes/returns.js";
+import createReportsRouter from "./routes/reports.js";
+import createSettingsRouter from "./routes/settings.js";
+import createAdminRouter from "./routes/admin.js";
+import createDashboardRouter from "./routes/dashboard.js";
 
 const { Pool } = pg;
 
@@ -16,8 +29,15 @@ const PORT = process.env.PORT || 10000;
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+/*
+|--------------------------------------------------------------------------
+| Middleware
+|--------------------------------------------------------------------------
+*/
+
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: "10mb" }));
+app.use(express.urlencoded({ limit: "10mb", extended: true }));
 
 /*
 |--------------------------------------------------------------------------
@@ -34,12 +54,6 @@ const pool = process.env.DATABASE_URL
     })
   : null;
 
-/*
-|--------------------------------------------------------------------------
-| Database helper
-|--------------------------------------------------------------------------
-*/
-
 async function db(query, params = []) {
   if (!pool) {
     throw new Error("DATABASE_URL is not configured");
@@ -48,48 +62,31 @@ async function db(query, params = []) {
   return pool.query(query, params);
 }
 
-/*
-|--------------------------------------------------------------------------
-| Health check
-|--------------------------------------------------------------------------
-*/
+const paymentProviders = new Map();
 
-app.get("/api/health", async (req, res) => {
-  let database = "not configured";
-
-  if (pool) {
-    try {
-      await db("SELECT NOW()");
-      database = "connected";
-    } catch (error) {
-      console.error("Database health check failed:", error.message);
-      database = "error";
-    }
+async function testPaymentTerminal(terminal) {
+  if (!terminal || !terminal.active || !terminal.provider || !terminal.connection_url) {
+    return { status: "NOT_CONFIGURED", message: "Not configured" };
   }
 
-  res.json({
-    success: true,
-    app: "onePOS",
-    status: "online",
-    version: "0.1.0",
-    database,
-    time: new Date().toISOString(),
-  });
-});
+  const provider = paymentProviders.get(terminal.provider.toLowerCase());
 
-/*
-|--------------------------------------------------------------------------
-| API information
-|--------------------------------------------------------------------------
-*/
+  if (!provider) {
+    return { status: "PROVIDER_NOT_SUPPORTED", message: "Provider not supported" };
+  }
 
-app.get("/api", (req, res) => {
-  res.json({
-    name: "onePOS API",
-    version: "0.1.0",
-    status: "online",
-  });
-});
+  return provider.testConnection(terminal);
+}
+
+async function writeAudit(companyId, userId, action, entityType, entityId, details = {}) {
+  await db(
+    `
+    INSERT INTO audit_logs (company_id, user_id, action, entity_type, entity_id, details)
+    VALUES ($1,$2,$3,$4,$5,$6)
+    `,
+    [companyId, userId, action, entityType, entityId, JSON.stringify(details)]
+  );
+}
 
 /*
 |--------------------------------------------------------------------------
@@ -118,7 +115,7 @@ function createToken(user) {
 
 /*
 |--------------------------------------------------------------------------
-| Authentication middleware
+| Authentication
 |--------------------------------------------------------------------------
 */
 
@@ -147,7 +144,284 @@ function authenticate(req, res, next) {
 
 /*
 |--------------------------------------------------------------------------
-| Login
+| Authorization (reuses the existing permissions / role_permissions model)
+|--------------------------------------------------------------------------
+|
+| `authorize` is intended to be used after `authenticate`. It resolves the
+| permission codes granted to `req.user.roleId` via `role_permissions` and
+| requires the user to hold at least one of the supplied codes.
+|
+| Administrator/Owner roles (as defined by `canViewCompanyCustomers`) retain
+| full access, matching the existing behaviour for those accounts.
+*/
+
+async function getRolePermissionCodes(roleId) {
+  if (!roleId) return [];
+
+  const result = await db(
+    `
+    SELECT p.code
+    FROM role_permissions rp
+    INNER JOIN permissions p
+      ON p.id = rp.permission_id
+    WHERE rp.role_id = $1
+    `,
+    [roleId]
+  );
+
+  return result.rows.map((row) => row.code);
+}
+
+function authorize(...permissionCodes) {
+  return async (req, res, next) => {
+    if (!req.user) {
+      return res.status(401).json({
+        success: false,
+        message: "Authentication required",
+      });
+    }
+
+    try {
+      const isAdmin = await canViewCompanyCustomers(req.user);
+      if (isAdmin) {
+        return next();
+      }
+
+      const codes = await getRolePermissionCodes(req.user.roleId);
+
+      if (permissionCodes.some((code) => codes.includes(code))) {
+        return next();
+      }
+
+      return res.status(403).json({
+        success: false,
+        message: "You do not have permission to perform this action",
+      });
+    } catch (error) {
+      console.error("Authorization error:", error);
+
+      return res.status(500).json({
+        success: false,
+        message: "Authorization check failed",
+      });
+    }
+  };
+}
+
+async function associateCustomerWithStore(client, customerId, storeId, companyId, lastPurchaseAt = null) {
+  const customer = await client.query(
+    `SELECT id FROM customers WHERE id = $1 AND company_id = $2 AND active = true`,
+    [customerId, companyId]
+  );
+  if (!customer.rows.length) throw new Error("Customer not found");
+
+  const store = await client.query(
+    `SELECT id FROM stores WHERE id = $1 AND company_id = $2 AND active = true`,
+    [storeId, companyId]
+  );
+  if (!store.rows.length) throw new Error("Store not found");
+
+  const result = await client.query(
+    `
+    INSERT INTO customer_stores (customer_id, store_id, last_purchase_at)
+    VALUES ($1,$2,$3)
+    ON CONFLICT (customer_id, store_id) DO UPDATE SET
+      active = true,
+      last_purchase_at = CASE
+        WHEN EXCLUDED.last_purchase_at IS NULL THEN customer_stores.last_purchase_at
+        WHEN customer_stores.last_purchase_at IS NULL THEN EXCLUDED.last_purchase_at
+        WHEN EXCLUDED.last_purchase_at > customer_stores.last_purchase_at THEN EXCLUDED.last_purchase_at
+        ELSE customer_stores.last_purchase_at
+      END
+    RETURNING id, customer_id, store_id, created_at, last_purchase_at, active
+    `,
+    [customerId, storeId, lastPurchaseAt]
+  );
+  return result.rows[0];
+}
+
+async function canViewCompanyCustomers(user) {
+  const result = await db(
+    `SELECT 1 FROM roles WHERE id = $1 AND company_id = $2 AND LOWER(name) IN ('administrator', 'admin', 'owner') LIMIT 1`,
+    [user.roleId, user.companyId]
+  );
+  return result.rows.length > 0;
+}
+
+const inventoryMovementTypes = new Set([
+  "OPENING",
+  "PURCHASE",
+  "SALE",
+  "CUSTOMER_RETURN",
+  "SUPPLIER_RETURN",
+  "ADJUSTMENT_IN",
+  "ADJUSTMENT_OUT",
+  "RETURN_IN",
+  "RETURN_OUT",
+]);
+
+async function createInventoryMovement(client, {
+  companyId,
+  productId,
+  storeId,
+  movementType,
+  quantityChange,
+  referenceType = null,
+  referenceId = null,
+  reason = null,
+  notes = null,
+  createdBy = null,
+}) {
+  const quantity = Number(quantityChange);
+
+  if (
+    !inventoryMovementTypes.has(movementType) ||
+    !Number.isFinite(quantity) ||
+    (quantity === 0 && movementType !== "OPENING")
+  ) {
+    throw new Error("Invalid inventory movement");
+  }
+
+  const productResult = await client.query(
+    `
+    SELECT
+      id,
+      name,
+      price,
+      vat_rate,
+      track_stock,
+      stock_quantity
+    FROM products
+    WHERE id = $1
+      AND company_id = $2
+      AND active = true
+    FOR UPDATE
+    `,
+    [productId, companyId]
+  );
+
+  if (!productResult.rows.length) {
+    throw new Error("Product not found");
+  }
+
+  const product = productResult.rows[0];
+  const currentBalance = Number(product.stock_quantity);
+  const newBalance = currentBalance + quantity;
+
+  if (newBalance < 0) {
+    throw new Error(`Insufficient stock for ${product.name}`);
+  }
+
+  await client.query(
+    `
+    UPDATE products
+    SET
+      stock_quantity = $1,
+      updated_at = NOW()
+    WHERE id = $2
+      AND company_id = $3
+    `,
+    [newBalance, productId, companyId]
+  );
+
+  const movementResult = await client.query(
+    `
+    INSERT INTO inventory_movements (
+      company_id,
+      product_id,
+      store_id,
+      movement_type,
+      quantity_change,
+      balance_after,
+      reference_type,
+      reference_id,
+      reason,
+      notes,
+      created_by
+    )
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+    RETURNING
+      id,
+      product_id,
+      store_id,
+      movement_type,
+      quantity_change,
+      balance_after,
+      reference_type,
+      reference_id,
+      reason,
+      notes,
+      created_by,
+      created_at
+    `,
+    [
+      companyId,
+      productId,
+      storeId || null,
+      movementType,
+      quantity,
+      newBalance,
+      referenceType,
+      referenceId,
+      reason && String(reason).trim() ? String(reason).trim() : null,
+      notes && String(notes).trim() ? String(notes).trim() : null,
+      createdBy,
+    ]
+  );
+
+  return {
+    product,
+    balance: newBalance,
+    movement: movementResult.rows[0],
+  };
+}
+
+/*
+|--------------------------------------------------------------------------
+| Health
+|--------------------------------------------------------------------------
+*/
+
+app.get("/api/health", async (req, res) => {
+  let database = "not configured";
+
+  if (pool) {
+    try {
+      await db("SELECT NOW()");
+      database = "connected";
+    } catch (error) {
+      console.error("Database health check failed:", error.message);
+      database = "error";
+    }
+  }
+
+  res.json({
+    success: true,
+    app: "onePOS",
+    status: "online",
+    version: "0.2.0",
+    database,
+    time: new Date().toISOString(),
+  });
+});
+
+/*
+|--------------------------------------------------------------------------
+| API information
+|--------------------------------------------------------------------------
+*/
+
+app.get("/api", (req, res) => {
+  res.json({
+    name: "onePOS API",
+    version: "0.2.0",
+    status: "online",
+  });
+});
+
+/*
+|--------------------------------------------------------------------------
+| LOGIN
 |--------------------------------------------------------------------------
 */
 
@@ -210,6 +484,15 @@ app.post("/api/auth/login", async (req, res) => {
       });
     }
 
+    await db(
+      `
+      UPDATE users
+      SET last_login_at = NOW()
+      WHERE id = $1
+      `,
+      [user.id]
+    );
+
     const token = createToken(user);
 
     res.json({
@@ -236,7 +519,7 @@ app.post("/api/auth/login", async (req, res) => {
 
 /*
 |--------------------------------------------------------------------------
-| Current user
+| CURRENT USER
 |--------------------------------------------------------------------------
 */
 
@@ -279,7 +562,7 @@ app.get("/api/auth/me", authenticate, async (req, res) => {
       },
     });
   } catch (error) {
-    console.error(error);
+    console.error("Current user error:", error);
 
     res.status(500).json({
       success: false,
@@ -290,172 +573,220 @@ app.get("/api/auth/me", authenticate, async (req, res) => {
 
 /*
 |--------------------------------------------------------------------------
-| Products
+| CUSTOMER DATA FOUNDATION
 |--------------------------------------------------------------------------
 */
 
-app.get("/api/products", authenticate, async (req, res) => {
+app.use(
+  "/api",
+  createCustomersRouter({
+    authenticate,
+    authorize,
+    db,
+    pool,
+    canViewCompanyCustomers,
+    associateCustomerWithStore,
+  })
+);
+
+/*
+
+/*
+|--------------------------------------------------------------------------
+| DASHBOARD SUMMARY
+|--------------------------------------------------------------------------
+*/
+
+app.use("/api", createDashboardRouter({ authenticate, db }));
+
+app.use("/api", createSettingsRouter({ authenticate, db, pool, writeAudit, testPaymentTerminal }));
+
+/*
+|--------------------------------------------------------------------------
+| CATEGORIES & PRODUCTS
+|--------------------------------------------------------------------------
+|
+| Product and category routes are registered via routes/products.js,
+| receiving the existing authenticate, authorize, db, pool and
+| createInventoryMovement functions so behaviour is unchanged.
+|
+| Route ordering preserved:
+|   GET  /api/categories            (product.view)
+|   POST /api/categories            (product.create)
+|   PUT  /api/categories/:id        (product.edit)
+|   DEL  /api/categories/:id        (product.delete)
+|   GET  /api/products              (product.view)
+|   GET  /api/products/:id          (product.view)
+|   POST /api/products              (product.create)
+|   PUT  /api/products/:id          (product.edit)
+|   DEL  /api/products/:id          (product.delete)
+*/
+app.use(
+  "/api",
+  createProductsRouter({
+    authenticate,
+    authorize,
+    db,
+    pool,
+    createInventoryMovement,
+  })
+);
+
+/*
+|--------------------------------------------------------------------------
+| INVENTORY - MOVEMENTS / ADJUSTMENTS / RECONCILIATION
+|--------------------------------------------------------------------------
+|
+| Inventory routes are registered via routes/inventory.js, receiving the
+| existing authenticate, authorize, db, pool, createInventoryMovement
+| and inventoryMovementTypes so behaviour is unchanged.
+|
+| Route ordering preserved:
+|   GET  /api/inventory/movements       (inventory.view)
+|   POST /api/inventory/adjustments     (inventory.adjust)
+|   GET  /api/inventory/reconciliation  (inventory.view)
+*/
+app.use(
+  "/api",
+  createInventoryRouter({
+    authenticate,
+    authorize,
+    db,
+    pool,
+    createInventoryMovement,
+    inventoryMovementTypes,
+  })
+);
+
+/*
+|--------------------------------------------------------------------------
+| SUPPLIERS
+|--------------------------------------------------------------------------
+|
+| Supplier routes are registered via routes/suppliers.js, receiving the
+| existing authenticate, authorize and db functions so behaviour is
+| unchanged.
+|
+| Route ordering preserved:
+|   GET  /api/suppliers              (inventory.view)
+|   GET  /api/suppliers/:id          (inventory.view)
+|   POST /api/suppliers              (inventory.adjust)
+|   PUT  /api/suppliers/:id          (inventory.adjust)
+|   PATCH /api/suppliers/:id/status  (inventory.adjust)
+*/
+
+app.use(
+  "/api",
+  createSuppliersRouter({
+    authenticate,
+    authorize,
+    db,
+  })
+);
+
+/*
+|--------------------------------------------------------------------------
+| PURCHASES / GOODS RECEIVED
+|--------------------------------------------------------------------------
+|
+| Purchase and receive routes are registered via routes/purchases.js,
+| receiving the existing authenticate, authorize, db, pool and
+| createInventoryMovement functions so behaviour is unchanged.
+|
+| Route ordering preserved:
+|   GET  /api/purchases              (inventory.view)
+|   GET  /api/purchases/:id          (inventory.view)
+|   POST /api/purchases              (inventory.adjust)
+|   POST /api/purchases/:id/receive  (inventory.adjust)
+*/
+app.use(
+  "/api",
+  createPurchasesRouter({
+    authenticate,
+    authorize,
+    db,
+    pool,
+    createInventoryMovement,
+  })
+);
+
+app.use("/api", createSalesRouter({ authenticate, authorize, db, pool, createInventoryMovement, associateCustomerWithStore }));
+
+app.use("/api", createReturnsRouter({ authenticate, authorize, db, pool, createInventoryMovement }));
+
+app.use("/api", createAdminRouter({ authenticate, authorize, db, pool, canViewCompanyCustomers, bcrypt }));
+
+app.use("/api", createReportsRouter({ authenticate, db }));
+
+
+app.get("/api/held-sales", authenticate, authorize("sale.hold"), async (req, res) => {
   try {
     const result = await db(
-      `
-      SELECT
-        id,
-        name,
-        sku,
-        barcode,
-        price,
-        cost_price,
-        stock_quantity,
-        category_id,
-        active
-      FROM products
-      WHERE company_id = $1
-        AND active = true
-      ORDER BY name
-      `,
-      [req.user.companyId]
+      `SELECT id, customer_id, items, discount_type, discount_value, notes, created_at FROM held_sales WHERE company_id=$1 AND store_id=$2 AND user_id=$3 ORDER BY created_at DESC`,
+      [req.user.companyId, req.user.storeId, req.user.id]
     );
-
-    res.json({
-      success: true,
-      data: result.rows,
-    });
+    res.json({ success: true, data: result.rows });
   } catch (error) {
-    console.error(error);
-
-    res.status(500).json({
-      success: false,
-      message: "Unable to load products",
-    });
+    console.error("Load held sales error:", error);
+    res.status(500).json({ success: false, message: "Unable to load held sales" });
   }
 });
 
-/*
-|--------------------------------------------------------------------------
-| Create sale
-|--------------------------------------------------------------------------
-*/
-
-app.post("/api/sales", authenticate, async (req, res) => {
-  const client = await pool.connect();
-
+app.post("/api/held-sales", authenticate, authorize("sale.hold"), async (req, res) => {
+  const { items, customerId = null, discountType = null, discountValue = 0, notes = null } = req.body;
+  if (!Array.isArray(items) || !items.length) return res.status(400).json({ success: false, message: "Cannot hold an empty sale" });
   try {
-    await client.query("BEGIN");
-
-    const {
-      items = [],
-      subtotal = 0,
-      tax = 0,
-      discount = 0,
-      total = 0,
-      paymentMethod = "cash",
-    } = req.body;
-
-    if (!items.length) {
-      await client.query("ROLLBACK");
-
-      return res.status(400).json({
-        success: false,
-        message: "Sale contains no items",
-      });
-    }
-
-    const sale = await client.query(
-      `
-      INSERT INTO sales (
-        company_id,
-        store_id,
-        user_id,
-        subtotal,
-        tax,
-        discount,
-        total,
-        payment_method,
-        status
-      )
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'completed')
-      RETURNING id, created_at
-      `,
-      [
-        req.user.companyId,
-        req.user.storeId,
-        req.user.id,
-        subtotal,
-        tax,
-        discount,
-        total,
-        paymentMethod,
-      ]
+    const result = await db(
+      `INSERT INTO held_sales (company_id,store_id,user_id,customer_id,items,discount_type,discount_value,notes) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id,created_at`,
+      [req.user.companyId, req.user.storeId, req.user.id, customerId, JSON.stringify(items), discountType, Number(discountValue) || 0, notes || null]
     );
-
-    for (const item of items) {
-      await client.query(
-        `
-        INSERT INTO sale_items (
-          sale_id,
-          product_id,
-          quantity,
-          unit_price,
-          discount,
-          total
-        )
-        VALUES ($1,$2,$3,$4,$5,$6)
-        `,
-        [
-          sale.rows[0].id,
-          item.productId,
-          item.quantity,
-          item.unitPrice,
-          item.discount || 0,
-          item.total,
-        ]
-      );
-    }
-
-    await client.query("COMMIT");
-
-    res.json({
-      success: true,
-      sale: sale.rows[0],
-    });
+    res.status(201).json({ success: true, message: "Sale held", data: result.rows[0] });
   } catch (error) {
-    await client.query("ROLLBACK");
-
-    console.error("Sale error:", error);
-
-    res.status(500).json({
-      success: false,
-      message: "Sale could not be completed",
-    });
-  } finally {
-    client.release();
+    console.error("Hold sale error:", error);
+    res.status(500).json({ success: false, message: "Unable to hold sale" });
   }
+});
+
+app.delete("/api/held-sales/:id", authenticate, authorize("sale.hold"), async (req, res) => {
+  try {
+    const result = await db("DELETE FROM held_sales WHERE id=$1 AND company_id=$2 AND store_id=$3 AND user_id=$4 RETURNING id", [req.params.id, req.user.companyId, req.user.storeId, req.user.id]);
+    if (!result.rows.length) return res.status(404).json({ success: false, message: "Held sale not found" });
+    res.json({ success: true, message: "Held sale removed" });
+  } catch (error) { res.status(500).json({ success: false, message: "Unable to remove held sale" }); }
 });
 
 /*
 |--------------------------------------------------------------------------
-| Serve React
+| TILL SESSIONS & CASH MANAGEMENT
 |--------------------------------------------------------------------------
+|
+| A till session is opened per terminal (till) for a store. One open session
+| is allowed per terminal. Sales created while a session is open are linked
+| to the session's terminal; cash sales contribute to expected cash at close,
+| card sales do not. Cash movements record manual cash-in / cash-out.
+|
+| Routes are registered via routes/till.js, receiving the existing
+| authenticate, authorize, db, getRolePermissionCodes and
+| canViewCompanyCustomers functions so behaviour is unchanged.
 */
 
-const distPath = path.join(__dirname, "dist");
-
-app.use(express.static(distPath));
-
-app.use((req, res, next) => {
-  if (req.path.startsWith("/api/")) {
-    return res.status(404).json({
-      success: false,
-      message: "API endpoint not found",
-    });
-  }
-
-  res.sendFile(path.join(distPath, "index.html"));
-});
+app.use(
+  "/api",
+  createTillRouter({
+    authenticate,
+    authorize,
+    db,
+    getRolePermissionCodes,
+    canViewCompanyCustomers,
+  })
+);
 
 /*
 |--------------------------------------------------------------------------
-| TEMPORARY DATABASE SETUP
+| DATABASE SETUP
+|--------------------------------------------------------------------------
+|
+| Safe to run repeatedly.
 |--------------------------------------------------------------------------
 */
 
@@ -483,6 +814,8 @@ app.get("/api/setup/database", async (req, res) => {
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
+
+      ALTER TABLE companies ADD COLUMN IF NOT EXISTS logo_url TEXT;
 
       CREATE TABLE IF NOT EXISTS stores (
         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -585,7 +918,8 @@ app.get("/api/setup/database", async (req, res) => {
         loyalty_number VARCHAR(100),
         notes TEXT,
         active BOOLEAN NOT NULL DEFAULT TRUE,
-        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
 
       CREATE TABLE IF NOT EXISTS sales (
@@ -654,7 +988,9 @@ app.get("/api/setup/database", async (req, res) => {
 
       CREATE TABLE IF NOT EXISTS till_sessions (
         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        company_id UUID REFERENCES companies(id) ON DELETE CASCADE,
         terminal_id UUID NOT NULL REFERENCES terminals(id),
+        store_id UUID REFERENCES stores(id) ON DELETE SET NULL,
         user_id UUID NOT NULL REFERENCES users(id),
         opening_cash NUMERIC(12,2) NOT NULL DEFAULT 0,
         closing_cash NUMERIC(12,2),
@@ -662,10 +998,16 @@ app.get("/api/setup/database", async (req, res) => {
         cash_difference NUMERIC(12,2),
         status VARCHAR(50) NOT NULL DEFAULT 'open',
         opened_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        closed_at TIMESTAMPTZ
+        closed_at TIMESTAMPTZ,
+        closed_by UUID REFERENCES users(id) ON DELETE SET NULL
       );
 
-      CREATE TABLE IF NOT EXISTS cash_movements (
+        ALTER TABLE till_sessions
+          ADD COLUMN IF NOT EXISTS company_id UUID REFERENCES companies(id) ON DELETE CASCADE,
+          ADD COLUMN IF NOT EXISTS store_id UUID REFERENCES stores(id) ON DELETE SET NULL,
+          ADD COLUMN IF NOT EXISTS closed_by UUID REFERENCES users(id) ON DELETE SET NULL;
+
+       CREATE TABLE IF NOT EXISTS cash_movements (
         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
         till_session_id UUID NOT NULL REFERENCES till_sessions(id),
         user_id UUID NOT NULL REFERENCES users(id),
@@ -735,7 +1077,7 @@ app.get("/api/setup/database", async (req, res) => {
       ["role.manage", "Manage Roles"],
       ["payment.manage", "Manage Payments"],
       ["integration.manage", "Manage Integrations"],
-      ["settings.manage", "Manage Settings"]
+      ["settings.manage", "Manage Settings"],
     ];
 
     for (const [code, name] of permissions) {
@@ -751,39 +1093,79 @@ app.get("/api/setup/database", async (req, res) => {
 
     res.json({
       success: true,
-      message: "onePOS database initialized successfully"
+      message: "onePOS database initialized successfully",
     });
-
   } catch (error) {
     console.error("Database setup error:", error);
 
     res.status(500).json({
       success: false,
       message: "Database setup failed",
-      error: error.message
+      error: error.message,
     });
   }
 });
 
 /*
 |--------------------------------------------------------------------------
-| Start
+| React frontend
+|--------------------------------------------------------------------------
+*/
+
+const distPath = path.join(__dirname, "dist");
+
+app.use(express.static(distPath));
+
+/*
+|--------------------------------------------------------------------------
+| Unknown API routes
+|--------------------------------------------------------------------------
+*/
+
+app.use((req, res, next) => {
+  if (req.path.startsWith("/api/")) {
+    return res.status(404).json({
+      success: false,
+      message: "API endpoint not found",
+    });
+  }
+
+  res.sendFile(path.join(distPath, "index.html"));
+});
+
+/*
+|--------------------------------------------------------------------------
+| START
 |--------------------------------------------------------------------------
 */
 
 async function startServer() {
   try {
     if (pool) {
+      console.log("onePOS: checking database...");
+
+      await db("SELECT NOW()");
+
       await initializeDatabase(pool);
+
+      console.log("onePOS: database ready");
     } else {
-      console.log("onePOS: DATABASE_URL is not configured");
+      console.log(
+        "onePOS: DATABASE_URL is not configured"
+      );
     }
 
     app.listen(PORT, "0.0.0.0", () => {
-      console.log(`onePOS running on port ${PORT}`);
+      console.log(
+        `onePOS running on port ${PORT}`
+      );
     });
   } catch (error) {
-    console.error("onePOS startup failed:", error);
+    console.error(
+      "onePOS startup failed:",
+      error
+    );
+
     process.exit(1);
   }
 }
