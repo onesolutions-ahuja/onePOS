@@ -1240,7 +1240,7 @@ export default function createOnlineRouter({
    * transport acknowledgement - it does not simulate any Deliveroo API
    * response and no Deliveroo API is called here.
    */
-  async function acknowledgeDeliverooWebhook(res, { companyId, environment, action, payload, signatureHeader, signatureState, attachedOrderId }) {
+  async function acknowledgeDeliverooWebhook(res, { companyId, environment, action, payload, signatureHeader, sequenceGuidHeader, hmacHeader, signatureState, verifiedVia, attachedOrderId }) {
     const acknowledgement = { status: "ok" };
 
     await logPlatformApiCall(db, {
@@ -1252,8 +1252,11 @@ export default function createOnlineRouter({
       httpMethod: "POST",
       requestPayload: payload,
       requestHeaders: {
+        "x-deliveroo-sequence-guid": sequenceGuidHeader ? "(present)" : "(absent)",
+        "x-deliveroo-hmac-sha256": hmacHeader ? "(present)" : "(absent)",
         "x-deliveroo-signature": signatureHeader ? "(present)" : "(absent)",
         signature_state: signatureState,
+        verified_via: verifiedVia,
       },
       responseStatus: 200,
       responseBody: { ...acknowledgement, order_attached: Boolean(attachedOrderId) },
@@ -1278,6 +1281,8 @@ export default function createOnlineRouter({
   router.post("/online/deliveroo/webhook", async (req, res) => {
     const rawBody = Buffer.isBuffer(req.body) ? req.body : Buffer.from(JSON.stringify(req.body || {}));
     const signatureHeader = req.headers["x-deliveroo-signature"] || null;
+    const sequenceGuidHeader = req.headers["x-deliveroo-sequence-guid"] || null;
+    const hmacHeader = req.headers["x-deliveroo-hmac-sha256"] || null;
     const rawBodyText = rawBody.toString("utf8");
 
     let payload = null;
@@ -1309,21 +1314,50 @@ export default function createOnlineRouter({
 
       /*
        * Resolve the company: prefer the integration whose webhook secret
-       * verifies the HMAC signature. If a secret is configured somewhere but
-       * NOTHING verifies -> reject (401). If no secret is configured at all
-       * (sandbox setup stage), fall back to the first active integration and
-       * record the event as signature-unverified - transparently, never
-       * pretending it was verified.
+       * verifies the request signature. Deliveroo's current webhooks sign
+       *
+       *   HMAC-SHA256(secret, sequenceGuid + " " + rawBody)   -> X-Deliveroo-Hmac-Sha256
+       *
+       * with X-Deliveroo-Sequence-Guid carrying the GUID (legacy POS callbacks
+       * use " \n " instead of " "). The older raw-body-only
+       * X-Deliveroo-Signature check is kept as a fallback so the existing
+       * Postman signature test keeps working.
+       *
+       * If a secret is configured somewhere but NOTHING verifies -> reject
+       * (401). If no secret is configured at all (sandbox setup stage), fall
+       * back to the first active integration and record the event as
+       * signature-unverified - transparently, never pretending it was
+       * verified.
        */
       let matched = null;
       let signatureState = "unverified_no_secret_configured";
+      let verifiedVia = null;
 
       for (const row of integrations.rows) {
         const secret = decryptSecret(row.configuration && row.configuration.webhook_secret);
 
-        if (secret && signatureHeader && deliveroo.verifyWebhookSignature(rawBody, signatureHeader, secret)) {
+        if (!secret) {
+          continue;
+        }
+
+        const guidVariant = deliveroo.verifySequenceGuidSignature(
+          rawBody,
+          sequenceGuidHeader,
+          hmacHeader,
+          secret
+        );
+
+        if (guidVariant) {
           matched = row;
           signatureState = "verified";
+          verifiedVia = guidVariant;
+          break;
+        }
+
+        if (signatureHeader && deliveroo.verifyWebhookSignature(rawBody, signatureHeader, secret)) {
+          matched = row;
+          signatureState = "verified";
+          verifiedVia = "raw_body_fallback";
           break;
         }
       }
@@ -1344,6 +1378,8 @@ export default function createOnlineRouter({
             httpMethod: "POST",
             requestPayload: loggedPayload,
             requestHeaders: {
+              "x-deliveroo-sequence-guid": sequenceGuidHeader ? "(present - did not verify)" : "(absent)",
+              "x-deliveroo-hmac-sha256": hmacHeader ? "(present - did not verify)" : "(absent)",
               "x-deliveroo-signature": signatureHeader ? "(present - did not verify)" : "(absent)",
             },
             responseStatus: 401,
@@ -1409,7 +1445,10 @@ export default function createOnlineRouter({
         action,
         payload: loggedPayload,
         signatureHeader,
+        sequenceGuidHeader,
+        hmacHeader,
         signatureState,
+        verifiedVia,
         attachedOrderId,
       });
     } catch (error) {

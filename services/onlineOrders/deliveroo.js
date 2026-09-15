@@ -46,6 +46,58 @@ export function verifyWebhookSignature(rawBody, signatureHeader, webhookSecret) 
 }
 
 /*
+ * Verifies a CURRENT Deliveroo webhook signature (Order Events / Rider Events
+ * and every non-legacy callback). Deliveroo sends two headers:
+ *
+ *   X-Deliveroo-Sequence-Guid  -> sequential GUID
+ *   X-Deliveroo-Hmac-Sha256    -> signature (lowercase hex)
+ *
+ * and computes the signature, per Deliveroo's "Securing Webhooks" guide, as
+ *
+ *   HMAC-SHA256(webhook_secret, sequenceGuid + " " + <raw request body bytes>)
+ *
+ * The legacy POS (new_order / cancel_order) callbacks use the same scheme with
+ * " \n " (space, newline, space) as the separator, so both variants are tried.
+ * The RAW body bytes are used directly - never a re-serialised object.
+ *
+ * Returns the matched variant ("guid_space" | "guid_newline") or null. The
+ * secret itself is never returned or logged.
+ */
+export function verifySequenceGuidSignature(rawBody, sequenceGuid, hmacHeader, webhookSecret) {
+  if (!webhookSecret || !sequenceGuid || !hmacHeader) {
+    return null;
+  }
+
+  const provided = String(hmacHeader).trim();
+  const normalized = provided.toLowerCase().startsWith("sha256=") ? provided.slice(7) : provided;
+
+  const actual = Buffer.from(normalized, "hex");
+  if (!actual.length) {
+    return null;
+  }
+
+  const guid = String(sequenceGuid);
+
+  for (const [variant, separator] of [
+    ["guid_space", " "],
+    ["guid_newline", " \n "],
+  ]) {
+    const expected = crypto
+      .createHmac("sha256", webhookSecret)
+      .update(guid)
+      .update(separator)
+      .update(rawBody)
+      .digest();
+
+    if (expected.length === actual.length && crypto.timingSafeEqual(actual, expected)) {
+      return variant;
+    }
+  }
+
+  return null;
+}
+
+/*
  * Extracts the event type and external order id from a Deliveroo webhook
  * payload WITHOUT inventing a fixed schema. The first real sandbox events
  * are stored verbatim in platform_api_logs / online_order_events; field
@@ -95,6 +147,8 @@ const deliverooService = {
   ...base,
 
   verifyWebhookSignature,
+
+  verifySequenceGuidSignature,
 
   parseWebhookEvent,
 
