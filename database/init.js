@@ -319,6 +319,30 @@ export async function initializeDatabase(pool) {
     CREATE INDEX IF NOT EXISTS idx_online_order_events_order
     ON online_order_events(order_id, created_at);
 
+    /*
+     * DELIVEROO ITEM -> onePOS PRODUCT MAPPING
+     *
+     * Links a Deliveroo menu item (by its stable pos_item_id / PLU) to a
+     * onePOS product so future Deliveroo orders resolve automatically.
+     * A mapping never creates a onePOS product, and matching never happens by
+     * name alone.
+     */
+    CREATE TABLE IF NOT EXISTS deliveroo_item_mappings (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+      store_id UUID REFERENCES stores(id) ON DELETE SET NULL,
+      external_item_id VARCHAR(255) NOT NULL,
+      deliveroo_item_name VARCHAR(255),
+      product_id UUID NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+      active BOOLEAN NOT NULL DEFAULT TRUE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      CONSTRAINT deliveroo_item_mappings_company_item_unique UNIQUE (company_id, external_item_id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_deliveroo_item_mappings_company
+    ON deliveroo_item_mappings(company_id, external_item_id);
+
     ALTER TABLE online_orders
       ADD COLUMN IF NOT EXISTS inventory_reserved BOOLEAN NOT NULL DEFAULT FALSE,
       ADD COLUMN IF NOT EXISTS inventory_released BOOLEAN NOT NULL DEFAULT FALSE;

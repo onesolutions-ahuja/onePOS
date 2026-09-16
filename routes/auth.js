@@ -383,5 +383,114 @@ export default function createAuthRouter(pool) {
     }
   });
 
+
+  /*
+   * POST /api/auth/change-password
+   */
+  router.post("/change-password", async (req, res) => {
+    try {
+      const header = req.headers.authorization;
+
+      if (!header || !header.startsWith("Bearer ")) {
+        return res.status(401).json({
+          success: false,
+          message: "Authentication required"
+        });
+      }
+
+      let decoded;
+
+      try {
+        decoded = jwt.verify(header.substring(7), process.env.JWT_SECRET);
+      } catch {
+        return res.status(401).json({
+          success: false,
+          message: "Invalid or expired session"
+        });
+      }
+
+      const { currentPassword, newPassword, confirmPassword } = req.body || {};
+
+      if (!currentPassword || !newPassword || !confirmPassword) {
+        return res.status(400).json({
+          success: false,
+          message: "Current password, new password and confirmation are required"
+        });
+      }
+
+      if (newPassword !== confirmPassword) {
+        return res.status(400).json({
+          success: false,
+          message: "New password and confirmation do not match"
+        });
+      }
+
+      if (String(newPassword).length < 8) {
+        return res.status(400).json({
+          success: false,
+          message: "New password must be at least 8 characters"
+        });
+      }
+
+      const result = await pool.query(
+        `SELECT id, password_hash FROM users WHERE id = $1 AND active = TRUE`,
+        [decoded.userId]
+      );
+
+      if (result.rows.length === 0) {
+        return res.status(401).json({
+          success: false,
+          message: "User no longer exists or is disabled"
+        });
+      }
+
+      const user = result.rows[0];
+
+      const passwordOk = await bcrypt.compare(
+        currentPassword,
+        user.password_hash
+      );
+
+      if (!passwordOk) {
+        return res.status(401).json({
+          success: false,
+          message: "Current password is incorrect"
+        });
+      }
+
+      const sameAsOld = await bcrypt.compare(
+        newPassword,
+        user.password_hash
+      );
+
+      if (sameAsOld) {
+        return res.status(400).json({
+          success: false,
+          message: "New password must be different from the current password"
+        });
+      }
+
+      const newPasswordHash = await bcrypt.hash(newPassword, 10);
+
+      await pool.query(
+        `UPDATE users SET password_hash = $1, updated_at = NOW() WHERE id = $2`,
+        [newPasswordHash, user.id]
+      );
+
+      res.json({
+        success: true,
+        message: "Password changed successfully"
+      });
+
+    } catch (error) {
+      console.error("Change password error:", error);
+
+      res.status(500).json({
+        success: false,
+        message: "Failed to change password"
+      });
+    }
+  });
+
   return router;
 }

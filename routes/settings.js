@@ -306,6 +306,7 @@ export default function createSettingsRouter({
       storeId,
       brandId,
       orderAcceptance,
+      requireOtpOnCompletion,
       apiKey,
       webhookSecret,
       notes,
@@ -333,6 +334,8 @@ export default function createSettingsRouter({
           brand_id: brandId,
           order_acceptance:
             orderAcceptance === undefined ? undefined : orderAcceptance === "auto" ? "auto" : "manual",
+          require_otp_on_completion:
+            requireOtpOnCompletion === undefined ? undefined : requireOtpOnCompletion === true || requireOtpOnCompletion === "true",
           api_key: apiKey,
           webhook_secret: webhookSecret,
           notes,
@@ -360,7 +363,7 @@ export default function createSettingsRouter({
         "online_platform_settings.updated",
         "integration",
         result.rows[0].id,
-        { platform, enabled: enabled === true, environment: configuration.environment }
+        { platform, enabled: enabled === true, environment: configuration.environment, require_otp_on_completion: configuration.require_otp_on_completion === true }
       );
 
       await client.query("COMMIT");

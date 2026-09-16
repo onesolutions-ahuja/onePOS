@@ -722,6 +722,30 @@ CREATE TABLE IF NOT EXISTS online_order_events (
 CREATE INDEX IF NOT EXISTS idx_online_order_events_order
 ON online_order_events(order_id, created_at);
 
+/*
+ * DELIVEROO ITEM -> onePOS PRODUCT MAPPING
+ *
+ * Persists the link between a Deliveroo menu item and a onePOS product so
+ * future Deliveroo orders resolve automatically. Matching is by the stable
+ * Deliveroo item identifier (pos_item_id / PLU delivered on the order line),
+ * never by name alone. A mapping never creates a onePOS product.
+ */
+CREATE TABLE IF NOT EXISTS deliveroo_item_mappings (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+    store_id UUID REFERENCES stores(id) ON DELETE SET NULL,
+    external_item_id VARCHAR(255) NOT NULL,
+    deliveroo_item_name VARCHAR(255),
+    product_id UUID NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+    active BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT deliveroo_item_mappings_company_item_unique UNIQUE (company_id, external_item_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_deliveroo_item_mappings_company
+ON deliveroo_item_mappings(company_id, external_item_id);
+
 -- ============================================================
 -- PLATFORM API AUDIT LOG (UBER / DELIVEROO)
 -- Every platform API request/response, secrets redacted by

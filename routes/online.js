@@ -417,6 +417,183 @@ export default function createOnlineRouter({
 
   /*
    * ------------------------------------------------------------------
+   * Deliveroo item mapping
+   *
+   * Links a Deliveroo menu item (identified by its stable pos_item_id / PLU)
+   * to an EXISTING onePOS product. A mapping never creates a product, and
+   * never matches by name alone. Once saved, future Deliveroo orders resolve
+   * automatically in the webhook intake.
+   * ------------------------------------------------------------------
+   */
+
+  function mapDeliverooMapping(row) {
+    return {
+      id: row.id,
+      externalItemId: row.external_item_id,
+      deliverooItemName: row.deliveroo_item_name,
+      productId: row.product_id,
+      productName: row.product_name || null,
+      productSku: row.product_sku || null,
+      storeId: row.store_id,
+      active: row.active === true,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    };
+  }
+
+  /* GET /api/online/deliveroo/mappings - saved Deliveroo item -> product links. */
+  router.get("/online/deliveroo/mappings", authenticate, authorize("online_orders.view"), async (req, res) => {
+    try {
+      const result = await db(
+        `
+        SELECT m.*, p.name AS product_name, p.sku AS product_sku
+        FROM deliveroo_item_mappings m
+        LEFT JOIN products p ON p.id = m.product_id
+        WHERE m.company_id = $1
+        ORDER BY m.updated_at DESC
+        `,
+        [req.user.companyId]
+      );
+
+      res.json({ success: true, data: result.rows.map(mapDeliverooMapping) });
+    } catch (error) {
+      console.error("Load Deliveroo mappings error:", error);
+      res.status(500).json({ success: false, message: "Unable to load Deliveroo item mappings" });
+    }
+  });
+
+  /*
+   * GET /api/online/deliveroo/products?search=...
+   *
+   * Lightweight, company-scoped onePOS product search used by the mapping UI.
+   * Read-only: it never creates a product. Reuses the existing products table
+   * (and its price/stock columns) - no second product model.
+   */
+  router.get("/online/deliveroo/products", authenticate, authorize("online_orders.view"), async (req, res) => {
+    try {
+      const search = String(req.query.search || "").trim();
+      const params = [req.user.companyId];
+      let filter = "";
+
+      if (search) {
+        params.push(`%${search}%`);
+        filter = ` AND (p.name ILIKE $${params.length} OR p.sku ILIKE $${params.length} OR p.barcode ILIKE $${params.length})`;
+      }
+
+      const result = await db(
+        `
+        SELECT p.id, p.name, p.sku, p.barcode, p.price, p.vat_rate, p.track_stock
+        FROM products p
+        WHERE p.company_id = $1
+          AND p.active = true${filter}
+        ORDER BY p.name
+        LIMIT 50
+        `,
+        params
+      );
+
+      res.json({
+        success: true,
+        data: result.rows.map((row) => ({
+          id: row.id,
+          name: row.name,
+          sku: row.sku,
+          barcode: row.barcode,
+          price: Number(row.price),
+          vatRate: Number(row.vat_rate),
+          trackStock: row.track_stock === true,
+        })),
+      });
+    } catch (error) {
+      console.error("Search products for mapping error:", error);
+      res.status(500).json({ success: false, message: "Unable to search products" });
+    }
+  });
+
+  /*
+   * PUT /api/online/deliveroo/mappings
+   * Body: { externalItemId, deliverooItemName?, productId, active? }
+   *
+   * Creates or updates the mapping for one Deliveroo item identifier. The
+   * product must already exist for this company - nothing is auto-created. The
+   * UNIQUE (company_id, external_item_id) constraint is used for an idempotent
+   * upsert so re-saving (or mapping from two order lines) cannot duplicate.
+   */
+  router.put("/online/deliveroo/mappings", authenticate, authorize("online_orders.manage"), async (req, res) => {
+    try {
+      const { externalItemId, deliverooItemName = null, productId, active = true } = req.body || {};
+
+      const externalId = externalItemId === undefined || externalItemId === null ? "" : String(externalItemId).trim();
+
+      if (!externalId) {
+        return res.status(400).json({
+          success: false,
+          code: "MISSING_EXTERNAL_ITEM_ID",
+          message: "A Deliveroo item identifier (pos_item_id / PLU) is required to save a mapping",
+        });
+      }
+
+      if (!productId) {
+        return res.status(400).json({
+          success: false,
+          code: "MISSING_PRODUCT_ID",
+          message: "Select an existing onePOS product to map this Deliveroo item to",
+        });
+      }
+
+      // The product must already exist for this company - never auto-create.
+      const productResult = await db(
+        "SELECT id FROM products WHERE id = $1 AND company_id = $2 AND active = true",
+        [productId, req.user.companyId]
+      );
+
+      if (!productResult.rows.length) {
+        return res.status(404).json({ success: false, message: "Product not found for this company" });
+      }
+
+      const result = await db(
+        `
+        INSERT INTO deliveroo_item_mappings (
+          company_id, store_id, external_item_id, deliveroo_item_name, product_id, active
+        )
+        VALUES ($1,$2,$3,$4,$5,$6)
+        ON CONFLICT (company_id, external_item_id) DO UPDATE
+          SET deliveroo_item_name = EXCLUDED.deliveroo_item_name,
+              product_id = EXCLUDED.product_id,
+              active = EXCLUDED.active,
+              updated_at = NOW()
+        RETURNING *
+        `,
+        [
+          req.user.companyId,
+          req.user.storeId || null,
+          externalId,
+          deliverooItemName ? String(deliverooItemName) : null,
+          productId,
+          active !== false,
+        ]
+      );
+
+      if (writeAudit) {
+        await writeAudit(req.user.companyId, req.user.id, "deliveroo_item_mapped", "deliveroo_item_mapping", result.rows[0].id, {
+          externalItemId: externalId,
+          productId,
+        });
+      }
+
+      res.json({
+        success: true,
+        message: "Deliveroo item mapped",
+        data: mapDeliverooMapping(result.rows[0]),
+      });
+    } catch (error) {
+      console.error("Save Deliveroo mapping error:", error);
+      res.status(500).json({ success: false, message: "Unable to save Deliveroo item mapping", error: error.message });
+    }
+  });
+
+  /*
+   * ------------------------------------------------------------------
    * Online orders
    * ------------------------------------------------------------------
    */
@@ -441,7 +618,8 @@ export default function createOnlineRouter({
         `
         SELECT
           o.*,
-          (SELECT COUNT(*) FROM online_order_items i WHERE i.order_id = o.id) AS item_count
+          (SELECT COUNT(*) FROM online_order_items i WHERE i.order_id = o.id) AS item_count,
+          (SELECT COUNT(*) FROM online_order_items i WHERE i.order_id = o.id AND i.mapping_status = 'UNMAPPED') AS unmapped_count
         FROM online_orders o
         WHERE ${conditions.join(" AND ")}
         ORDER BY o.created_at DESC
@@ -481,6 +659,163 @@ export default function createOnlineRouter({
     } catch (error) {
       console.error("Load online order error:", error);
       res.status(500).json({ success: false, message: "Unable to load online order" });
+    }
+  });
+
+  /*
+   * POST /api/online/orders/:orderId/items/:itemId/map
+   * Body: { productId, saveForFutureDeliveroo? }
+   *
+   * Maps ONE existing online-order item to an existing onePOS product. It
+   * updates the EXISTING row - it never creates a new order or a new item:
+   *   - online_order_items.product_id  = selected product
+   *   - online_order_items.mapping_status = 'MAPPED'
+   *   - the Deliveroo name/quantity/price are left exactly as received
+   *   - an event records the change for the audit trail.
+   *
+   * saveForFutureDeliveroo (default true, Deliveroo items only): persists a
+   * deliveroo_item_mappings row keyed by the item's stable Deliveroo id so
+   * FUTURE orders resolve automatically. Name alone never creates a mapping.
+   */
+  router.post("/online/orders/:orderId/items/:itemId/map", authenticate, authorize("online_orders.manage"), async (req, res) => {
+    if (!pool) {
+      return res.status(500).json({ success: false, message: "DATABASE_URL is not configured" });
+    }
+
+    const { productId, saveForFutureDeliveroo = true } = req.body || {};
+
+    if (!productId) {
+      return res.status(400).json({
+        success: false,
+        code: "MISSING_PRODUCT_ID",
+        message: "Select an existing onePOS product to map this item to",
+      });
+    }
+
+    const client = await pool.connect();
+    let transactionStarted = false;
+
+    try {
+      await client.query("BEGIN");
+      transactionStarted = true;
+
+      // The product must already exist for this company - never auto-created.
+      const productResult = await client.query(
+        "SELECT id, name FROM products WHERE id = $1 AND company_id = $2 AND active = true",
+        [productId, req.user.companyId]
+      );
+
+      if (!productResult.rows.length) {
+        await client.query("ROLLBACK");
+        transactionStarted = false;
+        return res.status(404).json({ success: false, message: "Product not found for this company" });
+      }
+
+      // Lock the order first, then the item, so concurrent mappings serialize.
+      const orderResult = await client.query(
+        "SELECT * FROM online_orders WHERE id = $1 AND company_id = $2 FOR UPDATE",
+        [req.params.orderId, req.user.companyId]
+      );
+
+      if (!orderResult.rows.length) {
+        await client.query("ROLLBACK");
+        transactionStarted = false;
+        return res.status(404).json({ success: false, message: "Online order not found" });
+      }
+
+      const order = orderResult.rows[0];
+
+      const itemResult = await client.query(
+        "SELECT * FROM online_order_items WHERE id = $1 AND order_id = $2 FOR UPDATE",
+        [req.params.itemId, order.id]
+      );
+
+      if (!itemResult.rows.length) {
+        await client.query("ROLLBACK");
+        transactionStarted = false;
+        return res.status(404).json({ success: false, message: "Order item not found" });
+      }
+
+      const item = itemResult.rows[0];
+
+      // Only product_id + mapping_status change; the Deliveroo name/price/
+      // quantity received from the platform are preserved untouched.
+      const updatedItem = await client.query(
+        `
+        UPDATE online_order_items
+        SET product_id = $2, mapping_status = 'MAPPED'
+        WHERE id = $1
+        RETURNING *
+        `,
+        [item.id, productId]
+      );
+
+      let savedMapping = null;
+
+      if (saveForFutureDeliveroo !== false && order.platform === "deliveroo" && item.external_item_id) {
+        const mappingResult = await client.query(
+          `
+          INSERT INTO deliveroo_item_mappings (
+            company_id, store_id, external_item_id, deliveroo_item_name, product_id, active
+          )
+          VALUES ($1,$2,$3,$4,$5,TRUE)
+          ON CONFLICT (company_id, external_item_id) DO UPDATE
+            SET deliveroo_item_name = EXCLUDED.deliveroo_item_name,
+                product_id = EXCLUDED.product_id,
+                active = TRUE,
+                updated_at = NOW()
+          RETURNING *
+          `,
+          [
+            req.user.companyId,
+            order.store_id || req.user.storeId || null,
+            String(item.external_item_id),
+            (item.platform_data && item.platform_data.deliveroo_item_name) || item.product_name || null,
+            productId,
+          ]
+        );
+
+        savedMapping = mapDeliverooMapping(mappingResult.rows[0]);
+      }
+
+      await recordEvent(client, {
+        orderId: order.id,
+        eventType: "ITEM_MAPPED",
+        fromStatus: order.status,
+        toStatus: order.status,
+        message: `${order.platform} item "${item.product_name}" (${item.external_item_id || "no external id"}) mapped to onePOS product "${productResult.rows[0].name}"${savedMapping ? " (saved for future orders)" : ""}`,
+        platformResponse: { itemId: item.id, productId, savedForFuture: Boolean(savedMapping) },
+        actorUserId: req.user.id,
+      });
+
+      await client.query("COMMIT");
+
+      if (writeAudit) {
+        await writeAudit(req.user.companyId, req.user.id, "online_order_item_mapped", "online_order", order.id, {
+          itemId: item.id,
+          externalItemId: item.external_item_id || null,
+          productId,
+          savedForFuture: Boolean(savedMapping),
+        });
+      }
+
+      res.json({
+        success: true,
+        message: "Item mapped to onePOS product",
+        data: {
+          item: { ...updatedItem.rows[0], track_stock: undefined },
+          mapping: savedMapping,
+        },
+      });
+    } catch (error) {
+      if (transactionStarted) {
+        await client.query("ROLLBACK");
+      }
+
+      console.error("Map online order item error:", error);
+      res.status(500).json({ success: false, message: error.message || "Unable to map the order item" });
+    } finally {
+      client.release();
     }
   });
 
@@ -968,10 +1303,28 @@ export default function createOnlineRouter({
 
       // Row lock for the whole action: two concurrent requests (e.g. a
       // double-clicked Cancel) serialize here, so stock is released once.
-      const locked = await client.query(
-        "SELECT * FROM online_orders WHERE id = $1 AND company_id = $2 FOR UPDATE",
-        [req.params.id, req.user.companyId]
-      );
+      // NOWAIT makes the second request fail immediately (caught below as
+      // ORDER_BUSY) instead of blocking for the whole platform HTTP call.
+      let locked;
+
+      try {
+        locked = await client.query(
+          "SELECT * FROM online_orders WHERE id = $1 AND company_id = $2 FOR UPDATE NOWAIT",
+          [req.params.id, req.user.companyId]
+        );
+      } catch (lockError) {
+        if (lockError.code === "55P03") {
+          // Another action on this order is already in flight.
+          await client.query("ROLLBACK");
+          transactionStarted = false;
+          return res.status(409).json({
+            success: false,
+            code: "ORDER_BUSY",
+            message: "An action on this order is already in progress - try again in a moment",
+          });
+        }
+        throw lockError;
+      }
 
       if (!locked.rows.length) {
         await client.query("ROLLBACK");
@@ -1032,7 +1385,14 @@ export default function createOnlineRouter({
 
         const failureCode = (platformResponse && platformResponse.code) || "PLATFORM_CALL_FAILED";
 
-        await recordEvent(db, {
+        /*
+         * recordEvent expects an object with .query (a Pool or Client).
+         * `db` here is an async function, NOT a client - passing it crashed
+         * with "client.query is not a function" and masked the real platform
+         * rejection. The pool itself is the correct non-transaction executor
+         * here (the transaction is being rolled back anyway).
+         */
+        await recordEvent(pool, {
           orderId: order.id,
           eventType: "PLATFORM_CALL_FAILED",
           fromStatus: order.status,
@@ -1259,11 +1619,61 @@ export default function createOnlineRouter({
   }
 
   /*
+   * Resolves a Deliveroo item (by its stable Deliveroo identifier - pos_item_id
+   * / PLU from the order line) to a onePOS product.
+   *
+   * Resolution order:
+   *   1. a saved Deliveroo item mapping (deliveroo_item_mappings) - the link the
+   *      "Map product" UI creates,
+   *   2. the legacy products.deliveroo_item_id column (configured manually in
+   *      the Products admin).
+   *
+   * Matching is ALWAYS by the stable Deliveroo id. Name is never used to create
+   * or infer a mapping - an unmatched item simply stays UNMAPPED.
+   */
+  async function resolveDeliverooProduct(client, companyId, externalItemId) {
+    if (!externalItemId) {
+      return null;
+    }
+
+    const mappingResult = await client.query(
+      `
+      SELECT p.id, p.name, p.price, p.vat_rate, p.track_stock
+      FROM deliveroo_item_mappings m
+      INNER JOIN products p ON p.id = m.product_id
+      WHERE m.company_id = $1
+        AND m.external_item_id = $2
+        AND m.active = true
+        AND p.active = true
+      LIMIT 1
+      `,
+      [companyId, externalItemId]
+    );
+
+    if (mappingResult.rows.length) {
+      return mappingResult.rows[0];
+    }
+
+    const productResult = await client.query(
+      `
+      SELECT id, name, price, vat_rate, track_stock
+      FROM products
+      WHERE company_id = $1
+        AND active = true
+        AND deliveroo_item_id = $2
+      LIMIT 1
+      `,
+      [companyId, externalItemId]
+    );
+
+    return productResult.rows[0] || null;
+  }
+
+  /*
    * Maps Deliveroo order items onto onePOS products WITHOUT ever failing the
    * order: an item whose Deliveroo pos_item_id is not linked to a product is
    * kept (mapping_status 'UNMAPPED') so the mapping UI can be built from real
-   * data later. Matching reuses the existing platform item id column
-   * (products.deliveroo_item_id).
+   * data later. Matching is by the stable Deliveroo identifier only.
    */
   async function resolveDeliverooItems(client, companyId, normalized) {
     const mapped = [];
@@ -1272,23 +1682,7 @@ export default function createOnlineRouter({
     for (const item of normalized.items || []) {
       const externalItemId = item.posItemId !== undefined && item.posItemId !== null ? String(item.posItemId) : null;
 
-      let product = null;
-
-      if (externalItemId) {
-        const productResult = await client.query(
-          `
-          SELECT id, name, price, vat_rate, track_stock
-          FROM products
-          WHERE company_id = $1
-            AND active = true
-            AND deliveroo_item_id = $2
-          LIMIT 1
-          `,
-          [companyId, externalItemId]
-        );
-
-        product = productResult.rows[0] || null;
-      }
+      const product = await resolveDeliverooProduct(client, companyId, externalItemId);
 
       const quantity = Number(item.quantity) > 0 ? Number(item.quantity) : 1;
       const unitPrice = Number(item.unitPrice) || 0;
@@ -1297,6 +1691,7 @@ export default function createOnlineRouter({
       const platformData = {
         source: "deliveroo_webhook",
         external_item_id: externalItemId,
+        deliveroo_item_name: item.name || item.operationalName || null,
         operational_name: item.operationalName,
         modifiers: item.modifiers,
         discount_amount: item.discountAmount,

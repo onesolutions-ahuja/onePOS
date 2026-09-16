@@ -93,7 +93,45 @@ function UsersPermissionsSettings({ onMessage, onError }) {
   const save = async (value) => { const data = await apiRequest(value.id ? `/api/admin/users/${value.id}` : "/api/admin/users", { method: value.id ? "PUT" : "POST", body: JSON.stringify(value) }); if (!data.success) throw new Error(data.message); await load(); setForm(null); onMessage("User saved."); };
   const toggle = async (user) => { try { await save({ id: user.id, fullName: user.full_name, email: user.email, roleId: user.role_id, storeId: user.store_id, active: !user.active }); } catch (err) { onError(err.message || "Unable to update user"); } };
   if (loading) return <div className="p-8 text-center text-slate-400">Loading users...</div>;
-  return <div className="bg-white border rounded-xl overflow-hidden"><div className="p-4 border-b flex justify-between items-center"><h2 className="font-semibold">Users & Permissions</h2><button onClick={() => setForm({})} className="h-9 px-3 bg-blue-600 text-white rounded text-sm"><Plus size={15} className="inline mr-1" />Add user</button></div><table className="w-full"><thead><tr className="bg-slate-50">{["Name", "Username / Email", "Role", "Store", "Status", "Actions"].map((heading) => <th key={heading} className="text-left px-4 py-3 text-xs uppercase text-slate-500">{heading}</th>)}</tr></thead><tbody>{users.map((user) => <tr key={user.id} className="border-t"><td className="px-4 py-3 text-sm font-medium">{user.full_name}</td><td className="px-4 py-3 text-sm">{user.username}<div className="text-xs text-slate-500">{user.email || "-"}</div></td><td className="px-4 py-3 text-sm">{user.role_name || "-"}</td><td className="px-4 py-3 text-sm">{user.store_name || "Unassigned"}</td><td className="px-4 py-3 text-sm">{user.active ? "Active" : "Inactive"}</td><td className="px-4 py-3"><button onClick={() => setForm({ id:user.id, username:user.username, fullName:user.full_name, email:user.email || "", roleId:user.role_id || "", storeId:user.store_id || "", active:user.active })} className="p-2 text-slate-500" title="Edit user"><Edit size={16} /></button><button onClick={() => toggle(user)} className="ml-1 px-2 py-1 text-sm border rounded">{user.active ? "Deactivate" : "Activate"}</button></td></tr>)}</tbody></table>{form && <UserFormModal form={form} roles={roles} stores={stores} onClose={() => setForm(null)} onSave={save} />}<RolePermissionsManager roles={roles} onMessage={onMessage} onError={onError} /></div>;
+  return <div className="space-y-6"><ChangePasswordCard /><div className="bg-white border rounded-xl overflow-hidden"><div className="p-4 border-b flex justify-between items-center"><h2 className="font-semibold">Users & Permissions</h2><button onClick={() => setForm({})} className="h-9 px-3 bg-blue-600 text-white rounded text-sm"><Plus size={15} className="inline mr-1" />Add user</button></div><table className="w-full"><thead><tr className="bg-slate-50">{["Name", "Username / Email", "Role", "Store", "Status", "Actions"].map((heading) => <th key={heading} className="text-left px-4 py-3 text-xs uppercase text-slate-500">{heading}</th>)}</tr></thead><tbody>{users.map((user) => <tr key={user.id} className="border-t"><td className="px-4 py-3 text-sm font-medium">{user.full_name}</td><td className="px-4 py-3 text-sm">{user.username}<div className="text-xs text-slate-500">{user.email || "-"}</div></td><td className="px-4 py-3 text-sm">{user.role_name || "-"}</td><td className="px-4 py-3 text-sm">{user.store_name || "Unassigned"}</td><td className="px-4 py-3 text-sm">{user.active ? "Active" : "Inactive"}</td><td className="px-4 py-3"><button onClick={() => setForm({ id:user.id, username:user.username, fullName:user.full_name, email:user.email || "", roleId:user.role_id || "", storeId:user.store_id || "", active:user.active })} className="p-2 text-slate-500" title="Edit user"><Edit size={16} /></button><button onClick={() => toggle(user)} className="ml-1 px-2 py-1 text-sm border rounded">{user.active ? "Deactivate" : "Activate"}</button></td></tr>)}</tbody></table>{form && <UserFormModal form={form} roles={roles} stores={stores} onClose={() => setForm(null)} onSave={save} />}<RolePermissionsManager roles={roles} onMessage={onMessage} onError={onError} /></div></div>;
+}
+
+function ChangePasswordCard() {
+  const [form, setForm] = useState({ currentPassword: "", newPassword: "", confirmPassword: "" });
+  const [error, setError] = useState("");
+  const [success, setSuccess] = useState("");
+  const [saving, setSaving] = useState(false);
+  const update = (field, value) => setForm((current) => ({ ...current, [field]: value }));
+  const reset = () => { setForm({ currentPassword: "", newPassword: "", confirmPassword: "" }); setError(""); setSuccess(""); };
+  const submit = async (event) => {
+    event.preventDefault();
+    setError(""); setSuccess("");
+    if (form.newPassword !== form.confirmPassword) { setError("New password and confirmation do not match"); return; }
+    if (form.newPassword.length < 8) { setError("New password must be at least 8 characters"); return; }
+    try {
+      setSaving(true);
+      const data = await apiRequest("/api/auth/change-password", { method: "POST", body: JSON.stringify({ currentPassword: form.currentPassword, newPassword: form.newPassword }) });
+      if (!data.success) throw new Error(data.message || "Unable to change password");
+      setSuccess("Password changed successfully.");
+      setForm({ currentPassword: "", newPassword: "", confirmPassword: "" });
+    } catch (err) { setError(err.message || "Unable to change password"); } finally { setSaving(false); }
+  };
+  return (
+    <div className="bg-white border rounded-xl overflow-hidden">
+      <div className="p-4 border-b"><h2 className="font-semibold">Change Password</h2></div>
+      <form onSubmit={submit} className="p-4 max-w-md space-y-3">
+        {error && <div className="p-2 bg-red-50 text-red-700 rounded text-sm">{error}</div>}
+        {success && <div className="p-2 bg-green-50 text-green-700 rounded text-sm">{success}</div>}
+        <label className="block text-sm text-slate-600"><span className="block mb-1 font-medium">Current password</span><input type="password" required value={form.currentPassword} onChange={(e) => update("currentPassword", e.target.value)} className="w-full h-9 px-2 border rounded" autoComplete="current-password" /></label>
+        <label className="block text-sm text-slate-600"><span className="block mb-1 font-medium">New password</span><input type="password" required value={form.newPassword} onChange={(e) => update("newPassword", e.target.value)} className="w-full h-9 px-2 border rounded" autoComplete="new-password" /></label>
+        <label className="block text-sm text-slate-600"><span className="block mb-1 font-medium">Confirm new password</span><input type="password" required value={form.confirmPassword} onChange={(e) => update("confirmPassword", e.target.value)} className="w-full h-9 px-2 border rounded" autoComplete="new-password" /></label>
+        <div className="flex gap-2 pt-2">
+          <button type="submit" disabled={saving} className="h-9 px-4 bg-blue-600 text-white rounded text-sm disabled:opacity-50">{saving ? "Saving…" : "Save Password"}</button>
+          <button type="button" onClick={reset} className="h-9 px-3 border rounded text-sm">Cancel</button>
+        </div>
+      </form>
+    </div>
+  );
 }
 
 function UserFormModal({ form: initial, roles, stores, onClose, onSave }) {
@@ -372,6 +410,7 @@ function OnlinePlatformSettings({ onMessage, onError }) {
         storeId: platform.store_id || "",
         brandId: platform.brand_id || "",
         orderAcceptance: platform.order_acceptance === "auto" ? "auto" : "manual",
+        requireOtpOnCompletion: platform.require_otp_on_completion === true,
         apiKey: "",
         webhookSecret: "",
         notes: platform.notes || "",
@@ -396,6 +435,7 @@ function OnlinePlatformSettings({ onMessage, onError }) {
       body.storeId = body.storeId || null;
       body.brandId = body.brandId || null;
       body.orderAcceptance = body.orderAcceptance === "auto" ? "auto" : "manual";
+      body.requireOtpOnCompletion = body.requireOtpOnCompletion === true;
       body.notes = body.notes || null;
       const data = await apiRequest(`/api/settings/online-platforms/${platform}`, { method: "PUT", body: JSON.stringify(body) });
       if (!data.success) throw new Error(data.message || "Unable to save configuration");
@@ -477,6 +517,18 @@ function OnlinePlatformSettings({ onMessage, onError }) {
           <span className="block mt-1 text-xs text-slate-400">Auto-accept immediately accepts new {platform.name} orders after they are received. Stored locally; synced to the platform when Uber supports it via API.</span>
         </label>
       )}
+      <label className="text-sm text-slate-600 col-span-2">
+        <span className="block mb-1 font-medium">Require customer OTP on completion</span>
+        <select
+          value={form.requireOtpOnCompletion ? "yes" : "no"}
+          onChange={(event) => update(platform.platform, "requireOtpOnCompletion", event.target.value === "yes")}
+          className="w-full h-10 px-2 border border-slate-200 rounded-lg bg-white"
+        >
+          <option value="no">No</option>
+          <option value="yes">Yes</option>
+        </select>
+        <span className="block mt-1 text-xs text-slate-400">When Yes, the Online Orders page asks for the customer OTP before an order can be marked complete for {platform.name}. Default is No.</span>
+      </label>
       <label className="text-sm text-slate-600 col-span-2"><span className="block mb-1 font-medium">Notes</span>
           <textarea rows="2" value={form.notes || ""} onChange={(event) => update(platform.platform, "notes", event.target.value)} className="w-full px-3 py-2 border border-slate-200 rounded-lg" />
         </label>

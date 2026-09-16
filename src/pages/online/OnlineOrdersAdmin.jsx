@@ -4,9 +4,8 @@ import { apiRequest } from "../../services/api.js";
 import { fmt } from "../../utils/formatters.js";
 
 /*
- * Basic admin UI for the Online Orders foundation (Uber Eats / Deliveroo).
- * Functionality first: product platform configuration, simulated incoming
- * orders and the order lifecycle actions. Will be polished later.
+ * Admin UI for the Online Orders workflow (Uber Eats / Deliveroo).
+ * Focuses on incoming orders, item mapping and the order lifecycle actions.
  */
 
 const STATUS_BADGES = {
@@ -22,22 +21,13 @@ const STATUS_BADGES = {
 const ACTIVE_STATUSES = ["RECEIVED", "ACCEPTED", "PREPARING", "READY"];
 
 export default function OnlineOrdersAdmin() {
-  const [platforms, setPlatforms] = useState([]);
-  const [products, setProducts] = useState([]);
   const [orders, setOrders] = useState([]);
   const [statusFilter, setStatusFilter] = useState("");
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
   const [loading, setLoading] = useState(true);
   const [detail, setDetail] = useState(null);
-
-  // Simulated incoming order form
-  const [simPlatform, setSimPlatform] = useState("uber");
-  const [simProductId, setSimProductId] = useState("");
-  const [simQty, setSimQty] = useState(1);
-  const [simName, setSimName] = useState("");
-  const [simOtp, setSimOtp] = useState("");
-  const [simBusy, setSimBusy] = useState(false);
+  const [busyOrderId, setBusyOrderId] = useState(null);
 
   // Completion OTP modal
   const [completeTarget, setCompleteTarget] = useState(null);
@@ -45,19 +35,17 @@ export default function OnlineOrdersAdmin() {
   const [otpError, setOtpError] = useState("");
   const [otpBusy, setOtpBusy] = useState(false);
 
-  const loadPlatforms = useCallback(async () => {
-    try {
-      const data = await apiRequest("/api/online/platforms");
-      if (data.success) setPlatforms(data.data || []);
-    } catch (err) {
-      console.error("Load platforms error:", err);
-    }
-  }, []);
+  // Deliveroo item mapping modal
+  const [mapTarget, setMapTarget] = useState(null); // { order, item }
+  const [mapSearch, setMapSearch] = useState("");
+  const [mapResults, setMapResults] = useState([]);
+  const [mapProductId, setMapProductId] = useState("");
+  const [mapSaveForFuture, setMapSaveForFuture] = useState(true);
+  const [mapBusy, setMapBusy] = useState(false);
+  const [mapError, setMapError] = useState("");
 
-  const loadProducts = useCallback(async () => {
-    const data = await apiRequest("/api/online/products");
-    if (data.success) setProducts(data.data || []);
-  }, []);
+  // Platform config: which platforms require a customer OTP on completion.
+  const [otpRequired, setOtpRequired] = useState({});
 
   const loadOrders = useCallback(async () => {
     const suffix = statusFilter ? `?status=${encodeURIComponent(statusFilter)}` : "";
@@ -69,13 +57,19 @@ export default function OnlineOrdersAdmin() {
     setLoading(true);
     setError("");
     try {
-      await Promise.all([loadPlatforms(), loadProducts(), loadOrders()]);
+      await loadOrders();
+      const platformsData = await apiRequest("/api/settings/online-platforms");
+      if (platformsData.success) {
+        const required = {};
+        for (const p of platformsData.data || []) required[p.platform] = !!p.requireOtpOnCompletion;
+        setOtpRequired(required);
+      }
     } catch (err) {
       setError(err.message || "Unable to load online orders data");
     } finally {
       setLoading(false);
     }
-  }, [loadPlatforms, loadProducts, loadOrders]);
+  }, [loadOrders]);
 
   useEffect(() => {
     loadAll();
@@ -86,52 +80,9 @@ export default function OnlineOrdersAdmin() {
     loadOrders().catch((err) => setError(err.message || "Unable to load orders"));
   }, [statusFilter, loadOrders]);
 
-  const toggleProductPlatform = async (product, key) => {
-    try {
-      setError("");
-      const body = { [key]: !product[key] };
-      const data = await apiRequest(`/api/online/products/${product.id}`, {
-        method: "PUT",
-        body: JSON.stringify(body),
-      });
-      if (!data.success) throw new Error(data.message || "Unable to save configuration");
-      setMessage(`${product.name}: ${key === "availableOnUber" ? "Uber Eats" : "Deliveroo"} ${product[key] ? "unpublished" : "published"} (simulated)`);
-      await loadProducts();
-    } catch (err) {
-      setError(err.message || "Unable to save configuration");
-    }
-  };
-
-  const simulateOrder = async () => {
-    if (!simProductId) {
-      setError("Choose a product that is configured for a platform");
-      return;
-    }
-
-    setSimBusy(true);
-    setError("");
-    try {
-      const data = await apiRequest("/api/online/orders", {
-        method: "POST",
-        body: JSON.stringify({
-          platform: simPlatform,
-          customer: { name: simName || "Simulated Customer" },
-          otp: simOtp.trim() || undefined,
-          items: [{ productId: simProductId, quantity: Number(simQty) || 1 }],
-        }),
-      });
-      if (!data.success) throw new Error(data.message || "Unable to receive order");
-      setMessage(`Order received (${data.data.order.platform}, ${data.data.order.external_order_id}) - inventory reserved`);
-      await loadOrders();
-      await loadProducts();
-    } catch (err) {
-      setError(err.message || "Unable to receive order");
-    } finally {
-      setSimBusy(false);
-    }
-  };
-
   const orderAction = async (order, action, body) => {
+    if (busyOrderId) return; // prevent duplicate accept/reject requests
+    setBusyOrderId(order.id);
     try {
       setError("");
       const data = await apiRequest(`/api/online/orders/${order.id}/${action}`, {
@@ -143,13 +94,39 @@ export default function OnlineOrdersAdmin() {
       await loadOrders();
     } catch (err) {
       setError(err.message || "Action failed");
+    } finally {
+      setBusyOrderId(null);
     }
   };
 
   const openComplete = (order) => {
-    setCompleteTarget(order);
-    setOtpInput("");
-    setOtpError("");
+    // OTP modal only opens when this platform requires a customer OTP on
+    // completion (Settings → Online Platforms). Otherwise complete directly.
+    if (otpRequired[order.platform]) {
+      setCompleteTarget(order);
+      setOtpInput("");
+      setOtpError("");
+    } else {
+      completeDirect(order);
+    }
+  };
+
+  const completeDirect = async (order) => {
+    if (busyOrderId) return;
+    setBusyOrderId(order.id);
+    try {
+      const data = await apiRequest(`/api/online/orders/${order.id}/complete`, {
+        method: "POST",
+        body: JSON.stringify({}),
+      });
+      if (!data.success) throw new Error(data.message || "Unable to complete order");
+      setMessage(`Order ${order.external_order_id} completed`);
+      await loadOrders();
+    } catch (err) {
+      setError(err.message || "Unable to complete order");
+    } finally {
+      setBusyOrderId(null);
+    }
   };
 
   const submitComplete = async (event) => {
@@ -166,7 +143,7 @@ export default function OnlineOrdersAdmin() {
       if (!data.success) {
         throw Object.assign(new Error(data.message || "Unable to complete order"), { code: data.code });
       }
-      setMessage(`Order ${completeTarget.external_order_id} completed - OTP verified by the ${completeTarget.platform} platform`);
+      setMessage(`Order ${completeTarget.external_order_id} completed - OTP verified by the platform`);
       setCompleteTarget(null);
       await loadOrders();
     } catch (err) {
@@ -186,6 +163,67 @@ export default function OnlineOrdersAdmin() {
       if (data.success) setDetail(data.data);
     } catch (err) {
       setError(err.message || "Unable to load order detail");
+    }
+  };
+
+  const searchMappingProducts = useCallback(async (search) => {
+    try {
+      const suffix = search ? `?search=${encodeURIComponent(search)}` : "";
+      const data = await apiRequest(`/api/online/deliveroo/products${suffix}`);
+      if (data.success) setMapResults(data.data || []);
+    } catch (err) {
+      setMapError(err.message || "Unable to search products");
+    }
+  }, []);
+
+  const openMap = (order, item) => {
+    setMapTarget({ order, item });
+    setMapProductId("");
+    setMapSearch("");
+    setMapSaveForFuture(true);
+    setMapError("");
+    searchMappingProducts("");
+  };
+
+  /*
+   * Maps an existing order item to an existing onePOS product. The backend
+   * updates the EXISTING order item (never creates a new order/product) and
+   * records a Deliveroo item mapping so future orders resolve automatically.
+   */
+  const submitMapping = async (event) => {
+    event.preventDefault();
+    if (!mapTarget || !mapProductId) {
+      setMapError("Select a onePOS product to map this item to");
+      return;
+    }
+
+    setMapBusy(true);
+    setMapError("");
+    try {
+      const data = await apiRequest(
+        `/api/online/orders/${mapTarget.order.id}/items/${mapTarget.item.id}/map`,
+        {
+          method: "POST",
+          body: JSON.stringify({ productId: mapProductId, saveForFutureDeliveroo: mapSaveForFuture }),
+        }
+      );
+      if (!data.success) throw new Error(data.message || "Unable to map this item");
+
+      setMessage(
+        `Mapped "${mapTarget.item.product_name}" to a onePOS product${mapSaveForFuture ? " (saved for future Deliveroo orders)" : ""}`
+      );
+      setMapTarget(null);
+      await loadOrders();
+
+      // Refresh the open detail so the item shows as MAPPED.
+      if (detail && detail.order.id === mapTarget.order.id) {
+        const refreshed = await apiRequest(`/api/online/orders/${mapTarget.order.id}`);
+        if (refreshed.success) setDetail(refreshed.data);
+      }
+    } catch (err) {
+      setMapError(err.message || "Unable to map this item");
+    } finally {
+      setMapBusy(false);
     }
   };
 
@@ -214,94 +252,6 @@ export default function OnlineOrdersAdmin() {
           <button onClick={() => setMessage("")} className="p-1 hover:bg-emerald-100 rounded"><X size={16} /></button>
         </div>
       )}
-
-      <div className="flex gap-2 mb-4">
-        {platforms.map((platform) => (
-          <span key={platform.platform} className={`px-3 py-1.5 rounded-full text-xs font-medium border ${platform.mode === "DISABLED" ? "bg-red-50 text-red-700 border-red-200" : "bg-amber-50 text-amber-700 border-amber-200"}`}>
-            {platform.name}: {platform.mode}
-          </span>
-        ))}
-      </div>
-
-      {/* SIMULATE INCOMING ORDER */}
-      <div className="bg-white border border-slate-200 rounded-xl p-5 mb-5">
-        <h2 className="font-bold mb-1">Simulate incoming order</h2>
-        <p className="text-xs text-slate-500 mb-4">Stands in for the platform webhook. Creates a RECEIVED order and reserves stock.</p>
-        <div className="flex flex-wrap gap-3 items-end">
-          <label className="text-sm text-slate-600">
-            <span className="block mb-1 font-medium">Platform</span>
-            <select value={simPlatform} onChange={(e) => setSimPlatform(e.target.value)} className="h-10 px-3 border border-slate-200 rounded-lg bg-white">
-              <option value="uber">Uber Eats</option>
-              <option value="deliveroo">Deliveroo</option>
-            </select>
-          </label>
-          <label className="text-sm text-slate-600 min-w-[220px]">
-            <span className="block mb-1 font-medium">Product (configured for the platform)</span>
-            <select value={simProductId} onChange={(e) => setSimProductId(e.target.value)} className="w-full h-10 px-3 border border-slate-200 rounded-lg bg-white">
-              <option value="">Select product...</option>
-              {products
-                .filter((p) => (simPlatform === "uber" ? p.availableOnUber : p.availableOnDeliveroo))
-                .map((p) => (
-                  <option key={p.id} value={p.id}>{p.name}</option>
-                ))}
-            </select>
-          </label>
-          <label className="text-sm text-slate-600">
-            <span className="block mb-1 font-medium">Qty</span>
-            <input type="number" min="1" value={simQty} onChange={(e) => setSimQty(e.target.value)} className="w-20 h-10 px-3 border border-slate-200 rounded-lg" />
-          </label>
-          <label className="text-sm text-slate-600">
-            <span className="block mb-1 font-medium">Customer</span>
-            <input value={simName} onChange={(e) => setSimName(e.target.value)} placeholder="Name (optional)" className="h-10 px-3 border border-slate-200 rounded-lg" />
-          </label>
-          <label className="text-sm text-slate-600">
-            <span className="block mb-1 font-medium">OTP</span>
-            <input value={simOtp} onChange={(e) => setSimOtp(e.target.value)} placeholder="e.g. 1234" className="w-24 h-10 px-3 border border-slate-200 rounded-lg" />
-          </label>
-          <button onClick={simulateOrder} disabled={simBusy} className="h-10 px-4 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50">
-            {simBusy ? "Receiving..." : "Receive order"}
-          </button>
-        </div>
-      </div>
-
-      {/* PRODUCT PLATFORM CONFIG */}
-      <div className="bg-white border border-slate-200 rounded-xl mb-5 overflow-hidden">
-        <div className="p-5 border-b border-slate-100">
-          <h2 className="font-bold">Product platform configuration</h2>
-          <p className="text-xs text-slate-500 mt-1">Toggle availability independently per platform. Publishing is delegated to the platform service (simulated).</p>
-        </div>
-        <div className="max-h-72 overflow-y-auto">
-          <table className="w-full text-sm">
-            <thead className="bg-slate-50 text-slate-500 text-left">
-              <tr>
-                <th className="px-5 py-3 font-medium">Product</th>
-                <th className="px-5 py-3 font-medium">Price</th>
-                <th className="px-5 py-3 font-medium">Uber Eats</th>
-                <th className="px-5 py-3 font-medium">Deliveroo</th>
-                <th className="px-5 py-3 font-medium">Item IDs</th>
-              </tr>
-            </thead>
-            <tbody>
-              {products.map((product) => (
-                <tr key={product.id} className="border-t border-slate-100">
-                  <td className="px-5 py-3">{product.name}<span className="text-slate-400 text-xs ml-2">{product.sku}</span></td>
-                  <td className="px-5 py-3">{fmt(product.price)}</td>
-                  <td className="px-5 py-3">
-                    <input type="checkbox" checked={product.availableOnUber} onChange={() => toggleProductPlatform(product, "availableOnUber")} className="w-4 h-4 accent-blue-600" />
-                  </td>
-                  <td className="px-5 py-3">
-                    <input type="checkbox" checked={product.availableOnDeliveroo} onChange={() => toggleProductPlatform(product, "availableOnDeliveroo")} className="w-4 h-4 accent-blue-600" />
-                  </td>
-                  <td className="px-5 py-3 text-xs text-slate-400">{product.uberItemId || "-"} / {product.deliverooItemId || "-"}</td>
-                </tr>
-              ))}
-              {!products.length && (
-                <tr><td colSpan="5" className="px-5 py-6 text-center text-slate-400">{loading ? "Loading..." : "No products yet"}</td></tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-      </div>
 
       {/* ORDERS LIST */}
       <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
@@ -337,7 +287,16 @@ export default function OnlineOrdersAdmin() {
                     <div className="text-xs text-slate-400">{new Date(order.created_at).toLocaleString()}</div>
                   </td>
                   <td className="px-5 py-3">{order.customer_name || "-"}<div className="text-xs text-slate-400">{order.customer_phone || ""}</div></td>
-                  <td className="px-5 py-3">{order.item_count}</td>
+                  <td className="px-5 py-3">
+                    {order.item_count}
+                    {Number(order.unmapped_count) > 0 && (
+                      <div className="mt-0.5">
+                        <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-800">
+                          {order.unmapped_count} UNMAPPED
+                        </span>
+                      </div>
+                    )}
+                  </td>
                   <td className="px-5 py-3">{fmt(order.total)}</td>
                   <td className="px-5 py-3 text-xs">{order.otp_code ? <span className="font-mono">{order.otp_code}</span> : "-"}</td>
                   <td className="px-5 py-3">
@@ -387,15 +346,56 @@ export default function OnlineOrdersAdmin() {
             <div className="p-5 space-y-5">
               <div>
                 <h3 className="text-sm font-semibold mb-2">Items</h3>
+                {detail.items.some((item) => item.mapping_status === "UNMAPPED") && (
+                  <div className="mb-2 px-3 py-2 bg-amber-50 border-amber-200 text-amber-800 rounded text-xs">
+                    {detail.items.filter((item) => item.mapping_status === "UNMAPPED").length} item(s) are not mapped to a onePOS product.
+                    Map them to a product so future {detail.order.platform === "uber" ? "Uber Eats" : "Deliveroo"} orders resolve automatically.
+                    Unmapped items do not reserve or consume stock.
+                  </div>
+                )}
                 <table className="w-full text-sm">
+                  <thead>
+                    <tr className="text-left text-xs text-slate-400 border-b border-slate-100">
+                      <th className="py-1 font-medium">Item</th>
+                      <th className="py-1 font-medium">PLU / ID</th>
+                      <th className="py-1 font-medium text-center">Qty</th>
+                      <th className="py-1 font-medium text-right">Total</th>
+                      <th className="py-1 font-medium text-right">Mapping</th>
+                    </tr>
+                  </thead>
                   <tbody>
-                    {detail.items.map((item) => (
-                      <tr key={item.id} className="border-b border-slate-100">
-                        <td className="py-2">{item.product_name}</td>
-                        <td className="py-2 text-slate-500">x{item.quantity}</td>
-                        <td className="py-2 text-right">{fmt(item.total)}</td>
-                      </tr>
-                    ))}
+                    {detail.items.map((item) => {
+                      const unmapped = item.mapping_status === "UNMAPPED";
+                      const modifiers = (item.platform_data && item.platform_data.modifiers) || [];
+                      return (
+                        <tr key={item.id} className="border-b border-slate-100 align-top">
+                          <td className="py-2">
+                            {item.product_name}
+                            {modifiers.length > 0 && (
+                              <div className="text-xs text-slate-400">{modifiers.map((m) => m.name).filter(Boolean).join(", ")}</div>
+                            )}
+                          </td>
+                          <td className="py-2 text-xs text-slate-500 font-mono">{item.external_item_id || "-"}</td>
+                          <td className="py-2 text-slate-500 text-center">x{item.quantity}</td>
+                          <td className="py-2 text-right">{fmt(item.total)}</td>
+                          <td className="py-2 text-right">
+                            {unmapped ? (
+                              <span className="inline-flex items-center gap-2">
+                                <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-800">UNMAPPED</span>
+                                <button
+                                  onClick={() => openMap(detail.order, item)}
+                                  className="px-2.5 py-1 bg-blue-600 text-white rounded text-xs hover:bg-blue-700"
+                                >
+                                  Map product
+                                </button>
+                              </span>
+                            ) : (
+                              <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-emerald-50 text-emerald-700">MAPPED</span>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
                 <div className="text-sm text-right mt-2 space-y-1">
@@ -454,6 +454,80 @@ export default function OnlineOrdersAdmin() {
                 <button type="button" onClick={() => setCompleteTarget(null)} disabled={otpBusy} className="h-10 px-4 border border-slate-200 rounded-lg text-sm hover:bg-slate-50">Cancel</button>
                 <button type="submit" disabled={otpBusy || !otpInput.trim()} className="h-10 px-5 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50">
                   {otpBusy ? "Verifying with platform..." : "Verify & complete"}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* MAP DELIVEROO ITEM TO A ONEPOS PRODUCT */}
+      {mapTarget && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" onClick={() => !mapBusy && setMapTarget(null)}>
+          <div className="bg-white rounded-xl w-[560px] max-w-full max-h-[85vh] overflow-y-auto shadow-2xl" onClick={(e) => e.stopPropagation()}>
+            <div className="p-5 border-b border-slate-200 flex items-center justify-between">
+              <div>
+                <h2 className="font-bold text-lg">Map {mapTarget.order.platform === "uber" ? "Uber Eats" : "Deliveroo"} item</h2>
+                <p className="text-xs text-slate-500 mt-1">Order {mapTarget.order.external_order_id}</p>
+              </div>
+              <button onClick={() => !mapBusy && setMapTarget(null)} disabled={mapBusy} className="p-2 hover:bg-slate-100 rounded"><X size={20} /></button>
+            </div>
+            <form onSubmit={submitMapping} className="p-5 space-y-4">
+              <div className="px-3 py-2 bg-slate-50 border-slate-200 rounded-lg text-sm">
+                <div className="font-medium text-slate-700">{mapTarget.item.product_name}</div>
+                <div className="text-xs text-slate-500 mt-0.5">
+                  Deliveroo ID: <span className="font-mono">{mapTarget.item.external_item_id || "(none)"}</span> - x{mapTarget.item.quantity} - {fmt(mapTarget.item.total)}
+                </div>
+              </div>
+
+              {mapError && <div className="px-3 py-2 bg-red-50 border-red-200 text-red-700 rounded text-sm">{mapError}</div>}
+
+              <div>
+                <label className="block text-sm font-medium text-slate-600 mb-1">Search existing onePOS product</label>
+                <input
+                  value={mapSearch}
+                  onChange={(e) => { setMapSearch(e.target.value); searchMappingProducts(e.target.value); }}
+                  placeholder="Search by name, SKU or barcode..."
+                  className="w-full h-10 px-3 border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+                />
+                <p className="text-xs text-slate-400 mt-1">Only existing products can be selected - mapping never creates a new product.</p>
+              </div>
+
+              <div className="border border-slate-200 rounded-lg max-h-56 overflow-y-auto">
+                {mapResults.map((p) => (
+                  <button
+                    type="button"
+                    key={p.id}
+                    onClick={() => setMapProductId(p.id)}
+                    className={`w-full text-left px-3 py-2 text-sm border-b border-slate-100 last:border-b-0 hover:bg-slate-50 ${mapProductId === p.id ? "bg-blue-50" : ""}`}
+                  >
+                    <span className="font-medium text-slate-700">{p.name}</span>
+                    <span className="text-xs text-slate-400 ml-2">
+                      {p.sku ? `SKU ${p.sku}` : "no SKU"} - {fmt(p.price)}{p.trackStock ? " - tracked" : ""}
+                    </span>
+                 </button>
+                ))}
+                {!mapResults.length && (
+                  <div className="px-3 py-4 text-center text-xs text-slate-400">No products match this search</div>
+                )}
+              </div>
+
+              {mapTarget.order.platform === "deliveroo" && mapTarget.item.external_item_id && (
+                <label className="flex items-start gap-2 text-sm text-slate-600">
+                  <input type="checkbox" checked={mapSaveForFuture} onChange={(e) => setMapSaveForFuture(e.target.checked)} className="mt-0.5" />
+                  <span>
+                    Save this mapping for future Deliveroo orders
+                    <span className="block text-xs text-slate-400">
+                      Links Deliveroo item {mapTarget.item.external_item_id} to the chosen product, so later orders resolve automatically.
+                    </span>
+                  </span>
+                </label>
+              )}
+
+              <div className="flex justify-end gap-2">
+                <button type="button" onClick={() => setMapTarget(null)} disabled={mapBusy} className="h-10 px-4 border-slate-200 rounded-lg text-sm hover:bg-slate-50">Cancel</button>
+                <button type="submit" disabled={mapBusy || !mapProductId} className="h-10 px-5 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50">
+                  {mapBusy ? "Saving..." : "Map item"}
                 </button>
               </div>
             </form>

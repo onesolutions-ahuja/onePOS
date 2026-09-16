@@ -237,6 +237,21 @@ export function createPlatformService({ platform, displayName }) {
 
       const providedOtp = String(otp === undefined || otp === null ? "" : otp).trim();
 
+      /*
+       * OTP handling mirrors the real platform contract:
+       *   - order has no OTP recorded AND none provided -> nothing to verify,
+       *     completion confirms ("Require customer OTP" = NO flow)
+       *   - order has an OTP recorded but none provided -> OTP_REQUIRED
+       *   - provided OTP does not match the recorded one -> INVALID_OTP
+       */
+      if (!providedOtp && !order.otp_code) {
+        return stubResponse(platform, "COMPLETE_ORDER", {
+          externalOrderId: order.external_order_id,
+          otpVerified: false,
+          environment: config ? config.environment : null,
+        });
+      }
+
       if (!providedOtp) {
         return stubFailure(platform, "COMPLETE_ORDER", "OTP_REQUIRED", "The platform requires the handover OTP to complete this order");
       }

@@ -17,6 +17,8 @@ import crypto from "crypto";
 
 const SECRET_FIELDS = ["client_secret", "api_key", "webhook_secret"];
 const PLAIN_FIELDS = ["environment", "client_id", "store_location_id", "store_id", "brand_id", "order_acceptance", "notes"];
+// Boolean settings stored as-is (default false).
+const BOOLEAN_FIELDS = ["require_otp_on_completion"];
 
 function encryptionKey() {
   const secret =
@@ -71,6 +73,12 @@ export function buildStoredConfiguration(input = {}, existingConfiguration = {})
     }
   }
 
+  for (const field of BOOLEAN_FIELDS) {
+    if (input[field] !== undefined) {
+      next[field] = input[field] === true || input[field] === "true";
+    }
+  }
+
   for (const field of SECRET_FIELDS) {
     if (input[field] === undefined) {
       continue; // keep existing secret
@@ -91,6 +99,7 @@ export function maskConfiguration(configuration = {}) {
     store_id: configuration.store_id || null,
     brand_id: configuration.brand_id || null,
     order_acceptance: configuration.order_acceptance === "auto" ? "auto" : "manual",
+    require_otp_on_completion: configuration.require_otp_on_completion === true,
     notes: configuration.notes || null,
   };
 
@@ -124,6 +133,7 @@ export async function loadPlatformConfig(db, companyId, platform) {
     store_id: null,
     brand_id: null,
     order_acceptance: "manual",
+    require_otp_on_completion: false,
     api_key: null,
     webhook_secret: null,
     notes: null,
@@ -155,6 +165,8 @@ export async function loadPlatformConfig(db, companyId, platform) {
   runtime.brand_id = configuration.brand_id || null;
   // "manual" | "auto" - used by the online-order receive flow to auto-accept.
   runtime.order_acceptance = configuration.order_acceptance === "auto" ? "auto" : "manual";
+  // "Require customer OTP on completion" - default NO when unset.
+  runtime.require_otp_on_completion = configuration.require_otp_on_completion === true;
   runtime.notes = configuration.notes || null;
   runtime.client_secret = decryptSecret(configuration.client_secret);
   runtime.api_key = decryptSecret(configuration.api_key);
