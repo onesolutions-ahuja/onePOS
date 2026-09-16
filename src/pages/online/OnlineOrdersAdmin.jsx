@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useState } from "react";
-import { RefreshCw, X } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { Loader2, RefreshCw, X } from "lucide-react";
 import { apiRequest } from "../../services/api.js";
 import { fmt } from "../../utils/formatters.js";
 
@@ -18,7 +18,39 @@ const STATUS_BADGES = {
   CANCELLED: "bg-red-50 text-red-700",
 };
 
-const ACTIVE_STATUSES = ["RECEIVED", "ACCEPTED", "PREPARING", "READY"];
+const TERMINAL_STATUSES = ["COMPLETED", "REJECTED", "CANCELLED"];
+
+/*
+ * Every lifecycle action the table offers. `label` is the button text at rest,
+ * `busy` is the text shown the instant the button is clicked, so a click is
+ * always visibly acknowledged while the platform call is in flight.
+ */
+const ORDER_ACTIONS = {
+  accept: { label: "Accept", busy: "Accepting...", className: "bg-indigo-600 text-white hover:bg-indigo-700" },
+  reject: { label: "Reject", busy: "Rejecting...", className: "bg-red-50 text-red-600 hover:bg-red-100" },
+  preparing: { label: "Preparing", busy: "Preparing...", className: "bg-amber-500 text-white hover:bg-amber-600" },
+  ready: { label: "Ready", busy: "Marking ready...", className: "bg-emerald-600 text-white hover:bg-emerald-700" },
+  complete: { label: "Complete", busy: "Completing...", className: "bg-blue-600 text-white hover:bg-blue-700" },
+  cancel: { label: "Cancel", busy: "Cancelling...", className: "bg-slate-100 text-slate-600 hover:bg-slate-200" },
+};
+
+/*
+ * Which actions each status offers - exactly the transitions the backend
+ * accepts:
+ *   RECEIVED  -> ACCEPTED (accept) / REJECTED (reject)
+ *   ACCEPTED  -> PREPARING (preparing)
+ *   PREPARING -> READY (ready) / COMPLETED (complete)
+ *   READY     -> COMPLETED (complete)
+ *   any active status -> CANCELLED (cancel)
+ * PREPARING is a status: it never offers a "Preparing" action of its own.
+ * Terminal orders (COMPLETED / REJECTED / CANCELLED) offer nothing.
+ */
+const STATUS_ACTIONS = {
+  RECEIVED: ["accept", "reject", "cancel"],
+  ACCEPTED: ["preparing", "cancel"],
+  PREPARING: ["ready", "complete", "cancel"],
+  READY: ["complete", "cancel"],
+};
 
 export default function OnlineOrdersAdmin() {
   const [orders, setOrders] = useState([]);
@@ -27,7 +59,12 @@ export default function OnlineOrdersAdmin() {
   const [message, setMessage] = useState("");
   const [loading, setLoading] = useState(true);
   const [detail, setDetail] = useState(null);
-  const [busyOrderId, setBusyOrderId] = useState(null);
+  /*
+   * The action currently in flight, as { orderId, action }. It lets the exact
+   * button that was clicked show its own "Processing..." label, and holds back
+   * only that order's own row - the rest of the page stays usable.
+   */
+  const [busyAction, setBusyAction] = useState(null);
 
   // Completion OTP modal
   const [completeTarget, setCompleteTarget] = useState(null);
@@ -47,6 +84,9 @@ export default function OnlineOrdersAdmin() {
   // Platform config: which platforms require a customer OTP on completion.
   const [otpRequired, setOtpRequired] = useState({});
 
+  // Guards the mount-time double fetch (see the statusFilter effect below).
+  const initialLoadDone = useRef(false);
+
   const loadOrders = useCallback(async () => {
     const suffix = statusFilter ? `?status=${encodeURIComponent(statusFilter)}` : "";
     const data = await apiRequest(`/api/online/orders${suffix}`);
@@ -61,7 +101,7 @@ export default function OnlineOrdersAdmin() {
       const platformsData = await apiRequest("/api/settings/online-platforms");
       if (platformsData.success) {
         const required = {};
-        for (const p of platformsData.data || []) required[p.platform] = !!p.requireOtpOnCompletion;
+        for (const p of platformsData.data || []) required[p.platform] = p.require_otp_on_completion === true;
         setOtpRequired(required);
       }
     } catch (err) {
@@ -76,76 +116,132 @@ export default function OnlineOrdersAdmin() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  /*
+   * Re-loads the table when the status filter changes. The very first run is
+   * skipped because loadAll() above already fetched the unfiltered list - this
+   * removes the duplicate GET /api/online/orders that fired on mount.
+   */
   useEffect(() => {
+    if (!initialLoadDone.current) {
+      initialLoadDone.current = true;
+      return;
+    }
+
     loadOrders().catch((err) => setError(err.message || "Unable to load orders"));
   }, [statusFilter, loadOrders]);
 
+  /*
+   * Applies the order returned by an action response to the already-loaded
+   * table, so the new status appears without re-fetching the whole list. The
+   * list-only columns (item_count / unmapped_count) are kept from the row we
+   * already have; a row that no longer matches the active status filter is
+   * dropped, exactly as a full reload would do.
+   */
+  const applyOrderUpdate = useCallback((updatedOrder) => {
+    if (!updatedOrder) return;
+
+    setOrders((current) => {
+      const index = current.findIndex((row) => row.id === updatedOrder.id);
+      if (index === -1) return current; // not in the current view (filtered out)
+
+      if (statusFilter && updatedOrder.status !== statusFilter) {
+        return current.filter((row) => row.id !== updatedOrder.id);
+      }
+
+      const next = current.slice();
+      next[index] = { ...current[index], ...updatedOrder };
+      return next;
+    });
+
+    // Keep an open detail panel in step with its row.
+    setDetail((current) =>
+      current && current.order && current.order.id === updatedOrder.id
+        ? { ...current, order: { ...current.order, ...updatedOrder } }
+        : current
+    );
+  }, [statusFilter]);
+
+  /*
+   * Runs one lifecycle action.
+   *
+   * busyAction is set before the request is awaited, so the clicked button
+   * switches to its "Processing..." label on the very next paint. On success
+   * the affected row is patched from the response (no extra list GET). On
+   * failure the row is deliberately left untouched: the platform did not
+   * confirm, so the onePOS status must not advance.
+   */
   const orderAction = async (order, action, body) => {
-    if (busyOrderId) return; // prevent duplicate accept/reject requests
-    setBusyOrderId(order.id);
+    if (busyAction && busyAction.orderId === order.id) return; // one action per order
+
+    setBusyAction({ orderId: order.id, action });
+    setError("");
+
     try {
-      setError("");
       const data = await apiRequest(`/api/online/orders/${order.id}/${action}`, {
         method: "POST",
-        body: body ? JSON.stringify(body) : undefined,
+        body: body ? JSON.stringify(body) : JSON.stringify({}),
       });
-      if (!data.success) throw new Error(data.message || "Action failed");
+
+      if (!data.success) {
+        throw Object.assign(new Error(data.message || "Action failed"), { code: data.code });
+      }
+
+      applyOrderUpdate(data.data && data.data.order);
       setMessage(`Order ${order.external_order_id}: ${data.message}`);
-      await loadOrders();
     } catch (err) {
-      setError(err.message || "Action failed");
+      if (err.code === "OTP_REQUIRED" && action === "complete") {
+        // The platform demands the handover code: ask for it instead of failing.
+        openComplete(order, "The platform requires the handover OTP to complete this order.");
+      } else {
+        setError(err.message || "Action failed");
+      }
     } finally {
-      setBusyOrderId(null);
+      setBusyAction((current) => (current && current.orderId === order.id ? null : current));
     }
   };
 
-  const openComplete = (order) => {
-    // OTP modal only opens when this platform requires a customer OTP on
-    // completion (Settings → Online Platforms). Otherwise complete directly.
-    if (otpRequired[order.platform]) {
+  /*
+   * Complete is the ONLY action that may ask for a handover OTP, and only when
+   * the platform setting "Require customer OTP on completion" is on (Settings
+   * -> Online Platforms) or when the platform itself rejects a direct attempt
+   * with OTP_REQUIRED (passed in as `notice`). Every other action never asks.
+   */
+  const openComplete = (order, notice = "") => {
+    if (otpRequired[order.platform] || notice) {
       setCompleteTarget(order);
       setOtpInput("");
-      setOtpError("");
+      setOtpError(notice);
     } else {
-      completeDirect(order);
+      orderAction(order, "complete");
     }
   };
 
-  const completeDirect = async (order) => {
-    if (busyOrderId) return;
-    setBusyOrderId(order.id);
-    try {
-      const data = await apiRequest(`/api/online/orders/${order.id}/complete`, {
-        method: "POST",
-        body: JSON.stringify({}),
-      });
-      if (!data.success) throw new Error(data.message || "Unable to complete order");
-      setMessage(`Order ${order.external_order_id} completed`);
-      await loadOrders();
-    } catch (err) {
-      setError(err.message || "Unable to complete order");
-    } finally {
-      setBusyOrderId(null);
-    }
-  };
-
+  /*
+   * Completes an order with the handover OTP collected in the modal. The OTP is
+   * verified by the PLATFORM: only a confirmed response advances the order, and
+   * the row is patched from that response instead of re-fetching the list.
+   */
   const submitComplete = async (event) => {
     event.preventDefault();
     if (!completeTarget) return;
 
+    const order = completeTarget;
     setOtpBusy(true);
     setOtpError("");
+
     try {
-      const data = await apiRequest(`/api/online/orders/${completeTarget.id}/complete`, {
+      const data = await apiRequest(`/api/online/orders/${order.id}/complete`, {
         method: "POST",
         body: JSON.stringify({ otp: otpInput.trim() }),
       });
+
       if (!data.success) {
         throw Object.assign(new Error(data.message || "Unable to complete order"), { code: data.code });
       }
-      setMessage(`Order ${completeTarget.external_order_id} completed - OTP verified by the platform`);
+
+      applyOrderUpdate(data.data && data.data.order);
+      setMessage(`Order ${order.external_order_id} completed - OTP verified by the platform`);
       setCompleteTarget(null);
-      await loadOrders();
     } catch (err) {
       setOtpError(
         err.code === "INVALID_OTP"
@@ -155,6 +251,74 @@ export default function OnlineOrdersAdmin() {
     } finally {
       setOtpBusy(false);
     }
+  };
+
+  /*
+   * Click handler for the action buttons. Cancel and Reject keep their existing
+   * confirmation / fixed reason, Complete routes through the OTP decision, and
+   * everything else posts straight away.
+   */
+  const runAction = (order, action) => {
+    if (action === "cancel") {
+      if (!window.confirm("Cancel this order and release reserved stock?")) return;
+      orderAction(order, "cancel", { reason: "Cancelled by store" });
+      return;
+    }
+
+    if (action === "reject") {
+      orderAction(order, "reject", { reason: "Rejected by store" });
+      return;
+    }
+
+    if (action === "complete") {
+      openComplete(order);
+      return;
+    }
+
+    orderAction(order, action);
+  };
+
+  /*
+   * Renders the actions an order's current status allows. While one action of
+   * this order is running, that row's own buttons are held back (the clicked
+   * one shows a spinner and its "Processing..." label); every other row, the
+   * status filter, Refresh and the detail view stay fully usable.
+   */
+  const renderOrderActions = (order) => {
+    const actions = STATUS_ACTIONS[order.status] || [];
+
+    if (!actions.length) {
+      return (
+        <span className="text-xs text-slate-300">
+          {TERMINAL_STATUSES.includes(order.status) ? "No actions" : "-"}
+        </span>
+      );
+    }
+
+    const busyForOrder = busyAction && busyAction.orderId === order.id ? busyAction.action : null;
+
+    return (
+      <span className="inline-flex items-center gap-1">
+        {actions.map((action) => {
+          const meta = ORDER_ACTIONS[action];
+          const isBusy = busyForOrder === action;
+
+          return (
+            <button
+              key={action}
+              type="button"
+              onClick={() => runAction(order, action)}
+              disabled={Boolean(busyForOrder)}
+              aria-busy={isBusy}
+              className={`px-3 py-1.5 rounded text-xs inline-flex items-center gap-1.5 ${meta.className} disabled:opacity-60 disabled:cursor-not-allowed`}
+            >
+              {isBusy && <Loader2 size={13} className="animate-spin" />}
+              {isBusy ? meta.busy : meta.label}
+            </button>
+          );
+        })}
+      </span>
+    );
   };
 
   const openDetail = async (order) => {
@@ -303,24 +467,7 @@ export default function OnlineOrdersAdmin() {
                     <span className={`px-2 py-1 rounded-full text-xs font-medium ${STATUS_BADGES[order.status] || "bg-slate-100 text-slate-500"}`}>{order.status}</span>
                   </td>
                   <td className="px-5 py-3 text-right whitespace-nowrap">
-                    {order.status === "RECEIVED" && (
-                      <>
-                        <button onClick={() => orderAction(order, "accept")} className="mr-1 px-3 py-1.5 bg-indigo-600 text-white rounded text-xs hover:bg-indigo-700">Accept</button>
-                        <button onClick={() => orderAction(order, "reject", { reason: "Rejected by store" })} className="px-3 py-1.5 bg-red-50 text-red-600 rounded text-xs hover:bg-red-100">Reject</button>
-                      </>
-                    )}
-                    {order.status === "ACCEPTED" && (
-                      <button onClick={() => orderAction(order, "preparing")} className="px-3 py-1.5 bg-amber-500 text-white rounded text-xs hover:bg-amber-600">Preparing</button>
-                    )}
-                    {order.status === "PREPARING" && (
-                      <button onClick={() => orderAction(order, "ready")} className="px-3 py-1.5 bg-emerald-600 text-white rounded text-xs hover:bg-emerald-700">Ready</button>
-                    )}
-                    {ACTIVE_STATUSES.includes(order.status) && (
-                      <button onClick={() => { if (window.confirm("Cancel this order and release reserved stock?")) orderAction(order, "cancel", { reason: "Cancelled by store" }); }} className="ml-1 px-3 py-1.5 bg-slate-100 text-slate-600 rounded text-xs hover:bg-slate-200">Cancel</button>
-                    )}
-                    {["READY", "PREPARING"].includes(order.status) && (
-                      <button onClick={() => openComplete(order)} className="ml-1 px-3 py-1.5 bg-blue-600 text-white rounded text-xs hover:bg-blue-700">Complete</button>
-                    )}
+                    {renderOrderActions(order)}
                   </td>
                 </tr>
               ))}

@@ -166,34 +166,64 @@ export default function createOnlineRouter({
    * itself (services/onlineOrders/uberClient.js), so they are not logged here
    * a second time. Logging never throws.
    */
-  async function logSimulatedPlatformCall({
-    companyId,
-    platform,
-    environment,
-    action,
-    response,
-    requestPayload,
-    orderId = null,
-    productId = null,
-  }) {
-    if (!response || response.simulated !== true) {
+  async function logSimulatedPlatformCall(entry) {
+    // Defer logging to avoid lock conflicts with the transaction.
+    // The entry is queued and executed after the transaction commits.
+    if (!entry.response || entry.response.simulated !== true) {
       return;
     }
-
-    await logPlatformApiCall(db, {
-      companyId,
-      platform,
-      environment: environment || null,
-      action,
-      endpoint: `stub://${platform}/${action}`,
-      httpMethod: "STUB",
-      requestPayload,
-      responseBody: response,
-      success: response.success === true,
-      errorMessage: response.success === true ? null : response.message || null,
-      orderId,
-      productId,
+    // Use setImmediate to run after the current tick, after commit.
+    setImmediate(() => {
+      logPlatformApiCall(db, {
+        companyId: entry.companyId,
+        platform: entry.platform,
+        environment: entry.environment || null,
+        action: entry.action,
+        endpoint: `stub://${entry.platform}/${entry.action}`,
+        httpMethod: "STUB",
+        requestPayload: entry.requestPayload,
+        responseBody: entry.response,
+        success: entry.response.success === true,
+        errorMessage: entry.response.success === true ? null : entry.response.message || null,
+        orderId: entry.orderId,
+        productId: entry.productId,
+      }).catch((err) => console.error("Deferred platform_api_logs write failed:", err.message));
     });
+  }
+
+  /*
+   * Flushes queued platform_api_logs entries.
+   *
+   * It must only ever be called AFTER the order transaction has committed or
+   * rolled back. platform_api_logs.order_id references online_orders(id), so
+   * the audit insert needs a FOR KEY SHARE lock on the order row: while the
+   * action transaction still holds that row FOR UPDATE the insert blocks until
+   * the pool's lock_timeout (15s) and is then cancelled. Deferring the write
+   * until the row lock is released keeps the audit row and costs no latency.
+   *
+   * Non-blocking and best-effort: logging never delays or fails an order action.
+   */
+  function flushPlatformAuditLogs(entries) {
+    for (const entry of entries || []) {
+      if (!entry.response || entry.response.simulated !== true) {
+        continue;
+      }
+
+      logPlatformApiCall(db, {
+        companyId: entry.companyId,
+        platform: entry.platform,
+        environment: entry.environment || null,
+        action: entry.action,
+        endpoint: `stub://${entry.platform}/${entry.action}`,
+        httpMethod: "STUB",
+        requestPayload: entry.requestPayload,
+        responseBody: entry.response,
+        success: entry.response.success === true,
+        errorMessage: entry.response.success === true ? null : entry.response.message || null,
+        orderId: entry.orderId,
+        productId: entry.productId,
+      }).catch((err) => console.error("Deferred platform_api_logs write failed:", err.message));
+    }
   }
 
   /*
@@ -1296,15 +1326,15 @@ export default function createOnlineRouter({
 
     const client = await pool.connect();
     let transactionStarted = false;
+    const tStart = Date.now();
+    const deferredLogs = [];
 
     try {
       await client.query("BEGIN");
       transactionStarted = true;
+      console.time(`[${req.params.id}] ${toStatus} - total`);
 
-      // Row lock for the whole action: two concurrent requests (e.g. a
-      // double-clicked Cancel) serialize here, so stock is released once.
-      // NOWAIT makes the second request fail immediately (caught below as
-      // ORDER_BUSY) instead of blocking for the whole platform HTTP call.
+      console.time(`[${req.params.id}] ${toStatus} - lock`);
       let locked;
 
       try {
@@ -1314,7 +1344,6 @@ export default function createOnlineRouter({
         );
       } catch (lockError) {
         if (lockError.code === "55P03") {
-          // Another action on this order is already in flight.
           await client.query("ROLLBACK");
           transactionStarted = false;
           return res.status(409).json({
@@ -1325,6 +1354,7 @@ export default function createOnlineRouter({
         }
         throw lockError;
       }
+      console.timeEnd(`[${req.params.id}] ${toStatus} - lock`);
 
       if (!locked.rows.length) {
         await client.query("ROLLBACK");
@@ -1344,7 +1374,6 @@ export default function createOnlineRouter({
         });
       }
 
-      // Belt-and-braces: reserved stock can only ever be released once.
       if (releaseInventory && order.inventory_released === true) {
         await client.query("ROLLBACK");
         transactionStarted = false;
@@ -1355,15 +1384,17 @@ export default function createOnlineRouter({
         });
       }
 
+      console.time(`[${req.params.id}] ${toStatus} - loadPlatformConfig`);
       const runtime = await loadPlatformConfig(db, req.user.companyId, order.platform);
+      console.timeEnd(`[${req.params.id}] ${toStatus} - loadPlatformConfig`);
       const service = getPlatformService(order.platform);
 
-      // Platform call first: the platform confirms or rejects the action.
-      // The stub simulates this today; the real API slots in unchanged.
+      console.time(`[${req.params.id}] ${toStatus} - callPlatform`);
       const platformResponse = await callPlatform(service, order, runtime);
+      console.timeEnd(`[${req.params.id}] ${toStatus} - callPlatform`);
 
-      // Action-level audit entry for simulated (stub) platform responses.
-      await logSimulatedPlatformCall({
+      // Queue logging for after commit to avoid lock conflicts
+      deferredLogs.push({
         companyId: req.user.companyId,
         platform: order.platform,
         environment: runtime.environment,
@@ -1383,15 +1414,12 @@ export default function createOnlineRouter({
         await client.query("ROLLBACK");
         transactionStarted = false;
 
+        // The platform rejected the action - the audit row is still written,
+        // but only now that the transaction (and its row lock) is gone.
+        flushPlatformAuditLogs(deferredLogs);
+
         const failureCode = (platformResponse && platformResponse.code) || "PLATFORM_CALL_FAILED";
 
-        /*
-         * recordEvent expects an object with .query (a Pool or Client).
-         * `db` here is an async function, NOT a client - passing it crashed
-         * with "client.query is not a function" and masked the real platform
-         * rejection. The pool itself is the correct non-transaction executor
-         * here (the transaction is being rolled back anyway).
-         */
         await recordEvent(pool, {
           orderId: order.id,
           eventType: "PLATFORM_CALL_FAILED",
@@ -1416,9 +1444,12 @@ export default function createOnlineRouter({
         });
       }
 
+      console.time(`[${req.params.id}] ${toStatus} - loadOrderItems`);
       const items = await loadOrderItems(order.id);
+      console.timeEnd(`[${req.params.id}] ${toStatus} - loadOrderItems`);
 
       if (releaseInventory) {
+        console.time(`[${req.params.id}] ${toStatus} - releaseOrderInventory`);
         await releaseOrderInventory(client, {
           companyId: req.user.companyId,
           storeId: order.store_id || req.user.storeId || null,
@@ -1426,18 +1457,17 @@ export default function createOnlineRouter({
           items,
           userId: req.user.id,
         });
+        console.timeEnd(`[${req.params.id}] ${toStatus} - releaseOrderInventory`);
       }
 
       let query = "UPDATE online_orders SET status = $2, updated_at = NOW()";
       const params = [order.id, toStatus];
 
       if (releaseInventory) {
-        // Reservation becomes a permanent release of the hold.
         query += ", inventory_reserved = FALSE, inventory_released = TRUE";
       }
 
       if (timestampColumn === "completed_at") {
-        // Only reached because the platform confirmed the handover OTP.
         query += ", completed_at = NOW(), completed_by = $3, otp_verified_at = NOW()";
         params.push(req.user.id);
       } else if (timestampColumn) {
@@ -1453,16 +1483,18 @@ export default function createOnlineRouter({
       query += ` WHERE id = $1 AND company_id = $${params.length}`;
 
       if (releaseInventory) {
-        // SQL-level guarantee against a double release.
         query += " AND inventory_released = FALSE";
       }
 
+      console.time(`[${req.params.id}] ${toStatus} - updateOrder`);
       const updateResult = await client.query(query, params);
+      console.timeEnd(`[${req.params.id}] ${toStatus} - updateOrder`);
 
       if (!updateResult.rowCount) {
         throw new Error("Order state changed concurrently - no rows updated");
       }
 
+      console.time(`[${req.params.id}] ${toStatus} - recordEvent`);
       await recordEvent(client, {
         orderId: order.id,
         eventType: `ORDER_${toStatus}`,
@@ -1476,6 +1508,7 @@ export default function createOnlineRouter({
         platformResponse,
         actorUserId: req.user.id,
       });
+      console.timeEnd(`[${req.params.id}] ${toStatus} - recordEvent`);
 
       if (writeAudit) {
         await writeAudit(
@@ -1488,9 +1521,21 @@ export default function createOnlineRouter({
         );
       }
 
+      console.time(`[${req.params.id}] ${toStatus} - commit`);
       await client.query("COMMIT");
+      console.timeEnd(`[${req.params.id}] ${toStatus} - commit`);
 
+      /*
+       * Deferred platform_api_logs write, now that the transaction has
+       * committed and the order row lock is released (non-blocking).
+       */
+      flushPlatformAuditLogs(deferredLogs);
+
+      console.time(`[${req.params.id}] ${toStatus} - loadOrder`);
       const updatedOrder = await loadOrder(order.id, req.user.companyId);
+      console.timeEnd(`[${req.params.id}] ${toStatus} - loadOrder`);
+
+      console.timeEnd(`[${req.params.id}] ${toStatus} - total`);
 
       return res.json({
         success: true,
@@ -1501,6 +1546,9 @@ export default function createOnlineRouter({
       if (transactionStarted) {
         await client.query("ROLLBACK");
       }
+
+      // Transaction is gone: flush any queued audit rows before answering.
+      flushPlatformAuditLogs(deferredLogs);
 
       console.error(`Online order ${toStatus} error:`, error);
       return res.status(500).json({ success: false, message: error.message || "Unable to update online order" });
@@ -1546,7 +1594,7 @@ export default function createOnlineRouter({
 
   router.post("/online/orders/:id/ready", authenticate, authorize("online_orders.manage"), async (req, res) => {
     await performOrderAction(req, res, {
-      fromStatuses: ["PREPARING"],
+      fromStatuses: ["ACCEPTED", "PREPARING"],
       toStatus: "READY",
       platformAction: "markReady",
       timestampColumn: "ready_at",
@@ -1574,6 +1622,11 @@ export default function createOnlineRouter({
    * platform response marks the local order COMPLETED (otp_verified_at set).
    * An incorrect OTP returns code INVALID_OTP and the order stays open for
    * retry. Inventory was deducted on reservation, so it stays consumed.
+   *
+   * A shop may hand an order over straight from PREPARING (e.g. collection
+   * orders that never needed a "ready" notification), which is why both
+   * PREPARING and READY may complete - the transition set is unchanged from
+   * the committed behaviour.
    */
   router.post("/online/orders/:id/complete", authenticate, authorize("online_orders.manage"), async (req, res) => {
     await performOrderAction(req, res, {
