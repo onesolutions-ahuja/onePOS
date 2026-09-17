@@ -1,4 +1,3 @@
-import { useEffect, useState } from "react";
 import { LogOut, ShoppingBag } from "lucide-react";
 
 function POSHeader({
@@ -11,24 +10,12 @@ function POSHeader({
   onlineOrderCount = 0,
   offlineCount = 0,
   failedCount = 0,
+  syncing = false,
+  syncError = false,
+  online = true,
+  onQueue,
 }) {
-  /* Compact connection/queue indicator state (T8C-F). */
-  const [isOnline, setIsOnline] = useState(
-    typeof navigator === "undefined" ? true : navigator.onLine
-  );
-
-  useEffect(() => {
-    const goOnline = () => setIsOnline(true);
-    const goOffline = () => setIsOnline(false);
-    window.addEventListener("online", goOnline);
-    window.addEventListener("offline", goOffline);
-    return () => {
-      window.removeEventListener("online", goOnline);
-      window.removeEventListener("offline", goOffline);
-    };
-  }, []);
-
-  const queuePending = offlineCount > 0;
+  const status = syncing ? "SYNCING" : !online ? "OFFLINE" : failedCount || syncError ? "SYNC ERROR" : "ONLINE";
 
   return (
     <header className="h-[58px] text-white flex items-center justify-between px-4 shrink-0" style={{ background: "linear-gradient(90deg, #104744 0%, #176F6A 100%)" }}>
@@ -62,34 +49,10 @@ function POSHeader({
       </div>
 
       <div className="flex items-center gap-3">
-        {isOnline && !queuePending && failedCount === 0 ? (
-          <div className="flex items-center gap-2 text-xs text-emerald-400">
-            <span className="w-2 h-2 bg-emerald-400 rounded-full" />
-            Online
-          </div>
-        ) : !isOnline ? (
-          <div className="flex items-center gap-2 text-xs text-amber-400" title="Offline — sales are saved and will sync automatically">
-            <span className="w-2 h-2 bg-amber-400 rounded-full" />
-            Offline
-          </div>
-        ) : queuePending ? (
-          <div
-            className="flex items-center gap-2 text-xs text-amber-400"
-            title={`${offlineCount} sale(s) saved offline, syncing automatically`}
-          >
-            <span className="w-2 h-2 bg-amber-400 rounded-full" />
-            {offlineCount === 1 ? "1 offline sale" : `${offlineCount} offline sales`}
-            {failedCount > 0 && <span className="text-red-400">· {failedCount} failed</span>}
-          </div>
-        ) : (
-          <div
-            className="flex items-center gap-2 text-xs text-red-400"
-            title="Offline sale(s) were rejected by the server - they are kept for review"
-          >
-            <span className="w-2 h-2 bg-red-400 rounded-full" />
-            {failedCount === 1 ? "1 failed sale" : `${failedCount} failed sales`}
-          </div>
-        )}
+        <button onClick={onQueue} className={`text-xs text-left rounded px-2 py-1 ${status === "SYNC ERROR" ? "text-red-200" : status === "ONLINE" ? "text-emerald-200" : "text-amber-200"}`} title="View saved sales and retry synchronization" aria-live="polite">
+          <span className="block font-semibold">{status}{syncing ? "…" : ""}</span>
+          <span>{offlineCount} pending{failedCount ? ` · ${failedCount} need attention` : ""}</span>
+        </button>
 
         <button
           onClick={onManageTill}

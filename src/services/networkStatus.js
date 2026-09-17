@@ -17,8 +17,19 @@
 |      permissions) are not.
 */
 
+let backendOnline = true;
+const listeners = new Set();
+
+export function reportConnection(online) {
+  const changed = backendOnline !== online;
+  backendOnline = online;
+  if (changed) for (const listener of listeners) {
+    try { listener(isOnline()); } catch { /* isolate subscribers */ }
+  }
+}
+
 export function isOnline() {
-  return navigator.onLine;
+  return (typeof navigator === "undefined" || navigator.onLine !== false) && backendOnline;
 }
 
 /*
@@ -26,13 +37,15 @@ export function isOnline() {
  * Returns an unsubscribe function (safe to return from a useEffect cleanup).
  */
 export function onNetworkChange(handler) {
-  const goOnline = () => handler(true);
+  listeners.add(handler);
+  const goOnline = () => { backendOnline = true; handler(true); };
   const goOffline = () => handler(false);
 
   window.addEventListener("online", goOnline);
   window.addEventListener("offline", goOffline);
 
   return () => {
+    listeners.delete(handler);
     window.removeEventListener("online", goOnline);
     window.removeEventListener("offline", goOffline);
   };
@@ -47,7 +60,8 @@ export function onNetworkChange(handler) {
  */
 export function isNetworkError(error) {
   if (!error || typeof error !== "object") return false;
-  if (error.name === "TypeError") return true;
+  if (error.status !== undefined) return false;
+  if (["TypeError", "AbortError", "TimeoutError"].includes(error.name)) return true;
   return (
     error.status === undefined &&
     error.code === undefined &&

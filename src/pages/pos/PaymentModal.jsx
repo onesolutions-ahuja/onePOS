@@ -6,6 +6,7 @@ function PaymentModal({
   onClose,
   onComplete,
   onCard,
+  offline = false,
 }) {
   const [cashReceived, setCashReceived] = useState("");
   const [processing, setProcessing] = useState(false);
@@ -19,6 +20,7 @@ function PaymentModal({
   };
 
   const payCard = async () => {
+    if (offline || processing) return;
     setProcessing(true);
     await onCard("card");
     setProcessing(false);
@@ -47,6 +49,12 @@ function PaymentModal({
         </div>
 
         <div className="p-6">
+          {offline && (
+            <p role="status" className="mb-4 rounded bg-amber-50 p-3 text-sm text-amber-800">
+              Offline — cash only. Cash sales are saved locally as Pending sync.
+              Stock is adjusted after backend synchronization. Card payment is unavailable offline.
+            </p>
+          )}
           <div className="text-center mb-6">
             <div className="text-sm text-slate-500">
               Total
@@ -88,7 +96,7 @@ function PaymentModal({
 
             <button
               onClick={payCard}
-              disabled={processing}
+              disabled={processing || offline}
               className="h-24 border-2 border-slate-200 rounded-xl hover:border-blue-500 hover:bg-blue-50"
             >
               <CreditCard

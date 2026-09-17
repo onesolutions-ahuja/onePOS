@@ -525,7 +525,7 @@ function WhatsAppSettings({ onMessage, onError }) {
             </p>
           )}
           <p className="text-xs text-slate-500 mt-2">
-            Requires WhatsApp to be ON. The message goes only to the number above.
+            WhatsApp must be ON to test. Automatic sending is not required for a manual test — the message goes only to the number above.
           </p>
         </div>
       </div>

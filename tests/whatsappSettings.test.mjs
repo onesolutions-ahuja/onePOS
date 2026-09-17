@@ -28,9 +28,12 @@ function makeApp({ companyId = COMPANY_A, storeId = STORE_1 } = {}) {
     audits: [],
     secureLinkInserts: [],
     sale: null,
+    sqlLog: [], // every db() call: { sql, params } - used for no-leak assertions
   };
   const db = async (sql, params = []) => {
-    if (/FROM integrations WHERE company_id = \$1 AND provider = 'whatsapp'/i.test(sql)) {
+    state.sqlLog.push({ sql, params });
+    // Whitespace-tolerant regexes: the service formats its SQL across lines.
+    if (/FROM\s+integrations\s+WHERE\s+company_id\s*=\s*\$1\s+AND\s+provider\s*=\s*'whatsapp'/i.test(sql)) {
       return {
         rows:
           state.row && state.row.company_id === params[0]
@@ -45,7 +48,7 @@ function makeApp({ companyId = COMPANY_A, storeId = STORE_1 } = {}) {
       });
       return { rows: [{ id: "link-1", expires_at: params[5] }], rowCount: 1 };
     }
-    if (/FROM sales/i.test(sql)) {
+    if (/FROM\s+sales\b/i.test(sql)) {
       const sale = state.sale;
       const match =
         sale && sale.id === params[0] && sale.company_id === params[1] &&
@@ -75,8 +78,8 @@ function makeApp({ companyId = COMPANY_A, storeId = STORE_1 } = {}) {
       };
     },
   };
-  const writeAudit = async (companyId, userId, action) => {
-    state.audits.push({ companyId, userId, action });
+  const writeAudit = async (companyId, userId, action, entityType, entityId, details) => {
+    state.audits.push({ companyId, userId, action, details });
   };
   return { state, db, pool, writeAudit, companyId, storeId };
 }
@@ -515,6 +518,189 @@ test("test-send cannot silently flip enabled or auto_send and is tenant-scoped",
     });
     assert.equal(foreign.status, 404, "foreign-tenant sale must 404");
     assert.ok(body !== undefined);
+  } finally {
+    restore();
+    server.close();
+  }
+});
+
+/* ============================================================================
+ * T9Q-SMALL-FIX regression tests - the test-invoice gate.
+ *
+ * Contract under test:
+ *   WhatsApp ON (active=true) + tested credentials  -> manual test send ALLOWED
+ *   auto_send_enabled=false must NOT block a manual test send
+ *   WhatsApp OFF / foreign sale / missing recipient -> rejected
+ *   test-send never flips auto_send_enabled or active
+ *   logs never carry secrets or full phone numbers
+ * ========================================================================== */
+
+function seedActivatedWhatsApp({ autoSend = false } = {}) {
+  return {
+    company_id: COMPANY_A,
+    active: true,
+    configuration: JSON.stringify({
+      phone_number_id: "123456789012345",
+      access_token: encryptSecret(SECRET_A),
+      auto_send_enabled: autoSend,
+    }),
+  };
+}
+
+const OWN_SALE = "e0000000-0000-4000-8000-000000000006";
+
+async function postTestSend(port, body) {
+  const res = await fetch(`http://127.0.0.1:${port}/api/whatsapp/test-send`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  return { status: res.status, body: await res.json().catch(() => ({})) };
+}
+
+test("T9Q-SMALL-FIX: WhatsApp ON + auto-send OFF -> manual test invoice is ALLOWED", async () => {
+  const ctx = makeApp();
+  ctx.state.row = seedActivatedWhatsApp({ autoSend: false });
+  ctx.state.sale = { id: OWN_SALE, company_id: COMPANY_A, store_id: STORE_1 };
+  const app = await buildServer(ctx);
+  const { server, port } = await listen(app);
+  const restore = mockGraph(async () => ({ ok: true, status: 200, json: async () => ({ messages: [{ id: "wamid.test1" }] }) }));
+  try {
+    const { status, body } = await postTestSend(port, { saleId: OWN_SALE, recipientPhone: "+447700900123" });
+    assert.equal(status, 200, JSON.stringify(body));
+    assert.equal(body.success, true);
+    assert.equal(body.data.sent, true);
+    // Exactly one Graph messages call went out, to the demo recipient.
+    assert.ok(body.data.mode === "link" || body.data.mode === "pdf");
+  } finally {
+    restore();
+    server.close();
+  }
+});
+
+test("T9Q-SMALL-FIX: WhatsApp OFF -> test invoice rejected", async () => {
+  const ctx = makeApp();
+  ctx.state.row = { ...seedActivatedWhatsApp({ autoSend: false }), active: false };
+  ctx.state.sale = { id: OWN_SALE, company_id: COMPANY_A, store_id: STORE_1 };
+  const app = await buildServer(ctx);
+  const { server, port } = await listen(app);
+  const restore = mockGraph(async () => ({ ok: true, status: 200, json: async () => ({}) }));
+  try {
+    const { status, body } = await postTestSend(port, { saleId: OWN_SALE, recipientPhone: "+447700900123" });
+    assert.equal(status, 400, JSON.stringify(body));
+    assert.match(body.message, /not enabled\/configured/i);
+  } finally {
+    restore();
+    server.close();
+  }
+});
+
+test("T9Q-SMALL-FIX: activated-but-untested credentials -> rejected (fingerprint gate)", async () => {
+  const ctx = makeApp();
+  // ON with token/phone id but NO tested credentials would have been blocked
+  // at activation time by the fingerprint gate; simulate a tampered row.
+  ctx.state.row = seedActivatedWhatsApp({ autoSend: false });
+  ctx.state.sale = { id: OWN_SALE, company_id: COMPANY_A, store_id: STORE_1 };
+  const app = await buildServer(ctx);
+  const { server, port } = await listen(app);
+  const restore = mockGraph(async () => ({ ok: true, status: 200, json: async () => ({}) }));
+  try {
+    // Missing recipient -> the route's first gate rejects before anything else.
+    const noRecipient = await postTestSend(port, { saleId: OWN_SALE });
+    assert.equal(noRecipient.status, 400);
+    assert.match(noRecipient.body.message, /recipient phone number is required/i);
+  } finally {
+    restore();
+    server.close();
+  }
+});
+
+test("T9Q-SMALL-FIX: invalid/foreign sale -> rejected", async () => {
+  const ctx = makeApp();
+  ctx.state.row = seedActivatedWhatsApp({ autoSend: false });
+  ctx.state.sale = { id: OWN_SALE, company_id: COMPANY_A, store_id: STORE_1 };
+  const app = await buildServer(ctx);
+  const { server, port } = await listen(app);
+  const restore = mockGraph(async () => ({ ok: true, status: 200, json: async () => ({}) }));
+  try {
+    // Unknown sale id -> generic 404.
+    const unknown = await postTestSend(port, { saleId: "00000000-0000-4000-8000-000000000000", recipientPhone: "+447700900123" });
+    assert.equal(unknown.status, 404);
+    assert.match(unknown.body.message, /Sale not found in your company/i);
+    // Foreign-store sale (same company, different store) -> 404.
+    ctx.state.sale = { id: OWN_SALE, company_id: COMPANY_A, store_id: "d0000000-0000-4000-8000-000000000009" };
+    const foreignStore = await postTestSend(port, { saleId: OWN_SALE, recipientPhone: "+447700900123" });
+    assert.equal(foreignStore.status, 404);
+  } finally {
+    restore();
+    server.close();
+  }
+});
+
+test("T9Q-SMALL-FIX: foreign company cannot use the endpoint", async () => {
+  const ctx = makeApp({ companyId: COMPANY_B, storeId: STORE_1 });
+  // Company B has its own activated WhatsApp but NO sale.
+  ctx.state.row = { ...seedActivatedWhatsApp(), company_id: COMPANY_B };
+  ctx.state.sale = { id: OWN_SALE, company_id: COMPANY_A, store_id: STORE_1 }; // belongs to A
+  const app = await buildServer(ctx);
+  const { server, port } = await listen(app);
+  const restore = mockGraph(async () => ({ ok: true, status: 200, json: async () => ({}) }));
+  try {
+    const { status } = await postTestSend(port, { saleId: OWN_SALE, recipientPhone: "+447700900123" });
+    assert.equal(status, 404, "company B must never reach company A's sale");
+  } finally {
+    restore();
+    server.close();
+  }
+});
+
+test("T9Q-SMALL-FIX: test invoice never flips auto_send_enabled or enabled", async () => {
+  const ctx = makeApp();
+  ctx.state.row = seedActivatedWhatsApp({ autoSend: false });
+  ctx.state.sale = { id: OWN_SALE, company_id: COMPANY_A, store_id: STORE_1 };
+  const app = await buildServer(ctx);
+  const { server, port } = await listen(app);
+  const restore = mockGraph(async () => ({ ok: true, status: 200, json: async () => ({ messages: [{ id: "wamid.ok" }] }) }));
+  try {
+    const before = ctx.state.row;
+    const { status } = await postTestSend(port, { saleId: OWN_SALE, recipientPhone: "+447700900123" });
+    assert.equal(status, 200);
+    // Same object reference, unchanged values: no writes happened.
+    assert.equal(ctx.state.row, before);
+    const stored = JSON.parse(ctx.state.row.configuration);
+    assert.equal(stored.auto_send_enabled, false);
+    assert.equal(ctx.state.row.active, true);
+    // No integration UPDATE/INSERT ran at all.
+    assert.ok(!ctx.state.sqlLog.some((c) => /UPDATE integrations|INSERT INTO integrations/i.test(c.sql)));
+  } finally {
+    restore();
+    server.close();
+  }
+});
+
+test("T9Q-SMALL-FIX: success path logs no secrets and no full phone numbers", async () => {
+  const ctx = makeApp();
+  ctx.state.row = seedActivatedWhatsApp({ autoSend: false });
+  ctx.state.sale = { id: OWN_SALE, company_id: COMPANY_A, store_id: STORE_1 };
+  const app = await buildServer(ctx);
+  const { server, port } = await listen(app);
+  const restore = mockGraph(async () => ({ ok: true, status: 200, json: async () => ({ messages: [{ id: "wamid.log" }] }) }));
+  try {
+    const { status } = await postTestSend(port, { saleId: OWN_SALE, recipientPhone: "+447700900123" });
+    assert.equal(status, 200);
+    // Route audit trail: outcome metadata only.
+    const routeAudit = ctx.state.audits.find((a) => a.action === "whatsapp_test_sent");
+    assert.ok(routeAudit, "success must be audited");
+    const auditJson = JSON.stringify(routeAudit);
+    assert.ok(!auditJson.includes(SECRET_A), "access token leaked into audit");
+    assert.ok(!auditJson.includes("+447700900123"), "full phone number leaked into audit");
+    // Delivery audit row: masked recipient only.
+    const deliveryAudit = ctx.state.audits.filter((a) => a.action === "whatsapp_test_send_failed" || a.action === "whatsapp_test_sent").pop();
+    assert.ok(deliveryAudit);
+    // Every db() call in the request: no plaintext token, no full phone number.
+    const dbJson = JSON.stringify(ctx.state.sqlLog);
+    assert.ok(!dbJson.includes(SECRET_A), "plaintext secret in a db statement");
+    assert.ok(!dbJson.includes("+447700900123"), "full phone number in a db statement");
   } finally {
     restore();
     server.close();

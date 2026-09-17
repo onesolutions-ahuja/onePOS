@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { Percent, ShoppingBag, X } from "lucide-react";
 import { apiRequest } from "../../services/api.js";
-import { isNetworkError, onNetworkChange } from "../../services/networkStatus.js";
+import { isNetworkError, onNetworkChange, isOnline, reportConnection } from "../../services/networkStatus.js";
+import QueueDetailsModal from "./QueueDetailsModal.jsx";
 import {
   getTenantFromToken,
   loadProductCache,
@@ -12,6 +13,7 @@ import {
   clearTillContext,
   saveTerminalIdentity,
   loadTerminalIdentity,
+  loadTillContext,
 } from "../../services/offlineStore.js";
 import {
   newClientRequestId,
@@ -19,6 +21,8 @@ import {
   syncOfflineQueue,
   getQueueSnapshot,
   subscribeQueue,
+  startAutoSync,
+  getSyncStats,
 } from "../../services/offlineQueue.js";
 import { normaliseProduct } from "../../utils/formatters.js";
 import BottomStatusBar from "../../components/BottomStatusBar.jsx";
@@ -84,6 +88,12 @@ function POS({ onAdmin, onOpenOnlineOrders, onLogout }) {
   /* T8C-F: offline sale queue state. */
   const [offlineCount, setOfflineCount] = useState(0);
   const [failedCount, setFailedCount] = useState(0);
+  const [syncing, setSyncing] = useState(false);
+  const [syncError, setSyncError] = useState(false);
+  const [online, setOnline] = useState(isOnline);
+  const [showQueue, setShowQueue] = useState(false);
+  const completing = useRef(false);
+  const requestRef = useRef(null);
   const [vatEnabled, setVatEnabled] = useState(true);
   const [vatRate, setVatRate] = useState(0.2);
 
@@ -137,7 +147,13 @@ function POS({ onAdmin, onOpenOnlineOrders, onLogout }) {
       }
     } catch (error) {
       const message = error.message || "";
-      if (message.includes("No open till session") || message.includes("401") || message.includes("403")) {
+      if (isNetworkError(error)) {
+        reportConnection(false);
+        const tenant = getTenantFromToken();
+        const cached = tenant ? loadTillContext(tenant) : null;
+        if (cached?.userId === tenant?.userId) setTill({ id: cached.sessionId, terminal_name: cached.terminalName, status: "open", offline: true });
+      }
+      if (error.status === 401 || error.status === 403 || message.includes("No open till session")) {
         setTill(null);
       }
       // Any other error leaves the previous till value untouched.
@@ -169,6 +185,7 @@ function POS({ onAdmin, onOpenOnlineOrders, onLogout }) {
         : [];
 
       setProducts(databaseProducts);
+      reportConnection(true);
 
       /* T8B: keep the freshest product list available for offline selling. */
       const tenant = getTenantFromToken();
@@ -193,7 +210,7 @@ function POS({ onAdmin, onOpenOnlineOrders, onLogout }) {
           setProducts(cached);
           setProductError("");
           setOfflineNotice(
-            "Offline — showing saved products. Selling resumes when the connection returns."
+            "Offline — cash sales can be saved pending sync. Stock is last-known; adjusted only by the backend on sync."
           );
           return;
         }
@@ -263,14 +280,15 @@ function POS({ onAdmin, onOpenOnlineOrders, onLogout }) {
       const snapshot = getQueueSnapshot();
       setOfflineCount(snapshot.pending);
       setFailedCount(snapshot.failed);
+      setSyncing(snapshot.syncing);
+      setSyncError(Boolean(getSyncStats().lastError));
     };
     applySnapshot();
     const unsubscribe = subscribeQueue(applySnapshot);
-    const removeNetworkListener = onNetworkChange((online) => {
-      if (online) syncOfflineQueue();
-    });
-    syncOfflineQueue(); // drain anything queued while the till was closed
+    const removeNetworkListener = onNetworkChange(setOnline);
+    const stopSync = startAutoSync();
     return () => {
+      stopSync();
       unsubscribe();
       removeNetworkListener();
     };
@@ -464,6 +482,11 @@ function POS({ onAdmin, onOpenOnlineOrders, onLogout }) {
   };
 
   const completeSale = async (paymentMethod) => {
+    if (completing.current || !basket.length) return;
+    if (paymentMethod !== "cash" && !isOnline()) {
+      setSaleError("Card payment needs a confirmed terminal payment and an online connection. Use cash offline.");
+      return;
+    }
     if (!till) {
       setSaleError("Open a till session before completing a sale.");
       setShowTill(true);
@@ -478,8 +501,10 @@ function POS({ onAdmin, onOpenOnlineOrders, onLogout }) {
      * instead of a duplicate sale. Payload shape and VAT/discount maths are
      * unchanged.
      */
+    const signature = JSON.stringify({ basket, selectedCustomer: selectedCustomer?.id, total, paymentMethod });
+    if (!requestRef.current || requestRef.current.signature !== signature) requestRef.current = { signature, id: newClientRequestId() };
     const payload = {
-      clientRequestId: newClientRequestId(),
+      clientRequestId: requestRef.current.id,
       items: basket.map((item) => {
         const lineGross = Number(item.price || 0) * item.quantity;
         const lineDiscount = grossSubtotal
@@ -502,14 +527,21 @@ function POS({ onAdmin, onOpenOnlineOrders, onLogout }) {
       total,
       paymentMethod,
     };
+    completing.current = true;
     try {
       setSaleError("");
       setSaleMessage("");
+      if (!isOnline() || (paymentMethod === "cash" && getQueueSnapshot().total > 0)) throw new TypeError("Offline or earlier sales waiting");
       const data = await apiRequest("/api/sales", {
+        signal: AbortSignal.timeout(15000),
         method: "POST",
         body: JSON.stringify(payload),
       });
       if (!data.success) throw new Error(data.message || "Sale could not be completed");
+      reportConnection(true);
+      requestRef.current = null;
+      setDiscountType(null);
+      setDiscountValue(0);
       setBasket([]);
       setSelectedCustomer(null);
       setShowPayment(false);
@@ -533,7 +565,12 @@ function POS({ onAdmin, onOpenOnlineOrders, onLogout }) {
        * nothing is lost. Server answers (400/403/500/...) keep the existing
        * error behaviour and are never queued.
        */
-      if (isNetworkError(error)) {
+      if (isNetworkError(error) || error.code === "INVALID_RESPONSE" || error.status >= 500) {
+        reportConnection(false);
+        if (paymentMethod !== "cash") {
+          setSaleError("Card sale outcome is unknown. Check the terminal and sale history before retrying; no offline card payment was recorded.");
+          return;
+        }
         /*
          * The SAME clientRequestId is queued: if the original request was
          * only timeout-ambiguous (it actually reached the server), the
@@ -547,6 +584,9 @@ function POS({ onAdmin, onOpenOnlineOrders, onLogout }) {
           terminalNumber: identity?.terminalNumber || null,
         });
         if (queued.ok) {
+          requestRef.current = null;
+          setDiscountType(null);
+          setDiscountValue(0);
           setBasket([]);
           setSelectedCustomer(null);
           setShowPayment(false);
@@ -557,8 +597,8 @@ function POS({ onAdmin, onOpenOnlineOrders, onLogout }) {
            */
           setSaleMessage(
             queued.entry?.provisionalReceipt
-              ? `Saved offline — Receipt ${queued.entry.provisionalReceipt} (will sync automatically).`
-              : "Sale saved offline — will sync automatically."
+              ? `Pending sync — ${queued.entry.provisionalReceipt}. Stock is adjusted only after backend synchronization.`
+              : "Sale saved locally — Pending sync. Stock is adjusted after synchronization."
           );
           return;
         }
@@ -566,6 +606,8 @@ function POS({ onAdmin, onOpenOnlineOrders, onLogout }) {
         return;
       }
       setSaleError(error.message || "Sale could not be completed");
+    } finally {
+      completing.current = false;
     }
   };
 
@@ -581,8 +623,13 @@ function POS({ onAdmin, onOpenOnlineOrders, onLogout }) {
         onlineOrderCount={onlineOrderCount}
         offlineCount={offlineCount}
         failedCount={failedCount}
+        syncing={syncing}
+        syncError={syncError}
+        online={online}
+        onQueue={() => setShowQueue(true)}
       />
 
+      {showQueue && <QueueDetailsModal onClose={() => setShowQueue(false)} />}
       {/* T8B: small non-blocking notice while cached data is in use. */}
       {offlineNotice && (
         <div className="fixed top-16 left-1/2 -translate-x-1/2 z-40">
@@ -680,9 +727,8 @@ function POS({ onAdmin, onOpenOnlineOrders, onLogout }) {
           onClose={() =>
             setShowPayment(false)
           }
-          onComplete={() => {
-            completeSale("cash");
-          }}
+          offline={!online}
+          onComplete={() => completeSale("cash")}
           onCard={() => completeSale("card")}
         />
       )}

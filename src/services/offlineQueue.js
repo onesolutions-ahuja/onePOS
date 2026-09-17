@@ -26,7 +26,7 @@
 import {
   getTenantFromToken,
 } from "./offlineStore.js";
-import { isNetworkError } from "./networkStatus.js";
+import { isNetworkError, onNetworkChange, reportConnection } from "./networkStatus.js";
 
 /*
  * The queue lives in a PER-TENANT key: a different company/store logged in
@@ -469,12 +469,14 @@ export function enqueueOfflineSale({ sale, terminalNumber = null, paymentUnverif
      * by terminal" notice until the sale is reviewed/synced (UI only - the
      * sale payload contract is unchanged).
      */
-    paymentUnverified: paymentMethodIsCard(sale) ? true : !!paymentUnverified,
+    paymentUnverified: sale.paymentMethod === "card" || !!paymentUnverified,
     tenant: { companyId: tenant.companyId, storeId: tenant.storeId, userId: tenant.userId },
     sale,
   };
 
   const queue = currentQueue(tenant);
+  const existing = queue.find((item) => item.clientRequestId === sale.clientRequestId);
+  if (existing) return { ok: true, entry: existing };
   if (!writeQueue(tenant, [...queue, entry])) return { ok: false };
 
   notify();
@@ -498,13 +500,18 @@ export async function syncOfflineQueue() {
   notify(); // T8G: the indicator can show "Syncing…" while this runs
   try {
     let queue = currentQueue(tenant);
-    let mutated = false;
     let synced = 0;
     let rejected = 0;
     let networkDown = false;
 
     for (const entry of queue) {
-      if (entry.status !== "pending") continue; // failed entries are never retried
+      if (entry.status !== "pending") break; // strict FIFO: review/retry oldest first
+      if (entry.paymentUnverified || entry.sale?.paymentMethod !== "cash") {
+        noteSyncError(tenant, "Unconfirmed payment requires review; automatic sync is blocked.");
+        break;
+      }
+      const active = getTenantFromToken();
+      if (!active || active.companyId !== tenant.companyId || active.storeId !== tenant.storeId || active.userId !== tenant.userId) break;
 
       /* Tenant belt-and-braces: never submit another tenant's sale. */
       const entryTenant = entry.tenant || {};
@@ -517,6 +524,7 @@ export async function syncOfflineQueue() {
         let token = null;
         try { token = localStorage.getItem("onepos_token"); } catch { /* ignore */ }
         const response = await fetch("/api/sales", {
+          signal: AbortSignal.timeout(15000),
           method: "POST",
           headers: {
             Accept: "application/json",
@@ -530,66 +538,75 @@ export async function syncOfflineQueue() {
         try { body = await response.json(); } catch { /* non-JSON body */ }
 
         if (response.status === 401) {
-          // Session expired mid-offline: auth problem, NOT a bad sale.
-          // Keep everything pending; the cashier logs in again and we resume.
-          networkDown = true;
+          noteSyncError(tenant, "Sign in again to synchronize saved sales.");
           break;
         }
 
-        if (response.ok) {
-          /*
-           * Success (T8E): remember the authoritative receipt number with
-           * the provisional one in local history, then remove the entry
-           * (never create a second local sale).
-           */
-          recordSyncedReceipt(tenant, {
-            clientRequestId: entry.clientRequestId,
-            provisionalReceipt: entry.provisionalReceipt,
-            receiptNumber: body?.sale?.receipt_number || null,
-            saleId: body?.sale?.id || null,
-          });
-          queue = queue.filter((item) => item.id !== entry.id);
-          mutated = true;
-          synced += 1;
-        } else {
-          // Server rejected the sale permanently - mark failed, keep for review.
-          queue = queue.map((item) =>
+        /* The backend answered - the connection is genuinely back. */
+        reportConnection(true);
+
+        if (response.status >= 500 || response.status === 429 || (response.ok && (body?.success !== true || !body?.sale?.id))) {
+          noteSyncError(tenant, "No confirmed sale acknowledgement. Saved sale retained for retry.");
+          if (response.status >= 500) reportConnection(false);
+          break;
+        }
+        if (!response.ok || body?.success !== true) {
+          /* Re-read before writing: another tab may have queued a sale while
+           * this request was in flight - only THIS entry's state changes. */
+          queue = currentQueue(tenant).map((item) =>
             item.id === entry.id
               ? {
                   ...item,
                   status: "failed",
-                  lastError: body?.message || `Server rejected the sale (${response.status})`,
+                  lastError: `Sale rejected (HTTP ${response.status}). Check stock, permissions and till session before retrying.`,
                   attempts: item.attempts + 1,
                 }
               : item
           );
-          mutated = true;
+          writeQueue(tenant, queue);
           rejected += 1;
+          break;
         }
+
+        recordSyncedReceipt(tenant, {
+          clientRequestId: entry.clientRequestId,
+          provisionalReceipt: entry.provisionalReceipt,
+          receiptNumber: body?.sale?.receipt_number || null,
+          saleId: body?.sale?.id || null,
+        });
+        queue = currentQueue(tenant).filter((item) => item.id !== entry.id);
+        if (!writeQueue(tenant, queue)) {
+          noteSyncError(tenant, "Unable to update local storage. Sale retained; retry uses the same reference.");
+          break;
+        }
+        bumpSyncedStats(tenant);
+        notify();
+        synced += 1;
       } catch (error) {
         if (isNetworkError(error)) {
-          // Still offline (or dropped mid-sync): stop, keep everything queued.
+          /* Timeout/abort: the request may still have reached the server, so
+           * "connection" is UNKNOWN - the idempotency key on the next attempt
+           * makes a duplicate sale impossible either way. */
+          reportConnection(false);
           networkDown = true;
           break;
         }
-        // Non-transport throw during retry: treat like a server rejection.
-        queue = queue.map((item) =>
+        /* Non-transport throw: re-read before writing so a sale queued by
+         * another tab while this request was in flight is not lost. */
+        queue = currentQueue(tenant).map((item) =>
           item.id === entry.id
-            ? { ...item, status: "failed", lastError: error.message, attempts: item.attempts + 1 }
+            ? { ...item, status: "failed", lastError: "Unable to sync. Saved sale retained for review.", attempts: item.attempts + 1 }
             : item
         );
-        mutated = true;
+        writeQueue(tenant, queue);
         rejected += 1;
+        break;
       }
     }
 
-    if (mutated) {
-      writeQueue(tenant, queue);
-      notify();
-    }
     return { attempted: synced + rejected, synced, rejected, networkDown, skipped: false };
   } finally {
     syncing = false;
-    notify(); // T8G: indicator returns to online/offline/failed state
+    notify();
   }
 }
