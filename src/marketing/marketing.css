@@ -1357,7 +1357,29 @@ a:hover .feature-link { gap: 8px; }
 
 /* ---- Phone mockup (WhatsApp) ---- */
 
-.wa-grid { display: grid; grid-template-columns: 1fr 300px; gap: 24px; align-items: stretch; background: #f1f5f9; padding: 4px; }
+.wa-grid { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 24px; align-items: stretch; background: #f1f5f9; padding: 4px; }
+
+/*
+ * Mockups respond to their CONTAINER width, not the viewport: the same
+ * WhatsAppScreen renders side-by-side inside a full-width browser frame and
+ * stacked (settings above, phone below) inside a half-page teaser column.
+ * Declared AFTER the base rules so the container overrides win the cascade.
+ * This is what keeps the home-page hero and teasers from cropping.
+ */
+.browser-body { container-type: inline-size; }
+
+@container (max-width: 920px) {
+  .wa-grid { grid-template-columns: 1fr; }
+  .phone { max-width: 340px; width: 100%; margin: 0 auto; }
+}
+
+@container (max-width: 760px) {
+  .app-shell { grid-template-columns: 1fr; }
+  .app-side { display: none; }
+  .w-stat-grid { grid-template-columns: repeat(2, 1fr); }
+  .w-grid-2 { grid-template-columns: 1fr; }
+  .w-store-grid { grid-template-columns: 1fr; }
+}
 
 .phone {
   display: flex;
