@@ -1,7 +1,11 @@
 import { useEffect, useState } from "react";
-import { Package, Plus, RefreshCw, Search, X } from "lucide-react";
+import { Package, Plus, RefreshCw, Search, X, Upload, Check, AlertCircle } from "lucide-react";
 import { apiRequest } from "../../services/api.js";
+import { parsePurchaseImport } from "../../services/purchaseImport.js";
+import { buildPurchaseImportPreview } from "../../services/purchaseImportPreview.js";
+import { mapPurchaseImport } from "../../services/purchaseImportMapper.js";
 import { normaliseProduct } from "../../utils/formatters.js";
+import PurchaseImportModal from "./PurchaseImportModal.jsx";
 function PurchasesAdmin() {
   const [purchases, setPurchases] = useState([]);
   const [products, setProducts] = useState([]);
@@ -10,6 +14,7 @@ function PurchasesAdmin() {
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
   const [showForm, setShowForm] = useState(false);
+  const [showImport, setShowImport] = useState(false);
   const [selectedPurchase, setSelectedPurchase] = useState(null);
 
   const loadPurchases = async () => {
@@ -85,6 +90,9 @@ function PurchasesAdmin() {
           <button onClick={() => { setError(""); setMessage(""); setShowForm(true); }} className="h-10 px-4 bg-blue-600 text-white rounded-lg text-sm font-medium flex items-center gap-2 hover:bg-blue-700">
             <Plus size={17} /> Add Purchase
           </button>
+          <button onClick={() => { setError(""); setMessage(""); setShowImport(true); }} className="h-10 px-4 bg-emerald-600 text-white rounded-lg text-sm font-medium flex items-center gap-2 hover:bg-emerald-700">
+            <Upload size={17} /> Import Purchases
+          </button>
         </div>
       </div>
 
@@ -121,6 +129,7 @@ function PurchasesAdmin() {
       </div>
 
       {showForm && <PurchaseFormModal products={products} suppliers={suppliers} onClose={() => setShowForm(false)} onSave={createPurchase} />}
+      {showImport && <PurchaseImportModal products={products} suppliers={suppliers} onClose={() => setShowImport(false)} />}
       {selectedPurchase && <PurchaseDetailModal purchase={selectedPurchase} onClose={() => setSelectedPurchase(null)} />}
     </div>
   );

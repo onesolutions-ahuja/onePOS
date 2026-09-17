@@ -1,0 +1,42 @@
+# robots.txt for onePOS marketing website
+
+User-agent: *
+Allow: /
+
+# Disallow operational application areas
+Disallow: /login
+Disallow: /app
+Disallow: /app/*
+Disallow: /api
+Disallow: /api/*
+
+# Allow marketing content (new site structure)
+Allow: /
+Allow: /pos
+Allow: /inventory
+Allow: /purchasing
+Allow: /customers
+Allow: /suppliers
+Allow: /employees
+Allow: /multi-store
+Allow: /online-orders
+Allow: /whatsapp
+Allow: /integrations
+Allow: /integrations/*
+Allow: /platforms
+Allow: /platform/*
+Allow: /hardware
+Allow: /reports
+Allow: /security
+Allow: /ecosystem
+Allow: /industry/*
+Allow: /resources
+Allow: /faq
+
+# Legacy marketing URLs (redirect to new structure)
+Allow: /product
+Allow: /product/*
+Allow: /online-delivery
+
+# Sitemap
+Sitemap: https://YOUR-ONEPOS-DOMAIN.example/sitemap.xml

@@ -31,7 +31,7 @@ function POSHeader({
   const queuePending = offlineCount > 0;
 
   return (
-    <header className="h-[58px] bg-slate-900 text-white flex items-center justify-between px-4 shrink-0">
+    <header className="h-[58px] text-white flex items-center justify-between px-4 shrink-0" style={{ background: "linear-gradient(90deg, #104744 0%, #176F6A 100%)" }}>
       <div className="flex items-center gap-4">
         <div className="font-bold text-lg">
           onePOS

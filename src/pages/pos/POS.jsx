@@ -570,7 +570,7 @@ function POS({ onAdmin, onOpenOnlineOrders, onLogout }) {
   };
 
   return (
-    <div className="h-screen bg-[#eef1f4] flex flex-col overflow-hidden">
+    <div className="h-screen bg-slate-100 flex flex-col overflow-hidden">
       <POSHeader
         loadingTill={loadingTill}
         till={till}

@@ -26,6 +26,7 @@ import {
   toPublicIntegration,
 } from "../services/integrationCredentials.js";
 import { buildPayload } from "../services/integrationFieldResolver.js";
+import { getIntegrationDispatchStatus } from "../services/integrationDispatcher.js";
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -137,6 +138,30 @@ export default function createIntegrationsRouter({ authenticate, authorize, db, 
       } catch (error) {
         console.error("List integrations error:", error);
         res.status(500).json({ success: false, message: "Unable to list integrations" });
+      }
+    }
+  );
+
+  // Dispatch status for the Integration management UI (T9M, read-only).
+  // One row per configured endpoint: connection, event, last attempt /
+  // success / failure, HTTP status, error message and trace (correlation)
+  // ID. Credentials never appear. Registered before "/integrations/:id"
+  // so the literal "dispatch-status" segment is not captured as an id.
+  router.get(
+    "/integrations/dispatch-status",
+    authenticate,
+    authorize("integration.manage"),
+    async (req, res) => {
+      try {
+        const rows = await getIntegrationDispatchStatus({
+          deps: { db },
+          companyId: req.user.companyId,
+          storeId: req.user.storeId ?? null,
+        });
+        res.json({ success: true, data: rows });
+      } catch (error) {
+        console.error("Integration dispatch status error:", error);
+        res.status(500).json({ success: false, message: "Unable to load dispatch status" });
       }
     }
   );

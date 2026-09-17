@@ -1,5 +1,7 @@
 import express from "express";
 import { dispatchIntegrationEvent } from "../services/integrationDispatcher.js";
+import { dispatchWhatsAppInvoiceDelivery } from "../services/whatsappDelivery.js";
+import { dispatchSmsInvoiceDelivery, dispatchEmailInvoiceDelivery } from "../services/invoiceDelivery.js";
 
 export default function createSalesRouter({
   authenticate,
@@ -450,6 +452,38 @@ export default function createSalesRouter({
           deps: { db },
           context: { companyId: req.user.companyId, storeId: req.user.storeId },
           entityId: saleId,
+        }).catch(() => {});
+
+        /*
+         * T9Q-NEXT: fire-and-forget WhatsApp invoice delivery (never
+         * blocks/throws - WhatsApp failures cannot affect the sale).
+         */
+        dispatchWhatsAppInvoiceDelivery({
+          db,
+          saleId,
+          companyId: req.user.companyId,
+          storeId: req.user.storeId ?? null,
+          userId: req.user.id ?? null,
+        }).catch(() => {});
+
+        /*
+         * T9D-NEXT: fire-and-forget SMS/Email invoice delivery (never
+         * blocks/throws; both skip unless explicitly enabled + auto-send ON,
+         * which is NOT the default).
+         */
+        dispatchSmsInvoiceDelivery({
+          db,
+          saleId,
+          companyId: req.user.companyId,
+          storeId: req.user.storeId ?? null,
+          userId: req.user.id ?? null,
+        }).catch(() => {});
+        dispatchEmailInvoiceDelivery({
+          db,
+          saleId,
+          companyId: req.user.companyId,
+          storeId: req.user.storeId ?? null,
+          userId: req.user.id ?? null,
         }).catch(() => {});
 
         res.status(201).json({

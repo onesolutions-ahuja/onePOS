@@ -375,10 +375,15 @@ CREATE TABLE IF NOT EXISTS stock_returns (
     company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
     store_id UUID NOT NULL REFERENCES stores(id),
     return_type VARCHAR(20) NOT NULL CHECK (return_type IN ('CUSTOMER', 'SUPPLIER')),
+    /* T9M-SMALL: short human-readable return reference, e.g. RET-0001 */
+    return_number VARCHAR(30) UNIQUE,
     sale_id UUID,
     purchase_id UUID,
     supplier_id UUID,
     request_key VARCHAR(100),
+    status VARCHAR(20) NOT NULL DEFAULT 'COMPLETED' CHECK (status IN ('COMPLETED', 'CANCELLED')),
+    refund_amount NUMERIC(12,2),
+    refund_method VARCHAR(50),
     reason TEXT,
     created_by UUID REFERENCES users(id) ON DELETE SET NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -576,6 +581,9 @@ CREATE TABLE IF NOT EXISTS refunds (
     amount NUMERIC(12,2) NOT NULL,
     reason TEXT,
     payment_method VARCHAR(50),
+    /* T9M-SMALL: links the refund to its stock_returns record (nullable for
+       legacy/manual refunds created before returns existed). */
+    return_id UUID REFERENCES stock_returns(id) ON DELETE SET NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
@@ -873,6 +881,8 @@ VALUES
 ('sale.void', 'Void Sale', 'Void complete sales'),
 ('sale.refund', 'Refund Sale', 'Process refunds'),
 ('sale.refund_without_receipt', 'Refund Without Receipt', 'Allow refunds without receipt'),
+('returns.create', 'Create Returns', 'Process customer and supplier returns'),
+('returns.view', 'View Returns', 'View return history'),
 ('sale.price_change', 'Change Price', 'Change item price at till'),
 ('sale.hold', 'Hold Sale', 'Hold and retrieve sales'),
 
@@ -1009,3 +1019,44 @@ ON integration_api_logs(integration_id, created_at DESC);
 
 CREATE INDEX IF NOT EXISTS idx_integration_api_logs_entity
 ON integration_api_logs(entity_type, entity_id);
+
+-- ============================================================
+-- SECURE INVOICE LINKS (T9P)
+-- ============================================================
+--
+-- Non-guessable, hash-only download links for sale receipts/invoices.
+-- The plaintext token is the customer's credential: it is shown once at
+-- creation and is NEVER stored - only a SHA-256 hash is persisted. Lookup
+-- is by hash so a database leak cannot expose live links. Tokens are
+-- company-scoped through the referenced sale (tenant isolation is the
+-- token relationship, exactly as required).
+--
+-- No receipt/sale data is duplicated here: the table only associates a
+-- token with an existing sale.
+--
+-- Safe to run repeatedly (idempotent).
+
+CREATE TABLE IF NOT EXISTS secure_invoice_links (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+
+    token_hash VARCHAR(64) NOT NULL UNIQUE,
+
+    company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+    store_id UUID REFERENCES stores(id),
+    sale_id UUID NOT NULL REFERENCES sales(id) ON DELETE CASCADE,
+
+    created_by UUID REFERENCES users(id) ON DELETE SET NULL,
+
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    expires_at TIMESTAMPTZ,
+    revoked_at TIMESTAMPTZ,
+
+    last_accessed_at TIMESTAMPTZ,
+    access_count INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE INDEX IF NOT EXISTS idx_secure_invoice_links_sale
+ON secure_invoice_links(sale_id);
+
+CREATE INDEX IF NOT EXISTS idx_secure_invoice_links_company_created
+ON secure_invoice_links(company_id, created_at DESC);

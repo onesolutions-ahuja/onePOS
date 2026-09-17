@@ -99,6 +99,17 @@ function receiptHistoryKey(tenant) {
 
 const RECEIPT_HISTORY_LIMIT = 100;
 
+/* Reads the synced-receipt history (newest first). Never throws. */
+function readSyncHistory(tenant) {
+  try {
+    const raw = localStorage.getItem(receiptHistoryKey(tenant));
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
 /* ------------------------- change notification ------------------------- */
 
 const listeners = new Set();
@@ -266,20 +277,179 @@ function currentQueue(tenant) {
 
 export function getQueueSnapshot() {
   const tenant = getTenantFromToken();
-  if (!tenant) return { pending: 0, failed: 0, total: 0 };
+  if (!tenant) return { pending: 0, failed: 0, total: 0, syncing: false };
   const queue = currentQueue(tenant);
   return {
     pending: queue.filter((entry) => entry.status === "pending").length,
     failed: queue.filter((entry) => entry.status === "failed").length,
     total: queue.length,
+    syncing,
   };
+}
+
+/*
+ * T8G: safe per-entry view for the POS queue details modal. Only
+ * till-safe fields are exposed (provisional receipt reference, time,
+ * status, error text) - no internal database ids and no raw payload.
+ */
+export function getQueueEntries() {
+  const tenant = getTenantFromToken();
+  if (!tenant) return [];
+  return currentQueue(tenant).map((entry) => ({
+    id: entry.id,
+    clientRequestId: entry.clientRequestId,
+    provisionalReceipt: entry.provisionalReceipt || null,
+    createdAt: entry.createdAt || null,
+    status: entry.status === "failed" ? "failed" : "pending",
+    attempts: Number(entry.attempts) || 0,
+    lastError: entry.lastError || null,
+    paymentUnverified: !!entry.paymentUnverified,
+    total: Number(entry.sale?.total) || 0,
+    itemCount: Array.isArray(entry.sale?.items) ? entry.sale.items.length : 0,
+  }));
+}
+
+/*
+ * T8G: puts a server-rejected entry back into the sync rotation (manual
+ * retry from the details modal). The clientRequestId is unchanged, so the
+ * backend idempotency still guarantees no duplicate sale is created.
+ */
+export function retryFailedEntry(id) {
+  const tenant = getTenantFromToken();
+  if (!tenant || !id) return { ok: false };
+  const queue = currentQueue(tenant);
+  const entry = queue.find((item) => item.id === id);
+  if (!entry || entry.status !== "failed") return { ok: false };
+  const next = queue.map((item) =>
+    item.id === id ? { ...item, status: "pending", lastError: null } : item
+  );
+  if (!writeQueue(tenant, next)) return { ok: false };
+  notify();
+  syncOfflineQueue();
+  return { ok: true };
+}
+
+/*
+ * T8G: retries every failed entry at once (single queue write, single
+ * sync run - avoids racing several syncs against each other).
+ */
+export function retryAllFailed() {
+  const tenant = getTenantFromToken();
+  if (!tenant) return { ok: false, retried: 0 };
+  const queue = currentQueue(tenant);
+  const failedIds = new Set(
+    queue.filter((item) => item.status === "failed").map((item) => item.id)
+  );
+  if (!failedIds.size) return { ok: true, retried: 0 };
+  const next = queue.map((item) =>
+    failedIds.has(item.id)
+      ? { ...item, status: "pending", lastError: null }
+      : item
+  );
+  if (!writeQueue(tenant, next)) return { ok: false, retried: 0 };
+  notify();
+  syncOfflineQueue();
+  return { ok: true, retried: failedIds.size };
+}
+
+/* ------------------------- sync statistics (T8G) ------------------------ */
+
+const SYNC_STATS_VERSION = 1;
+
+function syncStatsKey(tenant) {
+  return `onepos_offline_sync_stats_${tenant.companyId}_${tenant.storeId}`;
+}
+
+function emptySyncStats() {
+  return { syncedTotal: 0, lastSyncedAt: null, lastError: null };
+}
+
+function readSyncStats(tenant) {
+  try {
+    const raw = localStorage.getItem(syncStatsKey(tenant));
+    if (!raw) return emptySyncStats();
+    const parsed = JSON.parse(raw);
+    if (!parsed || parsed.v !== SYNC_STATS_VERSION) return emptySyncStats();
+    const stored = parsed.tenant || {};
+    if (stored.companyId !== tenant.companyId || stored.storeId !== tenant.storeId) {
+      return emptySyncStats();
+    }
+    return {
+      syncedTotal: Number(parsed.data?.syncedTotal) || 0,
+      lastSyncedAt: parsed.data?.lastSyncedAt || null,
+      lastError: parsed.data?.lastError || null,
+    };
+  } catch {
+    return emptySyncStats();
+  }
+}
+
+function writeSyncStats(tenant, stats) {
+  try {
+    localStorage.setItem(
+      syncStatsKey(tenant),
+      JSON.stringify({
+        v: SYNC_STATS_VERSION,
+        savedAt: new Date().toISOString(),
+        tenant: { companyId: tenant.companyId, storeId: tenant.storeId },
+        data: stats,
+      })
+    );
+  } catch { /* stats must never break syncing */ }
+}
+
+/* One authoritative offline sale reached the server. */
+function bumpSyncedStats(tenant) {
+  const stats = readSyncStats(tenant);
+  stats.syncedTotal += 1;
+  stats.lastSyncedAt = new Date().toISOString();
+  stats.lastError = null;
+  writeSyncStats(tenant, stats);
+}
+
+/* A sync attempt ended with a server rejection (shown in the details view). */
+function noteSyncError(tenant, message) {
+  const stats = readSyncStats(tenant);
+  stats.lastError = message || "Sync error";
+  writeSyncStats(tenant, stats);
+}
+
+/* Cumulative, per-tenant counters for the queue details view. */
+export function getSyncStats() {
+  const tenant = getTenantFromToken();
+  if (!tenant) return emptySyncStats();
+  return readSyncStats(tenant);
+}
+
+/*
+ * T8G: central auto-sync wiring used by the POS screen. Starts a sync
+ * immediately, re-syncs whenever the browser reports being back online,
+ * and keeps a slow safety-net poll for missed browser events. Returns a
+ * stop function (safe for useEffect cleanup); starting twice is a no-op.
+ */
+let autoSyncStop = null;
+
+export function startAutoSync({ pollMs = 30000 } = {}) {
+  if (autoSyncStop) return autoSyncStop;
+  const removeNetworkListener = onNetworkChange((online) => {
+    if (online) syncOfflineQueue();
+  });
+  syncOfflineQueue();
+  const timer =
+    pollMs > 0 ? setInterval(() => syncOfflineQueue(), pollMs) : null;
+  autoSyncStop = () => {
+    removeNetworkListener();
+    if (timer) clearInterval(timer);
+    autoSyncStop = null;
+  };
+  return autoSyncStop;
 }
 
 /*
  * Adds a sale to the queue. Returns { ok: true, entry } or { ok: false }.
  * `sale` is the exact POST /api/sales payload (clientRequestId included).
  */
-export function enqueueOfflineSale({ sale, terminalNumber = null }) {
+export function enqueueOfflineSale({ sale, terminalNumber = null, paymentUnverified = false }) {
   const tenant = getTenantFromToken();
   if (!tenant || !sale || typeof sale !== "object" || !sale.clientRequestId) {
     return { ok: false };
@@ -293,6 +463,13 @@ export function enqueueOfflineSale({ sale, terminalNumber = null }) {
     attempts: 0,
     lastError: null,
     provisionalReceipt: nextProvisionalReceipt(tenant, terminalNumber),
+    /*
+     * Offline card "payments" were never authorised by a terminal. The flag
+     * keeps the till honest: the entry shows a "card payment not confirmed
+     * by terminal" notice until the sale is reviewed/synced (UI only - the
+     * sale payload contract is unchanged).
+     */
+    paymentUnverified: paymentMethodIsCard(sale) ? true : !!paymentUnverified,
     tenant: { companyId: tenant.companyId, storeId: tenant.storeId, userId: tenant.userId },
     sale,
   };
@@ -318,6 +495,7 @@ export async function syncOfflineQueue() {
   if (!tenant) return { attempted: 0, synced: 0, rejected: 0, networkDown: false, skipped: true };
 
   syncing = true;
+  notify(); // T8G: the indicator can show "Syncing…" while this runs
   try {
     let queue = currentQueue(tenant);
     let mutated = false;
@@ -412,5 +590,6 @@ export async function syncOfflineQueue() {
     return { attempted: synced + rejected, synced, rejected, networkDown, skipped: false };
   } finally {
     syncing = false;
+    notify(); // T8G: indicator returns to online/offline/failed state
   }
 }

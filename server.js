@@ -17,7 +17,10 @@ import createInventoryRouter from "./routes/inventory.js";
 import createSalesRouter from "./routes/sales.js";
 import createReturnsRouter from "./routes/returns.js";
 import createReportsRouter from "./routes/reports.js";
+import createSecureInvoiceRouter from "./routes/secureInvoice.js";
 import createSettingsRouter from "./routes/settings.js";
+import createWhatsAppSettingsRouter from "./routes/whatsapp.js";
+import createInvoiceDeliveryRouter from "./routes/invoiceDelivery.js";
 import createAdminRouter from "./routes/admin.js";
 import createIntegrationsRouter from "./routes/integrations.js";
 import createDashboardRouter from "./routes/dashboard.js";
@@ -727,6 +730,8 @@ app.use("/api", createEanLookupRouter({ authenticate, db }));
 app.use("/api", createDashboardRouter({ authenticate, db }));
 
 app.use("/api", createSettingsRouter({ authenticate, db, pool, writeAudit, testPaymentTerminal }));
+app.use("/api", createWhatsAppSettingsRouter({ authenticate, authorize, db, pool, writeAudit }));
+app.use("/api", createInvoiceDeliveryRouter({ authenticate, authorize, db, pool, writeAudit }));
 
 /*
 |--------------------------------------------------------------------------
@@ -844,6 +849,18 @@ app.use("/api", createReturnsRouter({ authenticate, authorize, db, pool, createI
 app.use("/api", createAdminRouter({ authenticate, authorize, db, pool, canViewCompanyCustomers, bcrypt }));
 
 app.use("/api", createReportsRouter({ authenticate, db }));
+
+/*
+|--------------------------------------------------------------------------
+| SECURE INVOICE LINKS (T9P)
+|--------------------------------------------------------------------------
+|
+| Public token-based invoice download at GET /i/:token (outside /api - the
+| opaque token is the only credential; no IDs in the URL, hash-only token
+| storage, generic 404s) plus admin create/revoke endpoints under
+| /api/sales/:saleId/secure-links using the existing permission model.
+*/
+app.use(createSecureInvoiceRouter({ db, pool, authenticate, authorize, writeAudit }));
 
 /*
 | Online Orders (Uber Eats / Deliveroo foundation) - product platform
@@ -1277,7 +1294,33 @@ app.get("/api/setup/database", async (req, res) => {
 
 const distPath = path.join(__dirname, "dist");
 
+/*
+ * Keep the operational React application separate from the public marketing
+ * entry point. These routes are registered after every API and secure invoice
+ * route, so neither can be intercepted by the frontend fallback.
+ */
+app.get(["/login", "/app", "/app/*"], (req, res) => {
+  res.sendFile(path.join(distPath, "app", "index.html"));
+});
+
 app.use(express.static(distPath));
+
+/*
+ * Marketing site fallback - serve marketing index.html for all non-app,
+ * non-API, non-secure-invoice routes to enable client-side routing.
+ */
+app.use((req, res) => {
+  // Skip API routes, app routes, and secure invoice routes
+  if (req.path.startsWith("/api/") || req.path.startsWith("/login") || req.path.startsWith("/app") || req.path.startsWith("/i/")) {
+    return res.status(404).json({
+      success: false,
+      message: "Not found",
+    });
+  }
+  
+  // Serve marketing site for all other routes
+  res.sendFile(path.join(distPath, "index.html"));
+});
 
 /*
 |--------------------------------------------------------------------------

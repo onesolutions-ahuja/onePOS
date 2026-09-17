@@ -36,10 +36,10 @@ export default function Login({ onLogin }) {
   };
 
   return (
-    <div className="min-h-screen bg-[#f4f6f8] flex items-center justify-center">
+    <div className="min-h-screen bg-slate-100 flex items-center justify-center">
       <div className="w-[420px] max-w-[95vw]">
         <div className="bg-white border border-slate-200 shadow-xl rounded-2xl overflow-hidden">
-          <div className="bg-slate-900 text-white p-8 text-center">
+          <div className="text-white p-8 text-center" style={{ background: "linear-gradient(180deg, #104744 0%, #176F6A 100%)" }}>
             <div className="w-14 h-14 bg-blue-600 rounded-xl mx-auto flex items-center justify-center">
               <Calculator size={28} />
             </div>

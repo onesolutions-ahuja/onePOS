@@ -21,6 +21,9 @@ export default function App() {
       const token = localStorage.getItem("onepos_token");
 
       if (!token) {
+        if (window.location.pathname === "/app" || window.location.pathname.startsWith("/app/")) {
+          window.history.replaceState({}, "", "/login");
+        }
         setCheckingSession(false);
         return;
       }
@@ -34,6 +37,9 @@ export default function App() {
 
         setLoggedIn(true);
         setUser(data.user);
+        if (window.location.pathname === "/login") {
+          window.history.replaceState({}, "", "/app");
+        }
       } catch {
         localStorage.removeItem("onepos_token");
         setLoggedIn(false);
@@ -53,6 +59,7 @@ export default function App() {
     localStorage.removeItem(
       "onepos_token"
     );
+    window.location.assign("/login");
   };
 
   if (checkingSession) {
@@ -69,6 +76,7 @@ export default function App() {
         onLogin={(loggedInUser) => {
           setUser(loggedInUser);
           setLoggedIn(true);
+          window.history.replaceState({}, "", "/app");
         }}
       />
     );

@@ -1,0 +1,50 @@
+<svg width="400" height="300" viewBox="0 0 400 300" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="4" stdDeviation="8" flood-color="#000000" flood-opacity="0.15"/>
+    </filter>
+  </defs>
+  
+  <!-- Phone Container -->
+  <rect x="50" y="20" width="300" height="260" rx="20" fill="#ffffff" filter="url(#shadow)" stroke="#e5e9e2" stroke-width="2"/>
+  
+  <!-- Phone Header -->
+  <rect x="50" y="20" width="300" height="50" rx="20" fill="#075e54"/>
+  <rect x="50" y="50" width="300" height="20" fill="#075e54"/>
+  
+  <!-- WhatsApp Icon -->
+  <circle cx="80" cy="45" r="18" fill="#25d366"/>
+  <text x="80" y="52" font-family="Arial, sans-serif" font-size="20" text-anchor="middle">💬</text>
+  
+  <!-- Header Text -->
+  <text x="110" y="50" font-family="Arial, sans-serif" font-size="14" font-weight="bold" fill="#ffffff">WhatsApp Invoice</text>
+  
+  <!-- Chat Background -->
+  <rect x="50" y="70" width="300" height="210" fill="#e5ddd5"/>
+  
+  <!-- Message Bubble -->
+  <rect x="70" y="90" width="260" height="120" rx="12" fill="#ffffff" filter="url(#shadow)"/>
+  
+  <!-- Message Header -->
+  <text x="85" y="115" font-family="Arial, sans-serif" font-size="12" font-weight="bold" fill="#075e54">onePOS</text>
+  <text x="310" y="115" font-family="Arial, sans-serif" font-size="10" fill="#667781" text-anchor="end">10:45 AM</text>
+  
+  <!-- Message Content -->
+  <text x="85" y="140" font-family="Arial, sans-serif" font-size="12" fill="#152321">Thank you for your purchase!</text>
+  <text x="85" y="160" font-family="Arial, sans-serif" font-size="12" fill="#152321">Your invoice is ready to view:</text>
+  
+  <!-- Invoice Link -->
+  <rect x="85" y="175" width="230" height="30" rx="6" fill="#f5f5f1" stroke="#e5e9e2"/>
+  <text x="95" y="195" font-family="Arial, sans-serif" font-size="11" font-weight="bold" fill="#075e54">🔗 View Invoice #INV-2024-001</text>
+  
+  <!-- Security Note -->
+  <text x="85" y="220" font-family="Arial, sans-serif" font-size="10" fill="#667781">🔒 Secure link - valid for 30 days</text>
+  
+  <!-- Delivery Status -->
+  <text x="85" y="245" font-family="Arial, sans-serif" font-size="11" fill="#075e54" font-weight="bold">✓✓ Delivered</text>
+  
+  <!-- PDF Icon -->
+  <rect x="270" y="95" width="50" height="60" rx="4" fill="#f5f5f1" stroke="#e5e9e2"/>
+  <text x="295" y="130" font-family="Arial, sans-serif" font-size="24" text-anchor="middle">📄</text>
+  <text x="295" y="145" font-family="Arial, sans-serif" font-size="8" fill="#50605a" text-anchor="middle">PDF</text>
+</svg>

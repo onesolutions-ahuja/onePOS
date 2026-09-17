@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { AlertTriangle, Edit, Package, Plus, RefreshCw, Search, X } from "lucide-react";
 import { apiRequest } from "../../services/api.js";
 import { normaliseProduct } from "../../utils/formatters.js";
+import { Toggle } from "../../components/ui.jsx";
 function ProductsAdmin({ openCreate = false }) {
   const [products, setProducts] =
     useState([]);
@@ -733,13 +734,11 @@ function ProductFormModal({
             </label>
 
             <label className="flex items-center gap-2 text-sm text-slate-600 pt-6">
-              <input
-                type="checkbox"
+              <Toggle
                 checked={form.trackStock}
                 onChange={(event) =>
                   updateField("trackStock", event.target.checked)
                 }
-                className="w-4 h-4 accent-blue-600"
               />
               Track stock for this product
             </label>
@@ -750,13 +749,11 @@ function ProductFormModal({
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
                 <label className="flex items-center gap-2 text-sm text-slate-600">
-                  <input
-                    type="checkbox"
+                  <Toggle
                     checked={form.availableOnUber}
                     onChange={(event) =>
                       updateField("availableOnUber", event.target.checked)
                     }
-                    className="w-4 h-4 accent-blue-600"
                   />
                   Available on Uber Eats
                 </label>
@@ -771,13 +768,11 @@ function ProductFormModal({
               </div>
               <div className="space-y-2">
                 <label className="flex items-center gap-2 text-sm text-slate-600">
-                  <input
-                    type="checkbox"
+                  <Toggle
                     checked={form.availableOnDeliveroo}
                     onChange={(event) =>
                       updateField("availableOnDeliveroo", event.target.checked)
                     }
-                    className="w-4 h-4 accent-blue-600"
                   />
                   Available on Deliveroo
                 </label>

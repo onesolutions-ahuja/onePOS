@@ -501,10 +501,15 @@ export async function initializeDatabase(pool) {
       company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
       store_id UUID NOT NULL REFERENCES stores(id),
       return_type VARCHAR(20) NOT NULL CHECK (return_type IN ('CUSTOMER', 'SUPPLIER')),
+      /* T9M-SMALL: short human-readable return reference, e.g. RET-0001 */
+      return_number VARCHAR(30) UNIQUE,
       sale_id UUID,
       purchase_id UUID,
       supplier_id UUID,
       request_key VARCHAR(100),
+      status VARCHAR(20) NOT NULL DEFAULT 'COMPLETED' CHECK (status IN ('COMPLETED', 'CANCELLED')),
+      refund_amount NUMERIC(12,2),
+      refund_method VARCHAR(50),
       reason TEXT,
       created_by UUID REFERENCES users(id) ON DELETE SET NULL,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -688,6 +693,8 @@ export async function initializeDatabase(pool) {
       amount NUMERIC(12,2) NOT NULL,
       reason TEXT,
       payment_method VARCHAR(50),
+      /* T9M-SMALL: links the refund to its stock_returns record. */
+      return_id UUID REFERENCES stock_returns(id) ON DELETE SET NULL,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
 
@@ -760,6 +767,19 @@ export async function initializeDatabase(pool) {
 
     CREATE UNIQUE INDEX IF NOT EXISTS ux_integrations_company_provider
     ON integrations(company_id, provider);
+
+    /*
+     * T9M-SMALL - Sales Returns hardening: human-readable return references,
+     * lifecycle status and refund linkage. Idempotent for existing installs.
+     */
+    ALTER TABLE stock_returns
+      ADD COLUMN IF NOT EXISTS return_number VARCHAR(30) UNIQUE,
+      ADD COLUMN IF NOT EXISTS status VARCHAR(20) NOT NULL DEFAULT 'COMPLETED',
+      ADD COLUMN IF NOT EXISTS refund_amount NUMERIC(12,2),
+      ADD COLUMN IF NOT EXISTS refund_method VARCHAR(50);
+
+    ALTER TABLE refunds
+      ADD COLUMN IF NOT EXISTS return_id UUID REFERENCES stock_returns(id) ON DELETE SET NULL;
   `);
 
   const permissions = [
@@ -768,6 +788,8 @@ export async function initializeDatabase(pool) {
     ["sale.void_item", "Void Item"],
     ["sale.void", "Void Sale"],
     ["sale.refund", "Refund Sale"],
+    ["returns.create", "Create Returns"],
+    ["returns.view", "View Returns"],
     ["sale.price_change", "Change Price"],
     ["sale.hold", "Hold Sale"],
     ["cash.open_drawer", "Open Cash Drawer"],
@@ -908,6 +930,35 @@ export async function initializeDatabase(pool) {
     ON integration_api_logs(entity_type, entity_id);
     `
   );
+
+  /* T9P - secure invoice link foundation (hash-only token storage).
+   * Applied idempotently; mirrors database/secure_invoice_links.sql. */
+  await pool.query(`
+CREATE TABLE IF NOT EXISTS secure_invoice_links (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+
+    token_hash VARCHAR(64) NOT NULL UNIQUE,
+
+    company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+    store_id UUID REFERENCES stores(id),
+    sale_id UUID NOT NULL REFERENCES sales(id) ON DELETE CASCADE,
+
+    created_by UUID REFERENCES users(id) ON DELETE SET NULL,
+
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    expires_at TIMESTAMPTZ,
+    revoked_at TIMESTAMPTZ,
+
+    last_accessed_at TIMESTAMPTZ,
+    access_count INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE INDEX IF NOT EXISTS idx_secure_invoice_links_sale
+ON secure_invoice_links(sale_id);
+
+CREATE INDEX IF NOT EXISTS idx_secure_invoice_links_company_created
+ON secure_invoice_links(company_id, created_at DESC);
+    `);
 
   console.log("onePOS: database ready");
 }

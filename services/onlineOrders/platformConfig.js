@@ -183,3 +183,187 @@ export async function loadPlatformConfig(db, companyId, platform) {
 
   return runtime;
 }
+
+/*
+ * T9Q-SMALL - WhatsApp settings (provider = 'whatsapp' in the SAME table).
+ *
+ * Reuses the enc:v1 AES-256-GCM secret scheme above - no second credential
+ * system, no new tables. Plain fields are stored as-is; secrets are encrypted
+ * before they touch the database and are only ever exposed back to the
+ * frontend as configured/masked hints.
+ */
+const WHATSAPP_SECRET_FIELDS = ["access_token", "webhook_verify_token"];
+const WHATSAPP_PLAIN_FIELDS = [
+  "phone_number_id",
+  "business_account_id",
+  "display_name",
+  "default_country_code",
+  "invoice_message_template",
+  "test_recipient_number",
+];
+
+/** Merge incoming WhatsApp settings into the stored configuration (same secret semantics as buildStoredConfiguration). */
+export function buildWhatsAppConfiguration(input = {}, existingConfiguration = {}) {
+  const next = { ...(existingConfiguration || {}) };
+  for (const field of WHATSAPP_PLAIN_FIELDS) {
+    if (input[field] !== undefined) {
+      next[field] = input[field] === null || String(input[field]).trim() === "" ? null : String(input[field]).trim();
+    }
+  }
+  for (const field of WHATSAPP_SECRET_FIELDS) {
+    if (input[field] === undefined) continue; // keep existing secret
+    next[field] = input[field] === null ? null : encryptSecret(input[field]);
+  }
+  // T9Q-NEXT delivery settings.
+  if (input.delivery_mode !== undefined) {
+    next.delivery_mode = input.delivery_mode === "pdf" ? "pdf" : "link";
+  }
+  if (input.auto_send_enabled !== undefined) {
+    next.auto_send_enabled = input.auto_send_enabled === true || input.auto_send_enabled === "true";
+  }
+  return next;
+}
+
+/** Safe-for-frontend view of the WhatsApp configuration - never secrets. */
+export function maskWhatsAppConfiguration(configuration = {}) {
+  const masked = {};
+  for (const field of WHATSAPP_PLAIN_FIELDS) {
+    masked[field] = configuration[field] || null;
+  }
+  for (const field of WHATSAPP_SECRET_FIELDS) {
+    const value = decryptSecret(configuration[field]);
+    masked[field] = null;
+    masked[`${field}_configured`] = Boolean(value);
+    if (value && value.length > 4) {
+      masked[`${field}_masked`] = `••••${value.slice(-4)}`;
+    }
+  }
+  masked.delivery_mode = configuration.delivery_mode === "pdf" ? "pdf" : "link";
+  masked.auto_send_enabled = configuration.auto_send_enabled === true;
+  masked.test_recipient_number = configuration.test_recipient_number || null;
+  masked.configured = Boolean(
+    (configuration.phone_number_id || masked.phone_number_id) &&
+      decryptSecret(configuration.access_token)
+  );
+  return masked;
+}
+
+/**
+ * Load the raw WhatsApp row for one company (internal/backend use only -
+ * configuration may contain encrypted secrets; never serialize to a response).
+ */
+export async function loadWhatsAppConfig(db, companyId) {
+  if (!companyId) return { enabled: false, configuration: {} };
+  const result = await db(
+    `SELECT active, configuration FROM integrations WHERE company_id = $1 AND provider = 'whatsapp' LIMIT 1`,
+    [companyId]
+  );
+  if (!result.rows.length) return { enabled: false, configuration: {} };
+  return {
+    enabled: result.rows[0].active === true,
+    configuration: result.rows[0].configuration || {},
+  };
+}
+
+/*
+ * T9D-NEXT - SMS + Email invoice delivery configuration.
+ *
+ * Same architecture as WhatsApp: one row per provider in the existing
+ * `integrations` table (providers 'sms_invoice' / 'email_invoice'), secrets
+ * encrypted with the SAME enc:v1 AES-256-GCM scheme, never returned to any
+ * client - only *_configured flags and masked suffixes. Provider-agnostic:
+ * the credential fields are generic so the actual SMS/email provider can be
+ * selected later without schema or config-model changes.
+ */
+
+const INVOICE_CHANNEL_SECRET_FIELDS = ["api_key", "api_secret", "auth_token"];
+const SMS_PLAIN_FIELDS = [
+  "sms_provider", // e.g. "generic_http" | "twilio" | "messagebird" (informational)
+  "sender_id", // alphanumeric sender ID shown to recipients
+  "api_base_url", // generic HTTP provider endpoint
+  "default_country_code",
+  "message_template", // optional custom body; {link} placeholder supported
+];
+const EMAIL_PLAIN_FIELDS = [
+  "email_provider", // e.g. "smtp" | "generic_http" | "resend" (informational)
+  "from_address",
+  "from_name",
+  "smtp_host",
+  "smtp_port",
+  "smtp_secure", // "true" | "false"
+  "api_base_url",
+  "subject_template",
+  "message_template",
+];
+
+function buildInvoiceChannelConfiguration(input = {}, existingConfiguration = {}, plainFields) {
+  const next = { ...(existingConfiguration || {}) };
+  for (const field of plainFields) {
+    if (input[field] !== undefined) {
+      next[field] = input[field] === null || String(input[field]).trim() === "" ? null : String(input[field]).trim();
+    }
+  }
+  for (const field of INVOICE_CHANNEL_SECRET_FIELDS) {
+    if (input[field] === undefined) continue; // keep existing secret
+    next[field] = input[field] === null ? null : encryptSecret(input[field]);
+  }
+  if (input.auto_send_enabled !== undefined) {
+    next.auto_send_enabled = input.auto_send_enabled === true || input.auto_send_enabled === "true";
+  }
+  return next;
+}
+
+function maskInvoiceChannelConfiguration(configuration = {}, plainFields) {
+  const masked = {};
+  for (const field of plainFields) {
+    masked[field] = configuration[field] || null;
+  }
+  for (const field of INVOICE_CHANNEL_SECRET_FIELDS) {
+    const value = decryptSecret(configuration[field]);
+    masked[field] = null;
+    masked[`${field}_configured`] = Boolean(value);
+    if (value && value.length > 4) {
+      masked[`${field}_masked`] = `\u2022\u2022\u2022\u2022${value.slice(-4)}`;
+    }
+  }
+  masked.auto_send_enabled = configuration.auto_send_enabled === true;
+  masked.configured = Boolean(
+    (masked.api_base_url || masked.smtp_host) && decryptSecret(configuration.auth_token || configuration.api_key)
+  );
+  return masked;
+}
+
+/** Load one invoice channel's integration row (providers: 'sms_invoice' | 'email_invoice'). */
+export async function loadInvoiceChannelConfig(db, companyId, provider) {
+  if (!companyId) return { enabled: false, configuration: {} };
+  const result = await db(
+    `SELECT active, configuration FROM integrations WHERE company_id = $1 AND provider = $2 LIMIT 1`,
+    [companyId, provider]
+  );
+  if (!result.rows.length) return { enabled: false, configuration: {} };
+  return { enabled: result.rows[0].active === true, configuration: result.rows[0].configuration || {} };
+}
+
+export function buildSmsInvoiceConfiguration(input = {}, existingConfiguration = {}) {
+  return buildInvoiceChannelConfiguration(input, existingConfiguration, SMS_PLAIN_FIELDS);
+}
+
+export function maskSmsInvoiceConfiguration(configuration = {}) {
+  return maskInvoiceChannelConfiguration(configuration, SMS_PLAIN_FIELDS);
+}
+
+export function buildEmailInvoiceConfiguration(input = {}, existingConfiguration = {}) {
+  return buildInvoiceChannelConfiguration(input, existingConfiguration, EMAIL_PLAIN_FIELDS);
+}
+
+export function maskEmailInvoiceConfiguration(configuration = {}) {
+  return maskInvoiceChannelConfiguration(configuration, EMAIL_PLAIN_FIELDS);
+}
+
+/** Mask an email address for logging: k***@d***.com - never the full address. */
+export function maskEmail(email) {
+  const raw = String(email || "").trim();
+  if (!raw || !raw.includes("@")) return ".....";
+  const [local, domain] = raw.split("@");
+  return `${local.slice(0, 1)}${"*".repeat(Math.max(1, Math.min(4, local.length - 1)))}@${domain.slice(0, 1)}${"*".repeat(Math.max(1, Math.min(4, domain.length - 1)))}`;
+}

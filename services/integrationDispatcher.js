@@ -86,6 +86,14 @@ async function loadSaleEntity(db, { companyId, storeId, entityId }) {
      ORDER BY si.id ASC`,
     [entityId]
   );
+  /* Payment breakdown comes from the real payments table (T9O: payment
+   * information where safely available). No card/transaction identifiers
+   * are exposed - only method, amount, provider name and status. */
+  const pays = await db(
+    `SELECT payment_method, amount, provider, status
+     FROM payments WHERE sale_id = $1 ORDER BY created_at ASC`,
+    [entityId]
+  );
   /*
    * Shape matches the T9E field catalogue exactly:
    * sales.sale_id, sales.customer.name, sales.customer.address.postcode,
@@ -96,6 +104,7 @@ async function loadSaleEntity(db, { companyId, storeId, entityId }) {
       sale_id: row.id,
       store_id: row.store_id,
       receipt_number: row.receipt_number,
+      sale_date: row.created_at,
       subtotal: Number(row.subtotal),
       tax: Number(row.tax),
       discount: Number(row.discount),
@@ -103,6 +112,12 @@ async function loadSaleEntity(db, { companyId, storeId, entityId }) {
       status: row.status,
       created_at: row.created_at,
       completed_at: row.completed_at,
+      payment_methods: pays.rows.map((pay) => ({
+        method: pay.payment_method,
+        amount: Number(pay.amount),
+        provider: pay.provider,
+        status: pay.status,
+      })),
       customer: row.customer_name
         ? {
             id: row.customer_id ?? null,
@@ -137,7 +152,7 @@ async function loadPurchaseEntity(db, { companyId, storeId, entityId }) {
   const purchase = await db(
     `SELECT p.id, p.company_id, p.store_id, p.supplier_id, p.reference_number, p.purchase_date,
             p.status, p.subtotal, p.total, p.supplier_name, p.created_at,
-            sup.name AS supplier_contact_name
+            sup.contact_name AS supplier_contact_name
      FROM purchases p
      LEFT JOIN suppliers sup ON sup.id = p.supplier_id
      WHERE p.id = $1 AND p.company_id = $2 ${storeClause}`,
@@ -169,6 +184,7 @@ async function loadPurchaseEntity(db, { companyId, storeId, entityId }) {
       supplier: {
         id: row.supplier_id,
         name: row.supplier_name || null,
+        contact: row.supplier_contact_name || null,
       },
       items: items.rows.map((item) => ({
         quantity: Number(item.quantity),
@@ -197,10 +213,12 @@ async function loadReturnEntity(db, { companyId, storeId, entityId }) {
     `SELECT sr.id, sr.company_id, sr.store_id, sr.return_type, sr.sale_id, sr.purchase_id,
             sr.reason, sr.created_at,
             s.receipt_number AS sale_receipt_number, s.total AS sale_total,
+            s.customer_id AS sale_customer_id, c.name AS sale_customer_name,
             p.reference_number AS purchase_reference, p.supplier_name,
             COALESCE(refund.total, 0) AS refund_total
      FROM stock_returns sr
      LEFT JOIN sales s ON s.id = sr.sale_id
+     LEFT JOIN customers c ON c.id = s.customer_id
      LEFT JOIN purchases p ON p.id = sr.purchase_id
      LEFT JOIN (
        SELECT sale_id, SUM(amount) AS total FROM refunds GROUP BY sale_id
@@ -231,6 +249,9 @@ async function loadReturnEntity(db, { companyId, storeId, entityId }) {
       reason: row.reason,
       refund_total: Number(row.refund_total) || 0,
       created_at: row.created_at,
+      customer: row.sale_customer_name
+        ? { id: row.sale_customer_id ?? null, name: row.sale_customer_name }
+        : null,
       items: items.rows.map((item) => ({
         quantity: Number(item.quantity),
         reason: item.reason,

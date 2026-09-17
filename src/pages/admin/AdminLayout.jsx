@@ -9,6 +9,7 @@ import InventoryAdmin from "../inventory/InventoryAdmin.jsx";
 import SettingsAdmin from "../settings/SettingsAdmin.jsx";
 import SuppliersAdmin from "../suppliers/SuppliersAdmin.jsx";
 import IntegrationsAdmin from "../integrations/IntegrationsAdmin.jsx";
+import AccountingAdmin from "../integrations/AccountingAdmin.jsx";
 import PurchasesAdmin from "../purchases/PurchasesAdmin.jsx";
 import SalesAdmin from "../sales/SalesAdmin.jsx";
 import ReportsAdmin from "../reports/ReportsAdmin.jsx";
@@ -117,8 +118,15 @@ export default function AdminLayout({ onPOS, onLogout, user = null, initialPage 
   const items = [
     ["Dashboard", Home],
     ["Sales", FileText],
-    ["Returns", RefreshCw],
-    ["Supplier Returns", RefreshCw],
+    /* T9M-SMALL: Returns respects the existing permission system —
+     * returns.view/returns.create for restricted roles, admin bypass. */
+    ...(onlinePermissions.isAdmin ||
+      onlinePermissions.permissions.includes("returns.view") ||
+      onlinePermissions.permissions.includes("returns.create")
+      ? [["Returns", RefreshCw]] : []),
+    ...(onlinePermissions.isAdmin ||
+      onlinePermissions.permissions.includes("returns.create")
+      ? [["Supplier Returns", RefreshCw]] : []),
     ["Products", Package],
     ["Categories", Tag],
     ["Purchases", Receipt],
@@ -133,13 +141,16 @@ export default function AdminLayout({ onPOS, onLogout, user = null, initialPage 
     /* T9F: Integration management — existing permission system (integration.manage, admin bypass). */
     ...(onlinePermissions.isAdmin || onlinePermissions.permissions.includes("integration.manage")
       ? [["Integrations", Plug]] : []),
+    /* T9O: Accounting Integration — same permission mechanism, accounting-focused UI. */
+    ...(onlinePermissions.isAdmin || onlinePermissions.permissions.includes("integration.manage")
+      ? [["Accounting", Calculator]] : []),
     ["Reports", BarChart3],
   ];
 
   return (
     <div className="h-screen bg-slate-100 flex relative">
       {/* SIDEBAR */}
-      <aside className="w-60 bg-slate-950 text-white shrink-0">
+      <aside className="w-60 bg-slate-950 text-white shrink-0" style={{ background: "linear-gradient(180deg, #103f3c 0%, #0d3431 100%)" }}>
         <div className="h-16 flex items-center px-5 border-b border-slate-800">
           <Calculator
             size={22}
@@ -165,8 +176,8 @@ export default function AdminLayout({ onPOS, onLogout, user = null, initialPage 
                     }}
                     className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-md mb-1 text-sm ${
                       reportsOpen
-                        ? "bg-slate-800 text-white"
-                        : "text-slate-300 hover:bg-slate-800"
+                        ? "bg-white/15 text-white"
+                        : "text-slate-200 hover:bg-white/10"
                     }`}
                   >
                     <Icon size={17} />
@@ -174,7 +185,7 @@ export default function AdminLayout({ onPOS, onLogout, user = null, initialPage 
                     {reportsOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
                   </button>
                   {reportsOpen && (
-                    <div className="ml-6 border-l border-slate-800 pl-2 mb-1">
+                    <div className="ml-6 border-l border-white/15 pl-2 mb-1">
                       {canViewOverview && (
                       <button
                         onClick={() => {
@@ -184,7 +195,7 @@ export default function AdminLayout({ onPOS, onLogout, user = null, initialPage 
                         className={`w-full text-left px-3 py-2 rounded-md mb-1 text-sm ${
                           page === "Reports"
                             ? "bg-blue-600 text-white"
-                            : "text-slate-300 hover:bg-slate-800"
+                            : "text-slate-200 hover:bg-white/10"
                         }`}
                       >
                         Overview
@@ -200,7 +211,7 @@ export default function AdminLayout({ onPOS, onLogout, user = null, initialPage 
                           className={`w-full text-left px-3 py-2 rounded-md mb-1 text-sm ${
                             page === item.key
                               ? "bg-blue-600 text-white"
-                              : "text-slate-300 hover:bg-slate-800"
+                              : "text-slate-200 hover:bg-white/10"
                           }`}
                         >
                           {item.title}
@@ -221,7 +232,7 @@ export default function AdminLayout({ onPOS, onLogout, user = null, initialPage 
                 className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-md mb-1 text-sm ${
                   page === name
                     ? "bg-blue-600 text-white"
-                    : "text-slate-300 hover:bg-slate-800"
+                    : "text-slate-200 hover:bg-white/10"
                 }`}
               >
                 <Icon size={17} />
@@ -250,7 +261,7 @@ export default function AdminLayout({ onPOS, onLogout, user = null, initialPage 
               onClick={openOnlineOrders}
               aria-label="Online Orders"
               title="Online Orders"
-              className="relative px-2.5 py-2 lg:px-4 bg-slate-800 text-white rounded-md text-sm hover:bg-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="relative px-2.5 py-2 lg:px-4 bg-slate-100 text-slate-800 border border-slate-200 rounded-md text-sm hover:bg-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500"
             >
               <span className="flex items-center gap-2">
                 <ShoppingBag size={16} />
@@ -322,7 +333,7 @@ export default function AdminLayout({ onPOS, onLogout, user = null, initialPage 
                       profileOpen ? "bg-slate-100 border-slate-300" : "border-slate-200 hover:bg-slate-50"
                     }`}
                   >
-                    <span className="w-7 h-7 shrink-0 rounded-full bg-slate-900 text-white text-[11px] font-semibold flex items-center justify-center uppercase">
+                    <span className="w-7 h-7 shrink-0 rounded-full bg-blue-700 text-white text-[11px] font-semibold flex items-center justify-center uppercase">
                       {initials}
                     </span>
                     <span className="hidden xl:block text-left leading-tight min-w-0">
@@ -461,6 +472,9 @@ export default function AdminLayout({ onPOS, onLogout, user = null, initialPage 
           ) : page ===
             "Integrations" ? (
             <IntegrationsAdmin />
+          ) : page ===
+            "Accounting" ? (
+            <AccountingAdmin storeId={user?.storeId || null} />
           ) : page ===
             "Online Orders" ? (
             <OnlineOrdersAdmin />

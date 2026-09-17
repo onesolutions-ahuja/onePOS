@@ -13,4 +13,256 @@ body,
 body {
   font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
     "Segoe UI", sans-serif;
+  color: #1d2429;
+  background: #f5f7f6;
+}
+
+/* ==========================================================================
+   onePOS app design system - shared component classes
+   All operational screens (login, POS/till, admin) draw from these tokens so
+   every page reads as one product. Palette: teal primary #176F6A, warm
+   off-white background, white cards, light grey-green borders.
+   ========================================================================== */
+
+@layer components {
+  /* ------------------------------ buttons ------------------------------ */
+
+  .onepos-btn {
+    @apply inline-flex items-center justify-center gap-1.5 rounded-md font-medium
+      transition-colors duration-150 outline-none select-none
+      focus-visible:ring-2 focus-visible:ring-offset-1
+      disabled:opacity-50 disabled:cursor-not-allowed disabled:pointer-events-none;
+    min-height: 36px;
+    padding: 0 14px;
+    font-size: 13.5px;
+  }
+
+  .onepos-btn-primary {
+    @apply bg-blue-600 text-white hover:bg-blue-700 active:bg-blue-800
+      focus-visible:ring-blue-500;
+  }
+
+  .onepos-btn-secondary {
+    @apply bg-white text-slate-800 border border-slate-300
+      hover:bg-slate-50 hover:border-slate-400
+      focus-visible:ring-blue-500;
+  }
+
+  .onepos-btn-danger {
+    @apply bg-red-600 text-white hover:bg-red-700 active:bg-red-800
+      focus-visible:ring-red-500;
+  }
+
+  /* Compact variant for dense toolbars and table action rows. */
+  .onepos-btn-sm {
+    min-height: 30px;
+    padding: 0 10px;
+    font-size: 12.5px;
+  }
+
+  /* ------------------------------- inputs ------------------------------ */
+
+  .onepos-input {
+    @apply bg-white text-slate-800 border border-slate-300 rounded-md
+      outline-none transition-shadow duration-150 placeholder:text-slate-400
+      focus:border-blue-500 focus:ring-2 focus:ring-blue-500/25
+      disabled:bg-slate-50 disabled:text-slate-400;
+    height: 36px;
+    padding: 0 10px;
+    font-size: 13.5px;
+    width: 100%;
+  }
+  textarea.onepos-input {
+    height: auto;
+    min-height: 68px;
+    padding: 8px 10px;
+  }
+  select.onepos-input {
+    @apply pr-8;
+  }
+  .onepos-input-error {
+    @apply border-red-400 focus:border-red-500 focus:ring-red-500/25;
+  }
+
+  .onepos-label {
+    @apply block text-slate-600;
+    font-size: 12.5px;
+    font-weight: 500;
+    margin-bottom: 4px;
+  }
+
+  /* ------------------------------- cards ------------------------------- */
+
+  .onepos-card {
+    @apply bg-white border border-slate-200 rounded-xl;
+    box-shadow: 0 1px 2px rgba(16, 42, 39, 0.05);
+  }
+  .onepos-card-header {
+    @apply px-4 py-3 border-b border-slate-200 flex items-center justify-between gap-3;
+  }
+  .onepos-card-title {
+    @apply font-semibold text-slate-800;
+    font-size: 14.5px;
+  }
+
+  /* ------------------------------- badges ------------------------------ */
+
+  .onepos-badge {
+    @apply inline-flex items-center gap-1 rounded-md px-2 py-0.5 font-medium whitespace-nowrap;
+    font-size: 11.5px;
+    line-height: 18px;
+  }
+  .onepos-badge-neutral {
+    @apply bg-slate-100 text-slate-700;
+  }
+  .onepos-badge-success {
+    @apply bg-blue-50 text-blue-700;
+  }
+  .onepos-badge-warning {
+    @apply bg-amber-50 text-amber-700;
+  }
+  .onepos-badge-danger {
+    @apply bg-red-50 text-red-700;
+  }
+  .onepos-badge-info {
+    @apply bg-blue-50 text-blue-700;
+  }
+
+  /* ------------------------------- tables ------------------------------ */
+
+  .onepos-table {
+    @apply w-full border-collapse;
+    font-size: 13px;
+  }
+  .onepos-table thead th {
+    @apply text-left font-semibold text-slate-500 uppercase bg-slate-50 border-b border-slate-200;
+    font-size: 11px;
+    letter-spacing: 0.03em;
+    padding: 8px 12px;
+  }
+  .onepos-table tbody td {
+    @apply border-b border-slate-100 text-slate-700 align-middle;
+    padding: 8px 12px;
+  }
+  .onepos-table tbody tr:hover {
+    @apply bg-blue-50/40;
+  }
+
+  /* ------------------------------- alerts ------------------------------ */
+
+  .onepos-alert {
+    @apply rounded-lg border px-3.5 py-2.5;
+    font-size: 13px;
+  }
+  .onepos-alert-success {
+    @apply bg-blue-50 border-blue-200 text-blue-700;
+  }
+  .onepos-alert-error {
+    @apply bg-red-50 border-red-200 text-red-700;
+  }
+  .onepos-alert-warning {
+    @apply bg-amber-50 border-amber-200 text-amber-800;
+  }
+  .onepos-alert-info {
+    @apply bg-blue-50 border-blue-200 text-blue-700;
+  }
+
+  /* ---------------------------- page headers --------------------------- */
+
+  .onepos-page-title {
+    @apply font-bold text-slate-900;
+    font-size: 19px;
+    line-height: 1.3;
+  }
+  .onepos-page-subtitle {
+    @apply text-slate-500;
+    font-size: 13px;
+    margin-top: 2px;
+  }
+  .onepos-section-title {
+    @apply font-semibold text-slate-800;
+    font-size: 14px;
+  }
+
+  /* ----------------------------- empty states -------------------------- */
+
+  .onepos-empty {
+    @apply flex flex-col items-center justify-center text-center text-slate-400;
+    padding: 36px 16px;
+  }
+  .onepos-empty-title {
+    @apply text-slate-600 font-medium;
+    font-size: 14px;
+  }
+
+  /* ------------------------------- tabs -------------------------------- */
+
+  .onepos-tab {
+    @apply px-3 py-2 whitespace-nowrap border-b-2 border-transparent text-slate-500
+      hover:text-slate-800 transition-colors outline-none
+      focus-visible:ring-2 focus-visible:ring-blue-500/40;
+    font-size: 13px;
+  }
+  .onepos-tab-active {
+    @apply border-blue-600 text-blue-700 font-medium;
+  }
+}
+
+/* ==========================================================================
+   Toggle switch - the one consistent ON/OFF control for binary settings.
+   The knob is a native checkbox so forms, labels and keyboard behaviour all
+   keep working; only the visual chrome is replaced.
+   ========================================================================== */
+
+.onepos-toggle {
+  position: relative;
+  display: inline-block;
+  width: 38px;
+  height: 22px;
+  flex-shrink: 0;
+}
+.onepos-toggle input {
+  opacity: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  position: absolute;
+  inset: 0;
+  cursor: pointer;
+}
+.onepos-toggle input:disabled {
+  cursor: not-allowed;
+}
+.onepos-toggle-track {
+  position: absolute;
+  inset: 0;
+  background: #cbd5d3;
+  border-radius: 999px;
+  transition: background 0.16s ease;
+  pointer-events: none;
+}
+.onepos-toggle-track::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #ffffff;
+  box-shadow: 0 1px 2px rgba(16, 42, 39, 0.25);
+  transition: transform 0.16s ease;
+}
+.onepos-toggle input:checked + .onepos-toggle-track {
+  background: #176f6a;
+}
+.onepos-toggle input:checked + .onepos-toggle-track::after {
+  transform: translateX(16px);
+}
+.onepos-toggle input:focus-visible + .onepos-toggle-track {
+  outline: 2px solid rgba(47, 138, 130, 0.55);
+  outline-offset: 2px;
+}
+.onepos-toggle input:disabled + .onepos-toggle-track {
+  opacity: 0.45;
 }

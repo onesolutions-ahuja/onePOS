@@ -24,7 +24,10 @@ const CATALOGUE = [
   { path: 'sales.subtotal', label: 'Sale subtotal', type: 'number', selectable: true, array: false },
   { path: 'sales.tax', label: 'Sale tax', type: 'number', selectable: true, array: false },
   { path: 'sales.discount', label: 'Sale discount', type: 'number', selectable: true, array: false },
-  { path: 'sales.payment_method', label: 'Payment method', type: 'string', selectable: true, array: false },
+  { path: 'sales.sale_date', label: 'Sale date', type: 'date', selectable: true, array: false },
+  { path: 'sales.payment_methods[].method', label: 'Payment method', type: 'string', selectable: true, array: true },
+  { path: 'sales.payment_methods[].amount', label: 'Payment amount', type: 'number', selectable: true, array: true },
+  { path: 'sales.payment_methods[].provider', label: 'Payment provider', type: 'string', selectable: true, array: true },
   { path: 'sales.customer.name', label: 'Customer name', type: 'string', selectable: true, array: false },
   { path: 'sales.customer.address.postcode', label: 'Customer postcode', type: 'string', selectable: true, array: false },
   { path: 'sales.items[].product.name', label: 'Item product name', type: 'string', selectable: true, array: true },
@@ -33,12 +36,16 @@ const CATALOGUE = [
   { path: 'sales.items[].quantity', label: 'Item quantity', type: 'number', selectable: true, array: true },
   { path: 'sales.items[].unit_price', label: 'Item unit price', type: 'number', selectable: true, array: true },
   { path: 'sales.items[].total', label: 'Item total', type: 'number', selectable: true, array: true },
+  { path: 'sales.items[].tax', label: 'Item tax', type: 'number', selectable: true, array: true },
+  { path: 'sales.items[].discount', label: 'Item discount', type: 'number', selectable: true, array: true },
 
   // ---- Purchase ----
   { path: 'purchase.purchase_id', label: 'Purchase ID', type: 'string', selectable: true, array: false },
+  { path: 'purchase.subtotal', label: 'Purchase subtotal', type: 'number', selectable: true, array: false },
   { path: 'purchase.reference_number', label: 'Purchase reference number', type: 'string', selectable: true, array: false },
   { path: 'purchase.purchase_date', label: 'Purchase date', type: 'date', selectable: true, array: false },
   { path: 'purchase.supplier.name', label: 'Supplier name', type: 'string', selectable: true, array: false },
+  { path: 'purchase.supplier.contact', label: 'Supplier contact', type: 'string', selectable: true, array: false },
   { path: 'purchase.items[].product.name', label: 'Purchase item product name', type: 'string', selectable: true, array: true },
   { path: 'purchase.items[].product.sku', label: 'Purchase item product SKU', type: 'string', selectable: true, array: true },
   { path: 'purchase.items[].product.ean', label: 'Purchase item product EAN', type: 'string', selectable: true, array: true },
@@ -60,6 +67,7 @@ const CATALOGUE = [
   { path: 'return.items[].product.sku', label: 'Return item product SKU', type: 'string', selectable: true, array: true },
   { path: 'return.items[].product.ean', label: 'Return item product EAN', type: 'string', selectable: true, array: true },
   { path: 'return.items[].reason', label: 'Return item reason', type: 'string', selectable: true, array: true },
+  { path: 'return.customer.name', label: 'Return customer name', type: 'string', selectable: true, array: false },
 ];
 
 /**

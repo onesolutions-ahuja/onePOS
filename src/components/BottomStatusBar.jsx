@@ -14,7 +14,7 @@ export default function BottomStatusBar({ storeName, till, children }) {
   const isTillOpen = till?.status === "open";
 
   return (
-    <div className="fixed bottom-0 left-0 right-0 h-10 bg-slate-800 border-t border-slate-700 text-xs text-slate-300 flex items-center px-3 gap-4 z-40">
+    <div className="fixed bottom-0 left-0 right-0 h-10 bg-slate-900 text-xs text-slate-300 flex items-center px-3 gap-4 z-40" style={{ background: "#104744" }}>
       <span className="text-slate-400">{day}</span>
       <span className="text-slate-400">{time}</span>
 
