@@ -19,6 +19,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { MessageCircle, RefreshCw, Save, ShieldCheck } from "lucide-react";
 import { apiRequest } from "../../../services/api.js";
+import { isNetworkError } from "../../../services/networkStatus.js";
+import { Toggle } from "../../../components/ui.jsx";
 
 /*
  * Compact recent-delivery list for the settings page. The API already
@@ -167,7 +169,11 @@ function WhatsAppSettings({ onMessage, onError }) {
       setTestResult(null);
       setTestToken(null);
     } catch (err) {
-      onError(err.message || "Unable to load WhatsApp settings");
+      onError(
+        isNetworkError(err)
+          ? "Cannot reach the onePOS server - check your connection (the server may be restarting)."
+          : err.message || "Unable to load WhatsApp settings"
+      );
     } finally {
       setLoading(false);
     }
@@ -221,20 +227,31 @@ function WhatsAppSettings({ onMessage, onError }) {
     }
   };
 
-  const save = async (activate) => {
+  /*
+   * Single save path used by the toggles and the action buttons. Explicit
+   * overrides win; omitted fields fall back to current state. The server
+   * stays authoritative: a rejected activation (fingerprint gate) surfaces
+   * its message and load() reverts the toggle.
+   */
+  const saveWith = async ({ enabled: enabledOverride, autoSendEnabled: autoOverride } = {}) => {
     if (saving) return;
-    if (activate && (!testResult?.success || credentialsChanged)) return;
+    const nextEnabled = enabledOverride !== undefined ? enabledOverride : enabled;
+    const nextAuto = autoOverride !== undefined ? autoOverride : form.autoSendEnabled === true;
+    if (enabledOverride === true && !enabled && !testToken) {
+      setTestResult({ success: false, message: "Run a successful connection test first, then switch WhatsApp ON." });
+      return;
+    }
     setSaving(true);
     try {
       const body = {
-        enabled: enabled || activate ? true : false,
+        enabled: nextEnabled,
         phoneNumberId: form.phoneNumberId || null,
         businessAccountId: form.businessAccountId || null,
         displayName: form.displayName || null,
         defaultCountryCode: form.defaultCountryCode || null,
         invoiceMessageTemplate: form.invoiceMessageTemplate || null,
         deliveryMode: form.deliveryMode === "pdf" ? "pdf" : "link",
-        autoSendEnabled: form.autoSendEnabled === true,
+        autoSendEnabled: nextAuto,
       };
       if (form.accessToken) body.accessToken = form.accessToken;
       if (form.webhookVerifyToken) body.webhookVerifyToken = form.webhookVerifyToken;
@@ -247,10 +264,29 @@ function WhatsAppSettings({ onMessage, onError }) {
       onMessage(data.message || "WhatsApp settings saved.");
       await load();
     } catch (err) {
-      onError(err.message || "Unable to save WhatsApp settings");
+      /* Distinguish "the server refused" from "we never reached the server":
+       * a transport failure reads as the raw browser "Failed to fetch", which
+       * tells the admin nothing - the server may simply be restarting. */
+      onError(
+        isNetworkError(err)
+          ? "Cannot reach the onePOS server - check your connection (the server may be restarting). No settings were changed."
+          : err.message || "Unable to save WhatsApp settings"
+      );
     } finally {
       setSaving(false);
     }
+  };
+
+  /* Header toggles: OFF always allowed (keeps credentials); ON needs a fresh
+   * successful test unless one just happened in this session. */
+  const onIntegrationToggle = (event) => {
+    const next = event.target.checked;
+    if (next === enabled) return;
+    if (next && !activationReady) {
+      setTestResult({ success: false, message: "Run a successful connection test first, then switch WhatsApp ON." });
+      return;
+    }
+    saveWith({ enabled: next });
   };
 
   const sendTestInvoice = async () => {
@@ -265,7 +301,11 @@ function WhatsAppSettings({ onMessage, onError }) {
       if (!data?.success) throw new Error(data?.message || "Test invoice failed");
       setTestInvoice(data.data || null);
     } catch (err) {
-      onError(err.message || "Unable to build the test invoice");
+      onError(
+        isNetworkError(err)
+          ? "Cannot reach the onePOS server - check your connection (the server may be restarting)."
+          : err.message || "Unable to build the test invoice"
+      );
     } finally {
       setTestInvoiceBusy(false);
     }
@@ -323,17 +363,14 @@ function WhatsAppSettings({ onMessage, onError }) {
 
   return (
     <div className="space-y-5 max-w-3xl">
-      {/* Header: status pills */}
+      {/* Header: integration ON/OFF + automatic sending, as separate controls */}
       <div className="bg-white border border-slate-200 rounded-xl p-5">
         <div className="flex items-center justify-between flex-wrap gap-3">
           <div className="flex items-center gap-2">
             <MessageCircle size={18} className="text-emerald-600" />
-            <h2 className="font-semibold">WhatsApp Business</h2>
+            <h2 className="font-semibold">WhatsApp Integration</h2>
           </div>
           <div className="flex items-center gap-2">
-            <span className={`px-2 py-1 rounded-full text-xs font-medium ${enabled ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-500"}`}>
-              {enabled ? "ON" : "OFF"}
-            </span>
             <span className={`px-2 py-1 rounded-full text-xs font-medium ${config.configured ? "bg-blue-50 text-blue-700" : "bg-slate-100 text-slate-500"}`}>
               {config.configured ? "Credentials configured" : "Not configured"}
             </span>
@@ -347,10 +384,48 @@ function WhatsAppSettings({ onMessage, onError }) {
             </button>
           </div>
         </div>
+
+        {/* Two separate, clearly labelled controls. */}
+        <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div className={`flex items-center justify-between gap-3 border rounded-lg px-4 py-3 ${enabled ? "border-emerald-200 bg-emerald-50/50" : "border-slate-200 bg-slate-50"}`}>
+            <div>
+              <div className="text-sm font-medium text-slate-800">WhatsApp Integration</div>
+              <div className="text-xs text-slate-500 mt-0.5">
+                {enabled ? "ON — invoices can be sent" : "OFF — run a connection test to switch on"}
+              </div>
+            </div>
+            <Toggle
+              checked={enabled}
+              disabled={saving || testing}
+              onChange={onIntegrationToggle}
+              aria-label="WhatsApp integration on/off"
+            />
+          </div>
+          <div className={`flex items-center justify-between gap-3 border rounded-lg px-4 py-3 ${form.autoSendEnabled ? "border-blue-200 bg-blue-50/50" : "border-slate-200 bg-slate-50"}`}>
+            <div>
+              <div className="text-sm font-medium text-slate-800">Automatic sending after sale</div>
+              <div className="text-xs text-slate-500 mt-0.5">
+                {form.autoSendEnabled ? "ON — every sale is sent automatically" : "OFF — manual sends and tests only"}
+              </div>
+            </div>
+            <Toggle
+              checked={form.autoSendEnabled === true}
+              disabled={saving || testing}
+              onChange={(event) => saveWith({ autoSendEnabled: event.target.checked })}
+              aria-label="Automatic sending after sale on/off"
+            />
+          </div>
+        </div>
+        {!enabled && (
+          <p className="text-xs text-amber-700 mt-3">
+            WhatsApp is currently OFF: manual test invoices and automatic sending are unavailable. Test the
+            connection below, then switch the integration ON — your credentials are kept either way.
+          </p>
+        )}
         <p className="text-xs text-slate-500 mt-2">
-          Credentials are stored encrypted (AES-256-GCM) and are never returned by the API. Connection must be
-          tested successfully before WhatsApp can be switched ON. Automatic invoice sending is OFF unless you
-          enable it below.
+          These are two separate controls: switching the integration ON does not enable automatic sending, and
+          automatic sending requires the integration to be ON. Credentials are stored encrypted (AES-256-GCM)
+          and are never returned by the API.
         </p>
       </div>
 
@@ -416,7 +491,7 @@ function WhatsAppSettings({ onMessage, onError }) {
             <>
               <button
                 type="button"
-                onClick={() => save(false)}
+                onClick={() => saveWith()}
                 disabled={saving}
                 className="h-9 px-4 bg-blue-600 text-white rounded-lg text-sm font-medium disabled:opacity-50 flex items-center gap-2"
               >
@@ -424,7 +499,7 @@ function WhatsAppSettings({ onMessage, onError }) {
               </button>
               <button
                 type="button"
-                onClick={() => save(false)}
+                onClick={() => saveWith({ enabled: false })}
                 disabled={saving}
                 className="h-9 px-4 border border-slate-300 rounded-lg text-sm hover:bg-slate-50 disabled:opacity-50"
               >
@@ -434,7 +509,7 @@ function WhatsAppSettings({ onMessage, onError }) {
           ) : (
             <button
               type="button"
-              onClick={() => save(true)}
+              onClick={() => saveWith({ enabled: true })}
               disabled={!activationReady || saving}
               title={activationReady ? "Save and activate WhatsApp" : "Run a successful connection test first"}
               className="h-9 px-4 bg-emerald-600 text-white rounded-lg text-sm font-medium disabled:opacity-40 disabled:cursor-not-allowed"
@@ -466,7 +541,8 @@ function WhatsAppSettings({ onMessage, onError }) {
             type="text"
             value={testSaleId}
             onChange={(event) => setTestSaleId(event.target.value)}
-            placeholder="Sale ID (optional for preview)"
+            placeholder="Receipt number or sale ID (optional for preview)"
+            title="Paste the receipt shown on the invoice (e.g. 01-20260917-0001) or the internal sale ID"
             className="h-9 px-3 border border-slate-200 rounded-lg text-sm w-64"
           />
           <button
@@ -499,7 +575,8 @@ function WhatsAppSettings({ onMessage, onError }) {
               type="text"
               value={testSaleId}
               onChange={(event) => setTestSaleId(event.target.value)}
-              placeholder="Sale ID (required for real send)"
+              placeholder="Receipt number or sale ID (required for real send)"
+              title="Paste the receipt shown on the invoice (e.g. 01-20260917-0001) or the internal sale ID"
               disabled={!enabled || testSendBusy}
               className="h-9 px-3 border border-slate-200 rounded-lg text-sm w-64 disabled:opacity-50"
             />
@@ -525,7 +602,8 @@ function WhatsAppSettings({ onMessage, onError }) {
             </p>
           )}
           <p className="text-xs text-slate-500 mt-2">
-            WhatsApp must be ON to test. Automatic sending is not required for a manual test — the message goes only to the number above.
+            Requires the WhatsApp Integration toggle (above) to be ON. Automatic sending is a separate setting and is
+            not needed for a manual test — the message goes only to the number above.
           </p>
         </div>
       </div>

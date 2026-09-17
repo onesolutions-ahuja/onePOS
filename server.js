@@ -7,6 +7,7 @@ import pg from "pg";
 import path from "path";
 import { fileURLToPath } from "url";
 import { initializeDatabase } from "./database/init.js";
+import { createAuditWriter } from "./services/auditLog.js";
 import createTillRouter from "./routes/till.js";
 import createCustomersRouter from "./routes/customers.js";
 import createProductsRouter from "./routes/products.js";
@@ -56,9 +57,7 @@ app.use(express.urlencoded({ limit: "10mb", extended: true }));
 /*
 |--------------------------------------------------------------------------
 | PostgreSQL
-|--------------------------------------------------------------------------
-*/
-
+|-------------------------------------------------------------------------- */
 const pool = process.env.DATABASE_URL
   ? new Pool({
       connectionString: process.env.DATABASE_URL,
@@ -98,6 +97,20 @@ if (pool) {
   });
 }
 
+/*
+ * Last-resort process guards: a single stray async rejection (fire-and-forget
+ * delivery, integration dispatch, a dropped socket mid-write) must never kill
+ * the till server - a dead backend shows up to every open POS screen as
+ * "Failed to fetch". Log with full stack and keep serving; Node's default
+ * behaviour for these events is to terminate the process.
+ */
+process.on("unhandledRejection", (reason) => {
+  console.error("Unhandled promise rejection (server kept alive):", reason);
+});
+process.on("uncaughtException", (error) => {
+  console.error("Uncaught exception (server kept alive):", error);
+});
+
 async function db(query, params = []) {
   if (!pool) {
     throw new Error("DATABASE_URL is not configured");
@@ -122,15 +135,12 @@ async function testPaymentTerminal(terminal) {
   return provider.testConnection(terminal);
 }
 
-async function writeAudit(companyId, userId, action, entityType, entityId, details = {}) {
-  await db(
-    `
-    INSERT INTO audit_logs (company_id, user_id, action, entity_type, entity_id, details)
-    VALUES ($1,$2,$3,$4,$5,$6)
-    `,
-    [companyId, userId, action, entityType, entityId, JSON.stringify(details)]
-  );
-}
+/*
+ * Audit logging must never break the operation being audited - see
+ * services/auditLog.js (unknown users are nulled to satisfy the FK; other
+ * failures are logged and swallowed so a committed business action stands).
+ */
+const writeAudit = createAuditWriter({ db });
 
 /*
 |--------------------------------------------------------------------------

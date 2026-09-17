@@ -11,12 +11,17 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import express from "express";
-import { encryptSecret } from "../services/onlineOrders/platformConfig.js";
+import { encryptSecret, decryptSecret } from "../services/onlineOrders/platformConfig.js";
+import { createAuditWriter } from "../services/auditLog.js";
+process.env.INVOICE_PUBLIC_BASE_URL = "https://pos.example.com";
+
 
 const COMPANY_A = "a0000000-0000-4000-8000-000000000001";
 const COMPANY_B = "b0000000-0000-4000-8000-000000000002";
 const STORE_1 = "c0000000-0000-4000-8000-000000000003";
 const USER = "u0000000-0000-4000-8000-000000000009";
+const USER_MISSING = "00000000-0000-4000-8000-0000000000d2"; // not in fake users
+const AUDIT_COMPANY_MISSING = "f0000000-0000-4000-8000-0000000000f1"; // FK-fails audit insert
 const SECRET_A = "EAAG-super-secret-token-987654321";
 const VERIFY_A = "verify-me-98765";
 
@@ -33,6 +38,17 @@ function makeApp({ companyId = COMPANY_A, storeId = STORE_1 } = {}) {
   const db = async (sql, params = []) => {
     state.sqlLog.push({ sql, params });
     // Whitespace-tolerant regexes: the service formats its SQL across lines.
+    if (/FROM\s+users\s+WHERE\s+id\s*=\s*\$1/i.test(sql)) {
+      // users table: only the seeded test user exists; unknown ids -> []
+      return { rows: params[0] === USER ? [{ id: USER }] : [] };
+    }
+    if (/INSERT INTO audit_logs/i.test(sql)) {
+      // [companyId, userId, action, entityType, entityId, detailsJson]
+      if (params[0] === AUDIT_COMPANY_MISSING) {
+        throw new Error('insert or update on table "audit_logs" violates foreign key constraint "audit_logs_company_id_fkey"');
+      }
+      return { rowCount: 1 };
+    }
     if (/FROM\s+integrations\s+WHERE\s+company_id\s*=\s*\$1\s+AND\s+provider\s*=\s*'whatsapp'/i.test(sql)) {
       return {
         rows:
@@ -50,8 +66,37 @@ function makeApp({ companyId = COMPANY_A, storeId = STORE_1 } = {}) {
     }
     if (/FROM\s+sales\b/i.test(sql)) {
       const sale = state.sale;
+      if (!sale) return { rows: [] };
+      // PostgreSQL simulation: a non-UUID string reaching a uuid comparison
+      // throws 22P02. If a receipt ever leaks into an id filter, tests fail
+      // loudly here instead of silently passing.
+      const idFilter = sql.match(/WHERE\s+(?:s\.)?id\s*=\s*\$(\d+)/i);
+      if (idFilter) {
+        const value = params[Number(idFilter[1]) - 1];
+        if (
+          value !== undefined &&
+          !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(value))
+        ) {
+          throw new Error(`invalid input syntax for type uuid: "${value}"`);
+        }
+      }
+      if (/receipt_number\s*=\s*\$/i.test(sql)) {
+        // Receipt resolver branch: [companyId(, storeId, receiptNumber, %like%)]
+        const receiptParam = params[params.length - 2];
+        const likeParam = params[params.length - 1];
+        const companyOk = sale.company_id === params[0];
+        const storeOk = params.length === 4 ? sale.store_id === params[1] : true;
+        const likeHit =
+          likeParam &&
+          String(sale.receipt_number || "")
+            .toLowerCase()
+            .includes(String(likeParam).replace(/%/g, "").toLowerCase());
+        const match = companyOk && storeOk && (sale.receipt_number === receiptParam || likeHit);
+        return { rows: match ? [sale] : [] };
+      }
+      // UUID-by-id shapes (resolver + loaders): [saleId, companyId(, storeId)]
       const match =
-        sale && sale.id === params[0] && sale.company_id === params[1] &&
+        sale.id === params[0] && sale.company_id === params[1] &&
         (params.length < 3 || sale.store_id === params[2]);
       return { rows: match ? [sale] : [] };
     }
@@ -78,13 +123,19 @@ function makeApp({ companyId = COMPANY_A, storeId = STORE_1 } = {}) {
       };
     },
   };
-  const writeAudit = async (companyId, userId, action, entityType, entityId, details) => {
-    state.audits.push({ companyId, userId, action, details });
-  };
+  /*
+   * REAL resilient audit writer (services/auditLog.js) over the fake db -
+   * the same code server.js runs in production. state.audits entries are
+   * produced by its onWrite sink; audit SQL appears in state.sqlLog.
+   */
+  const writeAudit = createAuditWriter({
+    db,
+    onWrite: (entry) => state.audits.push({ companyId: entry.companyId, userId: entry.userId, action: entry.action, details: entry.details }),
+  });
   return { state, db, pool, writeAudit, companyId, storeId };
 }
 
-async function buildServer(ctx) {
+async function buildServer(ctx, userId = USER) {
   const mod = await import("../routes/whatsapp.js");
   const app = express();
   app.use(express.json());
@@ -92,7 +143,7 @@ async function buildServer(ctx) {
   app.use(
     "/api",
     (req, _res, next) => {
-      req.user = { id: USER, companyId: ctx.companyId, storeId: ctx.storeId, role: "admin" };
+      req.user = { id: userId, companyId: ctx.companyId, storeId: ctx.storeId, role: "admin" };
       next();
     },
     mod.default({ db: ctx.db, pool: ctx.pool, authenticate: (_req, _res, next) => next(), authorize, writeAudit: ctx.writeAudit })
@@ -703,6 +754,288 @@ test("T9Q-SMALL-FIX: success path logs no secrets and no full phone numbers", as
     assert.ok(!dbJson.includes("+447700900123"), "full phone number in a db statement");
   } finally {
     restore();
+    server.close();
+  }
+});
+
+test("T9Q-SMALL-FIX-2: full lifecycle - test, save & activate, auto-send stays OFF, manual test send works", async () => {
+  const ctx = makeApp();
+  ctx.state.sale = { id: OWN_SALE, company_id: COMPANY_A, store_id: STORE_1 };
+  const app = await buildServer(ctx);
+  const { server, port } = await listen(app);
+  const restore = mockGraph(async (_url, options) => {
+    // Phone-number-id probe during test-connection, then the message send.
+    if (String(options?.body || "").includes("messaging_product")) {
+      return { ok: true, status: 200, json: async () => ({ messages: [{ id: "wamid.lifecycle" }] }) };
+    }
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({ id: "123456789012345", verified_name: "onePOS Demo" }),
+    };
+  });
+  try {
+    // 1. Successful connection test issues the activation reference.
+    const testRes = await fetch(`http://127.0.0.1:${port}/api/whatsapp/test-connection`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ phoneNumberId: "123456789012345", accessToken: SECRET_A }),
+    });
+    const testBody = await testRes.json();
+    const testToken = testBody.data?.testToken;
+    assert.ok(testToken, "connection test must issue a token");
+
+    // 2. Save & Activate turns the integration ON.
+    const putRes = await fetch(`http://127.0.0.1:${port}/api/whatsapp/settings`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        enabled: true,
+        phoneNumberId: "123456789012345",
+        accessToken: SECRET_A,
+        autoSendEnabled: false, // automatic sending stays OFF
+        testToken,
+      }),
+    });
+    const putBody = await putRes.json();
+    assert.equal(putRes.status, 200, JSON.stringify(putBody));
+    assert.equal(putBody.data.enabled, true, "save & activate must enable WhatsApp");
+
+    // 3. With auto-send OFF, the manual test send is ALLOWED.
+    const send = await postTestSend(port, { saleId: OWN_SALE, recipientPhone: "+447700900123" });
+    assert.equal(send.status, 200, JSON.stringify(send.body));
+    assert.equal(send.body.data.sent, true);
+
+    // 4. Automatic sending is still OFF afterwards.
+    const stored = JSON.parse(ctx.state.row.configuration);
+    assert.equal(stored.auto_send_enabled, false, "manual test must not enable automatic sending");
+    assert.equal(ctx.state.row.active, true, "integration still ON");
+  } finally {
+    restore();
+    server.close();
+  }
+});
+
+/* ============================================================================
+ * T9Q-SMALL-FIX (receipt resolution) - admins paste human-readable receipts
+ * like "Sale 01-20260917-0001"; the backend must resolve them tenant-scoped
+ * WITHOUT ever letting a receipt-shaped string reach a uuid comparison.
+ * ========================================================================== */
+
+const RECEIPT_SALE = "e0000000-0000-4000-8000-000000000007";
+
+function seedReceiptSale({ receipt = "01-20260917-0001", companyId = COMPANY_A, storeId = STORE_1 } = {}) {
+  return {
+    id: RECEIPT_SALE,
+    company_id: companyId,
+    store_id: storeId,
+    receipt_number: receipt,
+  };
+}
+
+test("receipt resolution: human-readable 'Sale 01-20260917-0001' resolves and the test send succeeds", async () => {
+  const ctx = makeApp();
+  ctx.state.row = seedActivatedWhatsApp({ autoSend: false });
+  ctx.state.sale = seedReceiptSale();
+  const app = await buildServer(ctx);
+  const { server, port } = await listen(app);
+  const restore = mockGraph(async () => ({ ok: true, status: 200, json: async () => ({ messages: [{ id: "wamid.receipt" }] }) }));
+  try {
+    const { status, body } = await postTestSend(port, { saleId: "Sale 01-20260917-0001", recipientPhone: "+447700900123" });
+    assert.equal(status, 200, JSON.stringify(body));
+    assert.equal(body.data.sent, true);
+    // The link must have been created for the resolved UUID sale.
+    assert.equal(ctx.state.secureLinkInserts.at(-1)?.saleId, RECEIPT_SALE);
+  } finally {
+    restore();
+    server.close();
+  }
+});
+
+test("receipt resolution: a bare receipt number and a UUID both still work", async () => {
+  const ctx = makeApp();
+  ctx.state.row = seedActivatedWhatsApp({ autoSend: false });
+  ctx.state.sale = seedReceiptSale();
+  const app = await buildServer(ctx);
+  const { server, port } = await listen(app);
+  const restore = mockGraph(async () => ({ ok: true, status: 200, json: async () => ({ messages: [{ id: "wamid.x" }] }) }));
+  try {
+    const bare = await postTestSend(port, { saleId: "01-20260917-0001", recipientPhone: "+447700900123" });
+    assert.equal(bare.status, 200, JSON.stringify(bare.body));
+    const byUuid = await postTestSend(port, { saleId: RECEIPT_SALE, recipientPhone: "+447700900123" });
+    assert.equal(byUuid.status, 200, JSON.stringify(byUuid.body));
+  } finally {
+    restore();
+    server.close();
+  }
+});
+
+test("receipt resolution: invalid/unknown receipt -> generic 404", async () => {
+  const ctx = makeApp();
+  ctx.state.row = seedActivatedWhatsApp({ autoSend: false });
+  ctx.state.sale = seedReceiptSale();
+  const app = await buildServer(ctx);
+  const { server, port } = await listen(app);
+  const restore = mockGraph(async () => ({ ok: true, status: 200, json: async () => ({}) }));
+  try {
+    const unknown = await postTestSend(port, { saleId: "Sale 01-2099-9999", recipientPhone: "+447700900123" });
+    assert.equal(unknown.status, 404);
+    const junk = await postTestSend(port, { saleId: "not a sale reference at all", recipientPhone: "+447700900123" });
+    assert.equal(junk.status, 404);
+  } finally {
+    restore();
+    server.close();
+  }
+});
+
+test("receipt resolution: foreign company receipt -> 404", async () => {
+  const ctx = makeApp();
+  ctx.state.row = seedActivatedWhatsApp({ autoSend: false });
+  ctx.state.sale = seedReceiptSale({ companyId: COMPANY_B }); // receipt exists, wrong company
+  const app = await buildServer(ctx);
+  const { server, port } = await listen(app);
+  const restore = mockGraph(async () => ({ ok: true, status: 200, json: async () => ({}) }));
+  try {
+    const { status } = await postTestSend(port, { saleId: "Sale 01-20260917-0001", recipientPhone: "+447700900123" });
+    assert.equal(status, 404);
+  } finally {
+    restore();
+    server.close();
+  }
+});
+
+test("receipt resolution: foreign store receipt -> 404 for store-scoped sessions", async () => {
+  const ctx = makeApp();
+  ctx.state.row = seedActivatedWhatsApp({ autoSend: false });
+  ctx.state.sale = seedReceiptSale({ storeId: "d0000000-0000-4000-8000-000000000009" }); // other store
+  const app = await buildServer(ctx);
+  const { server, port } = await listen(app);
+  const restore = mockGraph(async () => ({ ok: true, status: 200, json: async () => ({}) }));
+  try {
+    const { status } = await postTestSend(port, { saleId: "Sale 01-20260917-0001", recipientPhone: "+447700900123" });
+    assert.equal(status, 404);
+  } finally {
+    restore();
+    server.close();
+  }
+});
+
+test("receipt resolution: receipt-shaped strings never reach a uuid cast (22P02 simulation)", async () => {
+  const ctx = makeApp();
+  ctx.state.row = seedActivatedWhatsApp({ autoSend: false });
+  ctx.state.sale = seedReceiptSale();
+  const app = await buildServer(ctx);
+  const { server, port } = await listen(app);
+  const restore = mockGraph(async () => ({ ok: true, status: 200, json: async () => ({ messages: [{ id: "wamid.cast" }] }) }));
+  try {
+    const hostileInputs = [
+      "Sale 01-20260917-0001",
+      "01-20260917-0001",
+      "'; DROP TABLE sales; --",
+      "00000000-0000-4000-8000-not-a-uuid",
+    ];
+    for (const input of hostileInputs) {
+      const { status } = await postTestSend(port, { saleId: input, recipientPhone: "+447700900123" });
+      assert.notEqual(status, 500, `"${input}" must never trigger a server error (uuid cast)`);
+      if (input.includes("01-20260917-0001")) {
+        assert.equal(status, 200, `"${input}" should resolve`);
+      }
+    }
+    // And no db statement ever carried a non-uuid into an id comparison:
+    // the fake db throws 22P02 if one had - reaching here proves it didn't.
+  } finally {
+    restore();
+    server.close();
+  }
+});
+
+/* ============================================================================
+ * T9Q-LIVE-FIX-4 - WhatsApp settings PUT crashed with 500 when the audit
+ * write failed (audit_logs_user_id_fkey: actor not present in users). These
+ * regressions pin the resilience contract of services/auditLog.js:
+ * unknown actors are nulled, audit failures never fail the request, and a
+ * settings save persists the integration row even when auditing breaks.
+ * ==========================================================================*/
+
+function seedEnabledRow(companyId = COMPANY_A) {
+  return {
+    company_id: companyId,
+    active: true,
+    configuration: JSON.stringify({
+      phone_number_id: "123456789012345",
+      access_token: encryptSecret(SECRET_A),
+      auto_send_enabled: true,
+    }),
+  };
+}
+
+const putSettings = async (port, body) => {
+  const res = await fetch(`http://127.0.0.1:${port}/api/whatsapp/settings`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  return { status: res.status, body: await res.json().catch(() => ({})) };
+};
+
+test("T9Q-LIVE-FIX-4: save with an unknown actor user succeeds and nulls the audit user_id", async () => {
+  const ctx = makeApp();
+  ctx.state.row = seedEnabledRow();
+  const app = await buildServer(ctx, USER_MISSING);
+  const { server, port } = await listen(app);
+  try {
+    const { status, body } = await putSettings(port, { enabled: false });
+    assert.equal(status, 200, `PUT must succeed despite unknown actor: ${body.message}`);
+    assert.equal(body.success, true);
+    assert.equal(ctx.state.row.active, false, "integration must be saved as OFF");
+
+    const saved = ctx.state.audits.filter((a) => a.action === "whatsapp_settings_saved");
+    assert.equal(saved.length, 1, "audit entry must be persisted");
+    assert.equal(saved[0].userId, null, "unknown actor must be nulled, not FK-violated");
+  } finally {
+    server.close();
+  }
+});
+
+test("T9Q-LIVE-FIX-4: audit insert failure never fails the settings PUT", async () => {
+  // AUDIT_COMPANY_MISSING makes every audit_logs INSERT throw (FK) - the PUT
+  // must still succeed and still persist the integrations row.
+  const ctx = makeApp({ companyId: AUDIT_COMPANY_MISSING });
+  ctx.state.row = seedEnabledRow(AUDIT_COMPANY_MISSING);
+  const app = await buildServer(ctx);
+  const { server, port } = await listen(app);
+  try {
+    const { status } = await putSettings(port, { enabled: false });
+    assert.equal(status, 200, "audit failure must not fail the request");
+    assert.equal(ctx.state.row.active, false, "integration row must still be saved");
+    assert.equal(ctx.state.audits.length, 0, "failed audit write is swallowed (no entry)");
+  } finally {
+    server.close();
+  }
+});
+
+test("T9Q-LIVE-FIX-4: writeAudit resolves (never throws) when the db write fails", async () => {
+  const ctx = makeApp();
+  await assert.doesNotReject(
+    ctx.writeAudit(AUDIT_COMPANY_MISSING, USER, "whatsapp_settings_saved", "integration", null, {})
+  );
+  assert.equal(ctx.state.audits.length, 0);
+});
+
+test("T9Q-LIVE-FIX-4: toggling OFF keeps credentials and auto-send configuration intact", async () => {
+  const ctx = makeApp();
+  ctx.state.row = seedEnabledRow();
+  const app = await buildServer(ctx);
+  const { server, port } = await listen(app);
+  try {
+    const { status } = await putSettings(port, { enabled: false });
+    assert.equal(status, 200);
+    const cfg = JSON.parse(ctx.state.row.configuration);
+    assert.match(String(cfg.access_token), /^enc:v1:/, "stored credential must remain the encrypted ciphertext");
+    assert.equal(decryptSecret(cfg.access_token), SECRET_A, "ciphertext must still decrypt to the same secret - preserved, not re-encrypted or cleared");
+    assert.equal(cfg.auto_send_enabled, true, "auto-send must be a separate, untouched setting");
+    assert.equal(ctx.state.row.active, false);
+  } finally {
     server.close();
   }
 });
