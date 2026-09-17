@@ -10,6 +10,7 @@ import { initializeDatabase } from "./database/init.js";
 import createTillRouter from "./routes/till.js";
 import createCustomersRouter from "./routes/customers.js";
 import createProductsRouter from "./routes/products.js";
+import createEanLookupRouter from "./routes/eanLookup.js";
 import createSuppliersRouter from "./routes/suppliers.js";
 import createPurchasesRouter from "./routes/purchases.js";
 import createInventoryRouter from "./routes/inventory.js";
@@ -18,6 +19,7 @@ import createReturnsRouter from "./routes/returns.js";
 import createReportsRouter from "./routes/reports.js";
 import createSettingsRouter from "./routes/settings.js";
 import createAdminRouter from "./routes/admin.js";
+import createIntegrationsRouter from "./routes/integrations.js";
 import createDashboardRouter from "./routes/dashboard.js";
 import createOnlineRouter from "./routes/online.js";
 
@@ -720,6 +722,8 @@ app.use(
 |--------------------------------------------------------------------------
 */
 
+app.use("/api", createEanLookupRouter({ authenticate, db }));
+
 app.use("/api", createDashboardRouter({ authenticate, db }));
 
 app.use("/api", createSettingsRouter({ authenticate, db, pool, writeAudit, testPaymentTerminal }));
@@ -856,6 +860,21 @@ app.use(
     pool,
     writeAudit,
     createInventoryMovement,
+  })
+);
+
+/*
+| T9A - generic integration foundation (provider-agnostic). Credentials are
+| encrypted at rest; no Sales/Purchases data is sent anywhere by this module.
+*/
+app.use(
+  "/api",
+  createIntegrationsRouter({
+    authenticate,
+    authorize,
+    db,
+    pool,
+    writeAudit,
   })
 );
 

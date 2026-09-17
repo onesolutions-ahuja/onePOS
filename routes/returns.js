@@ -1,4 +1,5 @@
 import express from "express";
+import { dispatchIntegrationEvent } from "../services/integrationDispatcher.js";
 
 export default function createReturnsRouter({
   authenticate,
@@ -90,6 +91,17 @@ export default function createReturnsRouter({
       }
 
       await client.query("COMMIT");
+
+      /* T9G: fire-and-forget integration dispatch (never blocks/throws). */
+      if (returnType === "CUSTOMER") {
+        dispatchIntegrationEvent({
+          event: "SALES_RETURN_CREATED",
+          deps: { db },
+          context: { companyId: req.user.companyId, storeId: req.user.storeId },
+          entityId: returnId,
+        }).catch(() => {});
+      }
+
       const responseData = { id: returnId };
       if (refundAmount > 0) responseData.refund = { amount: refundAmount, payment_method: refundPaymentMethod };
       res.status(201).json({ success: true, message: "Return processed", data: responseData });

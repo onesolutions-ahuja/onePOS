@@ -1,4 +1,5 @@
 import express from "express";
+import { dispatchIntegrationEvent } from "../services/integrationDispatcher.js";
 
 export default function createPurchasesRouter({
   authenticate,
@@ -109,14 +110,27 @@ export default function createPurchasesRouter({
       });
     }
 
-    await client.query(
+    /*
+     * Final status check and update must be atomic: the WHERE clause is
+     * re-evaluated at UPDATE time inside this transaction, so a concurrent
+     * receive (or the receiveNow path) can never push stock twice. If the
+     * row was already received after our FOR UPDATE snapshot read, zero
+     * rows update and we reject with ALREADY_RECEIVED.
+     */
+    const receiveUpdate = await client.query(
       `
     UPDATE purchases
     SET status = 'RECEIVED', received_by = $1, received_at = NOW(), updated_at = NOW()
-    WHERE id = $2 AND company_id = $3
+    WHERE id = $2 AND company_id = $3 AND status = 'DRAFT'
     `,
       [userId, purchaseId, companyId]
     );
+
+    if (receiveUpdate.rowCount !== 1) {
+      const duplicateError = new Error("Purchase has already been received");
+      duplicateError.code = "ALREADY_RECEIVED";
+      throw duplicateError;
+    }
   }
 
   /*
@@ -347,6 +361,26 @@ export default function createPurchasesRouter({
         }
 
         await client.query("COMMIT");
+
+        /*
+         * T9G: fire-and-forget integration dispatch (never blocks/throws).
+         * A create-and-receive fires both events, matching the lifecycle.
+         */
+        dispatchIntegrationEvent({
+          event: "PURCHASE_CREATED",
+          deps: { db },
+          context: { companyId: req.user.companyId, storeId: storeId || req.user.storeId },
+          entityId: purchaseId,
+        }).catch(() => {});
+        if (receiveNow) {
+          dispatchIntegrationEvent({
+            event: "PURCHASE_RECEIVED",
+            deps: { db },
+            context: { companyId: req.user.companyId, storeId: storeId || req.user.storeId },
+            entityId: purchaseId,
+          }).catch(() => {});
+        }
+
         res
           .status(201)
           .json({
@@ -398,6 +432,15 @@ export default function createPurchasesRouter({
           req.user.storeId
         );
         await client.query("COMMIT");
+
+        /* T9G: fire-and-forget integration dispatch (never blocks/throws). */
+        dispatchIntegrationEvent({
+          event: "PURCHASE_RECEIVED",
+          deps: { db },
+          context: { companyId: req.user.companyId, storeId: req.user.storeId },
+          entityId: req.params.id,
+        }).catch(() => {});
+
         res.json({
           success: true,
           message: "Stock received",

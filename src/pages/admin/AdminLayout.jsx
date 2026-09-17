@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useState } from "react";
-import { BarChart3, Bell, Calculator, CreditCard, FileText, Grid3X3, Home, LogOut, Package, Percent, Receipt, RefreshCw, Settings, ShoppingBag, Store, Tag, Users, X } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { BarChart3, Bell, Calculator, ChevronDown, ChevronUp, CreditCard, FileText, Grid3X3, Home, LogOut, Package, Percent, Plug, Receipt, RefreshCw, Settings, ShoppingBag, Store, Tag, UserCircle, Users, X } from "lucide-react";
 import { apiRequest } from "../../services/api.js";
 import BottomStatusBar from "../../components/BottomStatusBar.jsx";
 import Dashboard from "../dashboard/Dashboard.jsx";
@@ -8,16 +8,71 @@ import CategoriesAdmin from "../categories/CategoriesAdmin.jsx";
 import InventoryAdmin from "../inventory/InventoryAdmin.jsx";
 import SettingsAdmin from "../settings/SettingsAdmin.jsx";
 import SuppliersAdmin from "../suppliers/SuppliersAdmin.jsx";
+import IntegrationsAdmin from "../integrations/IntegrationsAdmin.jsx";
 import PurchasesAdmin from "../purchases/PurchasesAdmin.jsx";
 import SalesAdmin from "../sales/SalesAdmin.jsx";
 import ReportsAdmin from "../reports/ReportsAdmin.jsx";
+import ReportPage, { REPORT_MENU_ITEMS } from "../reports/ReportPage.jsx";
 import ReturnsAdmin, { SupplierReturnsAdmin } from "../returns/ReturnsAdmin.jsx";
 import CustomersAdmin from "../customers/CustomersAdmin.jsx";
 import OnlineOrdersAdmin from "../online/OnlineOrdersAdmin.jsx";
+import OnlineOrdersPrep from "../online/OnlineOrdersPrep.jsx";
 
-export default function AdminLayout({ onPOS, onLogout, initialPage = "Dashboard" }) {
+export default function AdminLayout({ onPOS, onLogout, user = null, initialPage = "Dashboard" }) {
   const [page, setPage] = useState(initialPage);
+
+  /* Compact top-bar profile menu (T5B). Data comes from the existing session
+     user prop — no extra API call. Profile opens the existing "Users &
+     Permissions" settings tab (change password / user management); Settings
+     reuses the same navigation action as the T5A gear button. */
+  const [profileOpen, setProfileOpen] = useState(false);
+  const profileRef = useRef(null);
+  useEffect(() => {
+    if (!profileOpen) return undefined;
+    const handlePointerDown = (event) => {
+      if (profileRef.current && !profileRef.current.contains(event.target)) setProfileOpen(false);
+    };
+    const handleKeyDown = (event) => {
+      if (event.key === "Escape") setProfileOpen(false);
+    };
+    document.addEventListener("mousedown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [profileOpen]);
+
+  const [onlinePermissions, setOnlinePermissions] = useState({ isAdmin: false, permissions: [] });
+  useEffect(() => {
+    apiRequest("/api/auth/me/permissions").then((data) => {
+      if (data.success) setOnlinePermissions(data.data);
+    }).catch((error) => console.error("Online order permissions:", error));
+  }, []);
   const [productCreateRequested, setProductCreateRequested] = useState(false);
+  const [reportsOpen, setReportsOpen] = useState(initialPage === "Reports");
+  /* Which tab the existing Settings page opens on (gear = General, profile menu = Users & Permissions). */
+  const [settingsTab, setSettingsTab] = useState("General");
+
+  /*
+   * Reports submenu visibility — reuses the EXISTING permission model from
+   * /api/auth/me/permissions (the same session data Order Prep uses):
+   * Administrator/Admin/Owner roles bypass permission checks entirely via the
+   * isAdmin flag (mirroring the server-side authorize() helper); every other
+   * role needs the matching seeded permission code(s). Item requirements come
+   * from REPORT_MENU_ITEMS: string = one required code, array = any-of.
+   */
+  const canViewReport = useCallback((permission) => {
+    if (onlinePermissions.isAdmin) return true;
+    if (!permission) return true;
+    const codes = Array.isArray(permission) ? permission : [permission];
+    return codes.some((code) => onlinePermissions.permissions.includes(code));
+  }, [onlinePermissions]);
+
+  const visibleReportItems = REPORT_MENU_ITEMS.filter((item) => canViewReport(item.permission));
+  /* Overview renders the full sales summary, so it requires report.view too. */
+  const canViewOverview = canViewReport("report.view");
+  const canViewReports = canViewOverview || visibleReportItems.length > 0;
 
   /* Non-blocking online-order notifications (Uber Eats / Deliveroo). */
   const [onlineOrderCount, setOnlineOrderCount] = useState(0);
@@ -73,8 +128,12 @@ export default function AdminLayout({ onPOS, onLogout, initialPage = "Dashboard"
     ["Employees", Users],
     ["Stores", Store],
     ["Payments", CreditCard],
+    ...(onlinePermissions.isAdmin || onlinePermissions.permissions.includes("online_orders.view")
+      ? [["Order Prep", ShoppingBag]] : []),
+    /* T9F: Integration management — existing permission system (integration.manage, admin bypass). */
+    ...(onlinePermissions.isAdmin || onlinePermissions.permissions.includes("integration.manage")
+      ? [["Integrations", Plug]] : []),
     ["Reports", BarChart3],
-    ["Settings", Settings],
   ];
 
   return (
@@ -93,8 +152,66 @@ export default function AdminLayout({ onPOS, onLogout, initialPage = "Dashboard"
         </div>
 
         <div className="p-3 overflow-y-auto" style={{ height: "calc(100vh - 64px)" }}>
-          {items.map(
-            ([name, Icon]) => (
+          {items.map(([name, Icon]) => {
+            if (name === "Reports") {
+              /* Hide the whole Reports section when nothing is accessible. */
+              if (!canViewReports) return null;
+              return (
+                <div key={name}>
+                  <button
+                    onClick={() => {
+                      setProductCreateRequested(false);
+                      setReportsOpen((open) => !open);
+                    }}
+                    className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-md mb-1 text-sm ${
+                      reportsOpen
+                        ? "bg-slate-800 text-white"
+                        : "text-slate-300 hover:bg-slate-800"
+                    }`}
+                  >
+                    <Icon size={17} />
+                    <span className="flex-1 text-left">Reports</span>
+                    {reportsOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                  </button>
+                  {reportsOpen && (
+                    <div className="ml-6 border-l border-slate-800 pl-2 mb-1">
+                      {canViewOverview && (
+                      <button
+                        onClick={() => {
+                          setProductCreateRequested(false);
+                          setPage("Reports");
+                        }}
+                        className={`w-full text-left px-3 py-2 rounded-md mb-1 text-sm ${
+                          page === "Reports"
+                            ? "bg-blue-600 text-white"
+                            : "text-slate-300 hover:bg-slate-800"
+                        }`}
+                      >
+                        Overview
+                      </button>
+                      )}
+                      {visibleReportItems.map((item) => (
+                        <button
+                          key={item.key}
+                          onClick={() => {
+                            setProductCreateRequested(false);
+                            setPage(item.key);
+                          }}
+                          className={`w-full text-left px-3 py-2 rounded-md mb-1 text-sm ${
+                            page === item.key
+                              ? "bg-blue-600 text-white"
+                              : "text-slate-300 hover:bg-slate-800"
+                          }`}
+                        >
+                          {item.title}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            }
+            return (
               <button
                 key={name}
                 onClick={() => {
@@ -110,32 +227,34 @@ export default function AdminLayout({ onPOS, onLogout, initialPage = "Dashboard"
                 <Icon size={17} />
                 {name}
               </button>
-            )
-          )}
+            );
+          })}
         </div>
       </aside>
 
       {/* MAIN */}
       <main className="flex-1 min-w-0 flex flex-col">
-        <header className="h-16 bg-white border-b flex items-center justify-between px-6 shrink-0">
-          <div>
-            <div className="font-semibold">
+        <header className="h-14 bg-white border-b flex items-center justify-between gap-3 px-4 lg:px-6 shrink-0">
+          <div className="min-w-0">
+            <div className="font-semibold truncate">
               {page}
             </div>
 
-            <div className="text-xs text-slate-400">
+            <div className="text-xs text-slate-400 hidden xl:block">
               London Store
             </div>
           </div>
 
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-1.5 lg:gap-3 shrink-0">
             <button
               onClick={openOnlineOrders}
-              className="relative px-4 py-2 bg-slate-800 text-white rounded-md text-sm hover:bg-slate-700"
+              aria-label="Online Orders"
+              title="Online Orders"
+              className="relative px-2.5 py-2 lg:px-4 bg-slate-800 text-white rounded-md text-sm hover:bg-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
             >
               <span className="flex items-center gap-2">
                 <ShoppingBag size={16} />
-                Online Orders
+                <span className="hidden lg:inline">Online Orders</span>
                 {onlineOrderCount > 0 && (
                   <span className="absolute -top-1.5 -right-1.5 min-w-[18px] h-[18px] px-1 bg-red-600 text-white text-[11px] font-bold rounded-full flex items-center justify-center">
                     {onlineOrderCount > 99 ? "99+" : onlineOrderCount}
@@ -146,17 +265,125 @@ export default function AdminLayout({ onPOS, onLogout, initialPage = "Dashboard"
 
             <button
               onClick={onPOS}
-              className="px-4 py-2 bg-blue-600 text-white rounded-md text-sm hover:bg-blue-700"
+              aria-label="Open Till"
+              title="Open Till"
+              className="px-2.5 py-2 lg:px-4 bg-blue-600 text-white rounded-md text-sm hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
             >
-              Open Till
+              <span className="flex items-center gap-2">
+                <Store size={16} />
+                <span className="hidden lg:inline">Open Till</span>
+              </span>
+            </button>
+
+            <button
+              onClick={() => {
+                setProductCreateRequested(false);
+                setSettingsTab("General");
+                setPage("Settings");
+              }}
+              title="Settings"
+              aria-label="Settings"
+              className={`p-2 hover:bg-slate-100 rounded focus:outline-none focus:ring-2 focus:ring-blue-500 ${
+                page === "Settings" ? "bg-slate-100 text-slate-900" : "text-slate-600"
+              }`}
+            >
+              <Settings size={18} />
             </button>
 
             <button
               onClick={onLogout}
-              className="p-2 hover:bg-slate-100 rounded"
+              aria-label="Log out"
+              title="Log out"
+              className="p-2 hover:bg-slate-100 rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
             >
               <LogOut size={18} />
             </button>
+
+            {/* Compact user/profile menu — reuses the existing session user prop. */}
+            {(() => {
+              const displayName = user?.fullName || user?.name || user?.username || "User";
+              const roleLabel = user?.role || "";
+              const initials = displayName
+                .split(/\s+/)
+                .filter(Boolean)
+                .slice(0, 2)
+                .map((part) => part[0])
+                .join("")
+                .toUpperCase() || "?";
+              return (
+                <div className="relative" ref={profileRef}>
+                  <button
+                    onClick={() => setProfileOpen((open) => !open)}
+                    aria-haspopup="menu"
+                    aria-expanded={profileOpen}
+                    aria-label="User menu"
+                    title={displayName}
+                    className={`flex items-center gap-2 pl-1.5 pr-1.5 py-1 rounded-md border text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 ${
+                      profileOpen ? "bg-slate-100 border-slate-300" : "border-slate-200 hover:bg-slate-50"
+                    }`}
+                  >
+                    <span className="w-7 h-7 shrink-0 rounded-full bg-slate-900 text-white text-[11px] font-semibold flex items-center justify-center uppercase">
+                      {initials}
+                    </span>
+                    <span className="hidden xl:block text-left leading-tight min-w-0">
+                      <span className="block font-medium text-slate-800 max-w-[140px] truncate">{displayName}</span>
+                      {roleLabel && <span className="block text-[11px] text-slate-400 max-w-[140px] truncate">{roleLabel}</span>}
+                    </span>
+                    <ChevronDown size={14} className="text-slate-400 shrink-0" />
+                  </button>
+
+                  {profileOpen && (
+                    <div
+                      role="menu"
+                      aria-label="User menu"
+                      className="absolute right-0 top-full mt-2 w-56 bg-white border border-slate-200 rounded-lg shadow-lg py-1 z-50"
+                    >
+                      <div className="px-3 py-2 border-b border-slate-100">
+                        <div className="text-sm font-semibold text-slate-800 truncate">{displayName}</div>
+                        <div className="text-xs text-slate-500 truncate">
+                          {user?.username || ""}{user?.storeName ? ` · ${user.storeName}` : ""}
+                        </div>
+                      </div>
+                      <button
+                        role="menuitem"
+                        onClick={() => {
+                          setProfileOpen(false);
+                          setProductCreateRequested(false);
+                          setSettingsTab("Users & Permissions");
+                          setPage("Settings");
+                        }}
+                        className="w-full text-left px-3 py-2 text-sm text-slate-700 hover:bg-slate-50 flex items-center gap-2"
+                      >
+                        <UserCircle size={15} /> Profile
+                      </button>
+                      <button
+                        role="menuitem"
+                        onClick={() => {
+                          setProfileOpen(false);
+                          setProductCreateRequested(false);
+                          setSettingsTab("General");
+                          setPage("Settings");
+                        }}
+                        className="w-full text-left px-3 py-2 text-sm text-slate-700 hover:bg-slate-50 flex items-center gap-2"
+                      >
+                        <Settings size={15} /> Settings
+                      </button>
+                      <div className="border-t border-slate-100 my-1" />
+                      <button
+                        role="menuitem"
+                        onClick={() => {
+                          setProfileOpen(false);
+                          onLogout();
+                        }}
+                        className="w-full text-left px-3 py-2 text-sm text-red-600 hover:bg-red-50 flex items-center gap-2"
+                      >
+                        <LogOut size={15} /> Logout
+                      </button>
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
           </div>
         </header>
 
@@ -194,6 +421,7 @@ export default function AdminLayout({ onPOS, onLogout, initialPage = "Dashboard"
           {page ===
           "Dashboard" ? (
             <Dashboard
+              canViewReports={canViewReports}
               onNavigate={(nextPage) => {
                 setProductCreateRequested(false);
                 setPage(nextPage);
@@ -231,14 +459,36 @@ export default function AdminLayout({ onPOS, onLogout, initialPage = "Dashboard"
             "Customers" ? (
             <CustomersAdmin />
           ) : page ===
+            "Integrations" ? (
+            <IntegrationsAdmin />
+          ) : page ===
             "Online Orders" ? (
             <OnlineOrdersAdmin />
           ) : page ===
+            "Order Prep" ? (
+            <OnlineOrdersPrep permissions={onlinePermissions} />
+          ) : page ===
             "Settings" ? (
-            <SettingsAdmin />
+            <SettingsAdmin key={settingsTab} initialTab={settingsTab} />
           ) : page ===
             "Reports" ? (
-            <ReportsAdmin />
+            canViewReports ? (
+              <ReportsAdmin />
+            ) : (
+              <div className="bg-white rounded-xl border p-10 text-center">
+                <h2 className="text-xl font-bold">Access denied</h2>
+                <p className="text-sm text-slate-400 mt-2">You do not have permission to view reports.</p>
+              </div>
+            )
+          ) : REPORT_MENU_ITEMS.some((item) => item.key === page) ? (
+            canViewReport(REPORT_MENU_ITEMS.find((item) => item.key === page)?.permission) ? (
+              <ReportPage reportKey={page} />
+            ) : (
+              <div className="bg-white rounded-xl border p-10 text-center">
+                <h2 className="text-xl font-bold">Access denied</h2>
+                <p className="text-sm text-slate-400 mt-2">You do not have permission to view this report.</p>
+              </div>
+            )
           ) : (
             <div className="bg-white rounded-xl border p-10 text-center">
               <h2 className="text-xl font-bold">

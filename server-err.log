@@ -57,3 +57,592 @@ platform_api_logs write failed: canceling statement due to lock timeout
 platform_api_logs write failed: canceling statement due to lock timeout
 platform_api_logs write failed: canceling statement due to lock timeout
 platform_api_logs write failed: canceling statement due to lock timeout
+platform_api_logs write failed: canceling statement due to lock timeout
+platform_api_logs write failed: canceling statement due to lock timeout
+platform_api_logs write failed: canceling statement due to lock timeout
+platform_api_logs write failed: canceling statement due to lock timeout
+platform_api_logs write failed: canceling statement due to lock timeout
+platform_api_logs write failed: canceling statement due to lock timeout
+platform_api_logs write failed: canceling statement due to lock timeout
+platform_api_logs write failed: canceling statement due to lock timeout
+platform_api_logs write failed: canceling statement due to lock timeout
+platform_api_logs write failed: canceling statement due to lock timeout
+platform_api_logs write failed: canceling statement due to lock timeout
+platform_api_logs write failed: canceling statement due to lock timeout
+platform_api_logs write failed: canceling statement due to lock timeout
+platform_api_logs write failed: canceling statement due to lock timeout
+platform_api_logs write failed: canceling statement due to lock timeout
+platform_api_logs write failed: canceling statement due to lock timeout
+platform_api_logs write failed: canceling statement due to lock timeout
+platform_api_logs write failed: canceling statement due to lock timeout
+platform_api_logs write failed: canceling statement due to lock timeout
+platform_api_logs write failed: canceling statement due to lock timeout
+platform_api_logs write failed: canceling statement due to lock timeout
+platform_api_logs write failed: canceling statement due to lock timeout
+platform_api_logs write failed: canceling statement due to lock timeout
+Online order ACCEPTED error: error: invalid input syntax for type uuid: "undefined"
+    at C:\Users\cc\Desktop\onePOS\node_modules\pg\lib\client.js:694:17
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+    at async performOrderAction (file:///C:/Users/cc/Desktop/onePOS/routes/online.js:1311:18)
+    at async file:///C:/Users/cc/Desktop/onePOS/routes/online.js:1513:5 {
+  length: 141,
+  severity: 'ERROR',
+  code: '22P02',
+  detail: undefined,
+  hint: undefined,
+  position: undefined,
+  internalPosition: undefined,
+  internalQuery: undefined,
+  where: "unnamed portal parameter $1 = '...'",
+  schema: undefined,
+  table: undefined,
+  column: undefined,
+  dataType: undefined,
+  constraint: undefined,
+  file: 'uuid.c',
+  line: '191',
+  routine: 'string_to_uuid'
+}
+Online order REJECTED error: error: invalid input syntax for type uuid: "undefined"
+    at C:\Users\cc\Desktop\onePOS\node_modules\pg\lib\client.js:694:17
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+    at async performOrderAction (file:///C:/Users/cc/Desktop/onePOS/routes/online.js:1311:18)
+    at async file:///C:/Users/cc/Desktop/onePOS/routes/online.js:1526:5 {
+  length: 141,
+  severity: 'ERROR',
+  code: '22P02',
+  detail: undefined,
+  hint: undefined,
+  position: undefined,
+  internalPosition: undefined,
+  internalQuery: undefined,
+  where: "unnamed portal parameter $1 = '...'",
+  schema: undefined,
+  table: undefined,
+  column: undefined,
+  dataType: undefined,
+  constraint: undefined,
+  file: 'uuid.c',
+  line: '191',
+  routine: 'string_to_uuid'
+}
+Online order ACCEPTED error: error: invalid input syntax for type uuid: "undefined"
+    at C:\Users\cc\Desktop\onePOS\node_modules\pg\lib\client.js:694:17
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+    at async performOrderAction (file:///C:/Users/cc/Desktop/onePOS/routes/online.js:1311:18)
+    at async file:///C:/Users/cc/Desktop/onePOS/routes/online.js:1513:5 {
+  length: 141,
+  severity: 'ERROR',
+  code: '22P02',
+  detail: undefined,
+  hint: undefined,
+  position: undefined,
+  internalPosition: undefined,
+  internalQuery: undefined,
+  where: "unnamed portal parameter $1 = '...'",
+  schema: undefined,
+  table: undefined,
+  column: undefined,
+  dataType: undefined,
+  constraint: undefined,
+  file: 'uuid.c',
+  line: '191',
+  routine: 'string_to_uuid'
+}
+Online order PREPARING error: error: invalid input syntax for type uuid: "undefined"
+    at C:\Users\cc\Desktop\onePOS\node_modules\pg\lib\client.js:694:17
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+    at async performOrderAction (file:///C:/Users/cc/Desktop/onePOS/routes/online.js:1311:18)
+    at async file:///C:/Users/cc/Desktop/onePOS/routes/online.js:1538:5 {
+  length: 141,
+  severity: 'ERROR',
+  code: '22P02',
+  detail: undefined,
+  hint: undefined,
+  position: undefined,
+  internalPosition: undefined,
+  internalQuery: undefined,
+  where: "unnamed portal parameter $1 = '...'",
+  schema: undefined,
+  table: undefined,
+  column: undefined,
+  dataType: undefined,
+  constraint: undefined,
+  file: 'uuid.c',
+  line: '191',
+  routine: 'string_to_uuid'
+}
+Online order READY error: error: invalid input syntax for type uuid: "undefined"
+    at C:\Users\cc\Desktop\onePOS\node_modules\pg\lib\client.js:694:17
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+    at async performOrderAction (file:///C:/Users/cc/Desktop/onePOS/routes/online.js:1311:18)
+    at async file:///C:/Users/cc/Desktop/onePOS/routes/online.js:1548:5 {
+  length: 141,
+  severity: 'ERROR',
+  code: '22P02',
+  detail: undefined,
+  hint: undefined,
+  position: undefined,
+  internalPosition: undefined,
+  internalQuery: undefined,
+  where: "unnamed portal parameter $1 = '...'",
+  schema: undefined,
+  table: undefined,
+  column: undefined,
+  dataType: undefined,
+  constraint: undefined,
+  file: 'uuid.c',
+  line: '191',
+  routine: 'string_to_uuid'
+}
+Online order READY error: error: invalid input syntax for type uuid: "undefined"
+    at C:\Users\cc\Desktop\onePOS\node_modules\pg\lib\client.js:694:17
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+    at async performOrderAction (file:///C:/Users/cc/Desktop/onePOS/routes/online.js:1311:18)
+    at async file:///C:/Users/cc/Desktop/onePOS/routes/online.js:1548:5 {
+  length: 141,
+  severity: 'ERROR',
+  code: '22P02',
+  detail: undefined,
+  hint: undefined,
+  position: undefined,
+  internalPosition: undefined,
+  internalQuery: undefined,
+  where: "unnamed portal parameter $1 = '...'",
+  schema: undefined,
+  table: undefined,
+  column: undefined,
+  dataType: undefined,
+  constraint: undefined,
+  file: 'uuid.c',
+  line: '191',
+  routine: 'string_to_uuid'
+}
+Online order ACCEPTED error: error: invalid input syntax for type uuid: "undefined"
+    at C:\Users\cc\Desktop\onePOS\node_modules\pg\lib\client.js:694:17
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+    at async performOrderAction (file:///C:/Users/cc/Desktop/onePOS/routes/online.js:1311:18)
+    at async file:///C:/Users/cc/Desktop/onePOS/routes/online.js:1513:5 {
+  length: 141,
+  severity: 'ERROR',
+  code: '22P02',
+  detail: undefined,
+  hint: undefined,
+  position: undefined,
+  internalPosition: undefined,
+  internalQuery: undefined,
+  where: "unnamed portal parameter $1 = '...'",
+  schema: undefined,
+  table: undefined,
+  column: undefined,
+  dataType: undefined,
+  constraint: undefined,
+  file: 'uuid.c',
+  line: '191',
+  routine: 'string_to_uuid'
+}
+Online order CANCELLED error: error: invalid input syntax for type uuid: "undefined"
+    at C:\Users\cc\Desktop\onePOS\node_modules\pg\lib\client.js:694:17
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+    at async performOrderAction (file:///C:/Users/cc/Desktop/onePOS/routes/online.js:1311:18)
+    at async file:///C:/Users/cc/Desktop/onePOS/routes/online.js:1560:5 {
+  length: 141,
+  severity: 'ERROR',
+  code: '22P02',
+  detail: undefined,
+  hint: undefined,
+  position: undefined,
+  internalPosition: undefined,
+  internalQuery: undefined,
+  where: "unnamed portal parameter $1 = '...'",
+  schema: undefined,
+  table: undefined,
+  column: undefined,
+  dataType: undefined,
+  constraint: undefined,
+  file: 'uuid.c',
+  line: '191',
+  routine: 'string_to_uuid'
+}
+platform_api_logs write failed: canceling statement due to lock timeout
+platform_api_logs write failed: canceling statement due to lock timeout
+Online order ACCEPTED error: error: invalid input syntax for type uuid: "undefined"
+    at C:\Users\cc\Desktop\onePOS\node_modules\pg\lib\client.js:694:17
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+    at async performOrderAction (file:///C:/Users/cc/Desktop/onePOS/routes/online.js:1311:18)
+    at async file:///C:/Users/cc/Desktop/onePOS/routes/online.js:1513:5 {
+  length: 141,
+  severity: 'ERROR',
+  code: '22P02',
+  detail: undefined,
+  hint: undefined,
+  position: undefined,
+  internalPosition: undefined,
+  internalQuery: undefined,
+  where: "unnamed portal parameter $1 = '...'",
+  schema: undefined,
+  table: undefined,
+  column: undefined,
+  dataType: undefined,
+  constraint: undefined,
+  file: 'uuid.c',
+  line: '191',
+  routine: 'string_to_uuid'
+}
+Online order REJECTED error: error: invalid input syntax for type uuid: "undefined"
+    at C:\Users\cc\Desktop\onePOS\node_modules\pg\lib\client.js:694:17
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+    at async performOrderAction (file:///C:/Users/cc/Desktop/onePOS/routes/online.js:1311:18)
+    at async file:///C:/Users/cc/Desktop/onePOS/routes/online.js:1526:5 {
+  length: 141,
+  severity: 'ERROR',
+  code: '22P02',
+  detail: undefined,
+  hint: undefined,
+  position: undefined,
+  internalPosition: undefined,
+  internalQuery: undefined,
+  where: "unnamed portal parameter $1 = '...'",
+  schema: undefined,
+  table: undefined,
+  column: undefined,
+  dataType: undefined,
+  constraint: undefined,
+  file: 'uuid.c',
+  line: '191',
+  routine: 'string_to_uuid'
+}
+Online order ACCEPTED error: error: invalid input syntax for type uuid: "undefined"
+    at C:\Users\cc\Desktop\onePOS\node_modules\pg\lib\client.js:694:17
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+    at async performOrderAction (file:///C:/Users/cc/Desktop/onePOS/routes/online.js:1311:18)
+    at async file:///C:/Users/cc/Desktop/onePOS/routes/online.js:1513:5 {
+  length: 141,
+  severity: 'ERROR',
+  code: '22P02',
+  detail: undefined,
+  hint: undefined,
+  position: undefined,
+  internalPosition: undefined,
+  internalQuery: undefined,
+  where: "unnamed portal parameter $1 = '...'",
+  schema: undefined,
+  table: undefined,
+  column: undefined,
+  dataType: undefined,
+  constraint: undefined,
+  file: 'uuid.c',
+  line: '191',
+  routine: 'string_to_uuid'
+}
+Online order READY error: error: invalid input syntax for type uuid: "undefined"
+    at C:\Users\cc\Desktop\onePOS\node_modules\pg\lib\client.js:694:17
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+    at async performOrderAction (file:///C:/Users/cc/Desktop/onePOS/routes/online.js:1311:18)
+    at async file:///C:/Users/cc/Desktop/onePOS/routes/online.js:1548:5 {
+  length: 141,
+  severity: 'ERROR',
+  code: '22P02',
+  detail: undefined,
+  hint: undefined,
+  position: undefined,
+  internalPosition: undefined,
+  internalQuery: undefined,
+  where: "unnamed portal parameter $1 = '...'",
+  schema: undefined,
+  table: undefined,
+  column: undefined,
+  dataType: undefined,
+  constraint: undefined,
+  file: 'uuid.c',
+  line: '191',
+  routine: 'string_to_uuid'
+}
+Online order COMPLETED error: error: invalid input syntax for type uuid: "undefined"
+    at C:\Users\cc\Desktop\onePOS\node_modules\pg\lib\client.js:694:17
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+    at async performOrderAction (file:///C:/Users/cc/Desktop/onePOS/routes/online.js:1311:18)
+    at async file:///C:/Users/cc/Desktop/onePOS/routes/online.js:1579:5 {
+  length: 141,
+  severity: 'ERROR',
+  code: '22P02',
+  detail: undefined,
+  hint: undefined,
+  position: undefined,
+  internalPosition: undefined,
+  internalQuery: undefined,
+  where: "unnamed portal parameter $1 = '...'",
+  schema: undefined,
+  table: undefined,
+  column: undefined,
+  dataType: undefined,
+  constraint: undefined,
+  file: 'uuid.c',
+  line: '191',
+  routine: 'string_to_uuid'
+}
+Online order ACCEPTED error: error: invalid input syntax for type uuid: "undefined"
+    at C:\Users\cc\Desktop\onePOS\node_modules\pg\lib\client.js:694:17
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+    at async performOrderAction (file:///C:/Users/cc/Desktop/onePOS/routes/online.js:1311:18)
+    at async file:///C:/Users/cc/Desktop/onePOS/routes/online.js:1513:5 {
+  length: 141,
+  severity: 'ERROR',
+  code: '22P02',
+  detail: undefined,
+  hint: undefined,
+  position: undefined,
+  internalPosition: undefined,
+  internalQuery: undefined,
+  where: "unnamed portal parameter $1 = '...'",
+  schema: undefined,
+  table: undefined,
+  column: undefined,
+  dataType: undefined,
+  constraint: undefined,
+  file: 'uuid.c',
+  line: '191',
+  routine: 'string_to_uuid'
+}
+Online order CANCELLED error: error: invalid input syntax for type uuid: "undefined"
+    at C:\Users\cc\Desktop\onePOS\node_modules\pg\lib\client.js:694:17
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+    at async performOrderAction (file:///C:/Users/cc/Desktop/onePOS/routes/online.js:1311:18)
+    at async file:///C:/Users/cc/Desktop/onePOS/routes/online.js:1560:5 {
+  length: 141,
+  severity: 'ERROR',
+  code: '22P02',
+  detail: undefined,
+  hint: undefined,
+  position: undefined,
+  internalPosition: undefined,
+  internalQuery: undefined,
+  where: "unnamed portal parameter $1 = '...'",
+  schema: undefined,
+  table: undefined,
+  column: undefined,
+  dataType: undefined,
+  constraint: undefined,
+  file: 'uuid.c',
+  line: '191',
+  routine: 'string_to_uuid'
+}
+platform_api_logs write failed: canceling statement due to lock timeout
+platform_api_logs write failed: canceling statement due to lock timeout
+platform_api_logs write failed: canceling statement due to lock timeout
+platform_api_logs write failed: canceling statement due to lock timeout
+platform_api_logs write failed: canceling statement due to lock timeout
+platform_api_logs write failed: canceling statement due to lock timeout
+platform_api_logs write failed: canceling statement due to lock timeout
+platform_api_logs write failed: canceling statement due to lock timeout
+platform_api_logs write failed: canceling statement due to lock timeout
+platform_api_logs write failed: canceling statement due to lock timeout
+platform_api_logs write failed: canceling statement due to lock timeout
+platform_api_logs write failed: canceling statement due to lock timeout
+platform_api_logs write failed: canceling statement due to lock timeout
+platform_api_logs write failed: canceling statement due to lock timeout
+Authorization error: Error: getaddrinfo ENOTFOUND dpg-dajvtrlg1s2s73ccsfmg-a.oregon-postgres.render.com
+    at C:\Users\cc\Desktop\onePOS\node_modules\pg-pool\index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+    at async canViewCompanyCustomers (file:///C:/Users/cc/Desktop/onePOS/server.js:283:18)
+    at async file:///C:/Users/cc/Desktop/onePOS/server.js:224:23 {
+  errno: -3008,
+  code: 'ENOTFOUND',
+  syscall: 'getaddrinfo',
+  hostname: 'dpg-dajvtrlg1s2s73ccsfmg-a.oregon-postgres.render.com'
+}
+platform_api_logs write failed: canceling statement due to lock timeout
+platform_api_logs write failed: canceling statement due to lock timeout
+platform_api_logs write failed: canceling statement due to lock timeout
+platform_api_logs write failed: canceling statement due to lock timeout
+platform_api_logs write failed: canceling statement due to lock timeout
+platform_api_logs write failed: canceling statement due to lock timeout
+platform_api_logs write failed: canceling statement due to lock timeout
+Online order ACCEPTED error: error: invalid input syntax for type uuid: "undefined"
+    at C:\Users\cc\Desktop\onePOS\node_modules\pg\lib\client.js:694:17
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+    at async performOrderAction (file:///C:/Users/cc/Desktop/onePOS/routes/online.js:1311:18)
+    at async file:///C:/Users/cc/Desktop/onePOS/routes/online.js:1513:5 {
+  length: 141,
+  severity: 'ERROR',
+  code: '22P02',
+  detail: undefined,
+  hint: undefined,
+  position: undefined,
+  internalPosition: undefined,
+  internalQuery: undefined,
+  where: "unnamed portal parameter $1 = '...'",
+  schema: undefined,
+  table: undefined,
+  column: undefined,
+  dataType: undefined,
+  constraint: undefined,
+  file: 'uuid.c',
+  line: '191',
+  routine: 'string_to_uuid'
+}
+Online order READY error: error: invalid input syntax for type uuid: "undefined"
+    at C:\Users\cc\Desktop\onePOS\node_modules\pg\lib\client.js:694:17
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+    at async performOrderAction (file:///C:/Users/cc/Desktop/onePOS/routes/online.js:1311:18)
+    at async file:///C:/Users/cc/Desktop/onePOS/routes/online.js:1548:5 {
+  length: 141,
+  severity: 'ERROR',
+  code: '22P02',
+  detail: undefined,
+  hint: undefined,
+  position: undefined,
+  internalPosition: undefined,
+  internalQuery: undefined,
+  where: "unnamed portal parameter $1 = '...'",
+  schema: undefined,
+  table: undefined,
+  column: undefined,
+  dataType: undefined,
+  constraint: undefined,
+  file: 'uuid.c',
+  line: '191',
+  routine: 'string_to_uuid'
+}
+Online order COMPLETED error: error: invalid input syntax for type uuid: "undefined"
+    at C:\Users\cc\Desktop\onePOS\node_modules\pg\lib\client.js:694:17
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+    at async performOrderAction (file:///C:/Users/cc/Desktop/onePOS/routes/online.js:1311:18)
+    at async file:///C:/Users/cc/Desktop/onePOS/routes/online.js:1579:5 {
+  length: 141,
+  severity: 'ERROR',
+  code: '22P02',
+  detail: undefined,
+  hint: undefined,
+  position: undefined,
+  internalPosition: undefined,
+  internalQuery: undefined,
+  where: "unnamed portal parameter $1 = '...'",
+  schema: undefined,
+  table: undefined,
+  column: undefined,
+  dataType: undefined,
+  constraint: undefined,
+  file: 'uuid.c',
+  line: '191',
+  routine: 'string_to_uuid'
+}
+Online order ACCEPTED error: error: invalid input syntax for type uuid: "undefined"
+    at C:\Users\cc\Desktop\onePOS\node_modules\pg\lib\client.js:694:17
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+    at async performOrderAction (file:///C:/Users/cc/Desktop/onePOS/routes/online.js:1311:18)
+    at async file:///C:/Users/cc/Desktop/onePOS/routes/online.js:1513:5 {
+  length: 141,
+  severity: 'ERROR',
+  code: '22P02',
+  detail: undefined,
+  hint: undefined,
+  position: undefined,
+  internalPosition: undefined,
+  internalQuery: undefined,
+  where: "unnamed portal parameter $1 = '...'",
+  schema: undefined,
+  table: undefined,
+  column: undefined,
+  dataType: undefined,
+  constraint: undefined,
+  file: 'uuid.c',
+  line: '191',
+  routine: 'string_to_uuid'
+}
+Online order READY error: error: invalid input syntax for type uuid: "undefined"
+    at C:\Users\cc\Desktop\onePOS\node_modules\pg\lib\client.js:694:17
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+    at async performOrderAction (file:///C:/Users/cc/Desktop/onePOS/routes/online.js:1311:18)
+    at async file:///C:/Users/cc/Desktop/onePOS/routes/online.js:1548:5 {
+  length: 141,
+  severity: 'ERROR',
+  code: '22P02',
+  detail: undefined,
+  hint: undefined,
+  position: undefined,
+  internalPosition: undefined,
+  internalQuery: undefined,
+  where: "unnamed portal parameter $1 = '...'",
+  schema: undefined,
+  table: undefined,
+  column: undefined,
+  dataType: undefined,
+  constraint: undefined,
+  file: 'uuid.c',
+  line: '191',
+  routine: 'string_to_uuid'
+}
+Online order COMPLETED error: error: invalid input syntax for type uuid: "undefined"
+    at C:\Users\cc\Desktop\onePOS\node_modules\pg\lib\client.js:694:17
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+    at async performOrderAction (file:///C:/Users/cc/Desktop/onePOS/routes/online.js:1311:18)
+    at async file:///C:/Users/cc/Desktop/onePOS/routes/online.js:1579:5 {
+  length: 141,
+  severity: 'ERROR',
+  code: '22P02',
+  detail: undefined,
+  hint: undefined,
+  position: undefined,
+  internalPosition: undefined,
+  internalQuery: undefined,
+  where: "unnamed portal parameter $1 = '...'",
+  schema: undefined,
+  table: undefined,
+  column: undefined,
+  dataType: undefined,
+  constraint: undefined,
+  file: 'uuid.c',
+  line: '191',
+  routine: 'string_to_uuid'
+}
+Online order ACCEPTED error: error: invalid input syntax for type uuid: "undefined"
+    at C:\Users\cc\Desktop\onePOS\node_modules\pg\lib\client.js:694:17
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+    at async performOrderAction (file:///C:/Users/cc/Desktop/onePOS/routes/online.js:1311:18)
+    at async file:///C:/Users/cc/Desktop/onePOS/routes/online.js:1513:5 {
+  length: 141,
+  severity: 'ERROR',
+  code: '22P02',
+  detail: undefined,
+  hint: undefined,
+  position: undefined,
+  internalPosition: undefined,
+  internalQuery: undefined,
+  where: "unnamed portal parameter $1 = '...'",
+  schema: undefined,
+  table: undefined,
+  column: undefined,
+  dataType: undefined,
+  constraint: undefined,
+  file: 'uuid.c',
+  line: '191',
+  routine: 'string_to_uuid'
+}
+Online order CANCELLED error: error: invalid input syntax for type uuid: "undefined"
+    at C:\Users\cc\Desktop\onePOS\node_modules\pg\lib\client.js:694:17
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+    at async performOrderAction (file:///C:/Users/cc/Desktop/onePOS/routes/online.js:1311:18)
+    at async file:///C:/Users/cc/Desktop/onePOS/routes/online.js:1560:5 {
+  length: 141,
+  severity: 'ERROR',
+  code: '22P02',
+  detail: undefined,
+  hint: undefined,
+  position: undefined,
+  internalPosition: undefined,
+  internalQuery: undefined,
+  where: "unnamed portal parameter $1 = '...'",
+  schema: undefined,
+  table: undefined,
+  column: undefined,
+  dataType: undefined,
+  constraint: undefined,
+  file: 'uuid.c',
+  line: '191',
+  routine: 'string_to_uuid'
+}
+platform_api_logs write failed: canceling statement due to lock timeout
+platform_api_logs write failed: canceling statement due to lock timeout
+platform_api_logs write failed: canceling statement due to lock timeout
+platform_api_logs write failed: canceling statement due to lock timeout

@@ -4,6 +4,7 @@ import crypto from "crypto";
 import { getPlatformService, isOnlinePlatform } from "../services/onlineOrders/index.js";
 import { loadPlatformConfig, decryptSecret } from "../services/onlineOrders/platformConfig.js";
 import { logPlatformApiCall } from "../services/onlineOrders/platformLogger.js";
+import { createSaleForCompletedOrder } from "../services/onlineOrders/saleCreator.js";
 
 /*
  * ONLINE ORDERS FOUNDATION (Uber Eats / Deliveroo)
@@ -1227,16 +1228,30 @@ export default function createOnlineRouter({
         });
 
         if (acceptResponse && acceptResponse.success === true) {
+          /*
+           * Auto-accept lands directly in PREPARING: acceptance IS the start
+           * of preparation in the internal workflow (no separate kitchen
+           * button). ACKED_ACCEPTED keeps the platform-acknowledgement trace.
+           */
           await client.query(
-            "UPDATE online_orders SET status = 'ACCEPTED', accepted_at = NOW(), updated_at = NOW() WHERE id = $1 AND company_id = $2 AND status = 'RECEIVED'",
+            "UPDATE online_orders SET status = 'PREPARING', preparing_at = NOW(), accepted_at = NOW(), updated_at = NOW() WHERE id = $1 AND company_id = $2 AND status = 'RECEIVED'",
             [order.id, req.user.companyId]
           );
           await recordEvent(client, {
             orderId: order.id,
-            eventType: "ORDER_ACCEPTED",
+            eventType: "ACKED_ACCEPTED",
             fromStatus: "RECEIVED",
             toStatus: "ACCEPTED",
-            message: "Order auto-accepted (auto-accept mode enabled in Settings)",
+            message: "Platform accept acknowledgement (auto-accept mode)",
+            platformResponse: acceptResponse,
+            actorUserId: req.user.id,
+          });
+          await recordEvent(client, {
+            orderId: order.id,
+            eventType: "ORDER_PREPARING",
+            fromStatus: "ACCEPTED",
+            toStatus: "PREPARING",
+            message: "Order auto-accepted (auto-accept mode enabled in Settings) - preparation started",
             platformResponse: acceptResponse,
             actorUserId: req.user.id,
           });
@@ -1322,6 +1337,8 @@ export default function createOnlineRouter({
       timestampColumn = null,
       reason = null,
       buildMessage = null,
+      createSale = null,
+      onTransition = null,
     } = options;
 
     const client = await pool.connect();
@@ -1510,6 +1527,16 @@ export default function createOnlineRouter({
       });
       console.timeEnd(`[${req.params.id}] ${toStatus} - recordEvent`);
 
+      /*
+       * Optional extra in-transaction step for routes that need additional
+       * records on a successful transition (e.g. the accept route records a
+       * separate platform-acknowledgement event before landing in PREPARING).
+       * Runs BEFORE COMMIT so it is atomic with the status change.
+       */
+      if (typeof onTransition === "function") {
+        await onTransition(client, { order, toStatus, platformResponse });
+      }
+
       if (writeAudit) {
         await writeAudit(
           req.user.companyId,
@@ -1519,6 +1546,48 @@ export default function createOnlineRouter({
           order.id,
           { platform: order.platform, from: order.status, to: toStatus }
         );
+      }
+
+      /*
+       * ONLINE ORDER -> POS SALE (complete only, when the route passes
+       * createSale): the sale is created inside this same transaction, after
+       * the order status was changed to COMPLETED, so the sale and the status
+       * change commit - or roll back - atomically. A failure here means the
+       * order is NOT reported as completed. Stock is intentionally NOT moved:
+       * it was already deducted at intake (ONLINE_RESERVE), so calling
+       * createInventoryMovement here would double-deduct.
+       */
+      let saleInfo = null;
+      if (createSale) {
+        console.time(`[${req.params.id}] ${toStatus} - createSale`);
+        try {
+          saleInfo = await createSale(client, { order, items, user: req.user });
+        } catch (saleError) {
+          /*
+           * A failed sale must never be reported as a completed order: the
+           * error is re-thrown so the whole transaction (status change,
+           * events, audit) rolls back, and the message tells the operator
+           * exactly what happened and that the order is still open.
+           */
+          throw new Error(
+            `Order was NOT completed: the POS sale could not be created (${saleError.message})`
+          );
+        } finally {
+          console.timeEnd(`[${req.params.id}] ${toStatus} - createSale`);
+        }
+
+        await recordEvent(client, {
+          orderId: order.id,
+          eventType: "ONLINE_SALE_CREATED",
+          fromStatus: order.status,
+          toStatus,
+          message: `POS sale ${saleInfo.sale.receipt_number || saleInfo.sale.id} created for the completed order${
+            saleInfo.unmappedExcluded
+              ? `; ${saleInfo.unmappedExcluded} unmapped item(s) excluded`
+              : ""
+          }`,
+          actorUserId: req.user.id,
+        });
       }
 
       console.time(`[${req.params.id}] ${toStatus} - commit`);
@@ -1540,7 +1609,13 @@ export default function createOnlineRouter({
       return res.json({
         success: true,
         message: `Order ${toStatus.toLowerCase()}`,
-        data: { order: updatedOrder, platformResponse },
+        data: {
+          order: updatedOrder,
+          platformResponse,
+          ...(saleInfo
+            ? { sale: saleInfo.sale, unmappedExcluded: saleInfo.unmappedExcluded }
+            : {}),
+        },
       });
     } catch (error) {
       if (transactionStarted) {
@@ -1557,14 +1632,33 @@ export default function createOnlineRouter({
     }
   }
 
+  /*
+   * Accept: performs the PLATFORM accept acknowledgement (preserved - some
+   * platforms require a separate release/preparation acknowledgement) and
+   * then lands the order in PREPARING: the internal onePOS workflow treats
+   * acceptance as the start of preparation, so the kitchen sees "Preparing"
+   * with no extra button. Event history keeps the ACKED_ACCEPTED ->
+   * PREPARING trace (see onTransition).
+   */
   router.post("/online/orders/:id/accept", authenticate, authorize("online_orders.manage"), async (req, res) => {
     await performOrderAction(req, res, {
       fromStatuses: ["RECEIVED"],
-      toStatus: "ACCEPTED",
+      toStatus: "PREPARING",
       platformAction: "acceptOrder",
-      timestampColumn: "accepted_at",
+      timestampColumn: "preparing_at",
       callPlatform: (service, order, runtime) => service.acceptOrder(order, runtime),
-      buildMessage: (order) => `Order accepted (platform call ${order.platform})`,
+      buildMessage: (order) => `Order accepted - preparation started (platform call ${order.platform})`,
+      onTransition: async (client, { order, toStatus }) => {
+        await recordEvent(client, {
+          orderId: order.id,
+          eventType: "ACKED_ACCEPTED",
+          fromStatus: order.status,
+          toStatus: "ACCEPTED",
+          message: `Platform accept acknowledgement (${order.platform})`,
+          platformResponse: { simulated: true },
+          actorUserId: req.user.id,
+        });
+      },
     });
   });
 
@@ -1637,6 +1731,13 @@ export default function createOnlineRouter({
       callPlatform: (service, order, runtime) =>
         service.completeOrder(order, (req.body && req.body.otp) || "", runtime),
       buildMessage: (order) => `Order completed - OTP verified by platform, inventory permanently consumed (${order.platform})`,
+      /*
+       * ONLINE ORDER -> POS SALE: on successful completion the completed
+       * order becomes a onePOS sale inside the SAME transaction (see
+       * performOrderAction). Fails the request (rollback) if the sale cannot
+       * be created; retries cannot create a second sale (unique index).
+       */
+      createSale: (client, context) => createSaleForCompletedOrder(client, context),
     });
   });
 

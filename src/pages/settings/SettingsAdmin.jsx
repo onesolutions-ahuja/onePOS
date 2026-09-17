@@ -1,9 +1,9 @@
 import { useEffect, useState } from "react";
 import { Edit, Plus, RefreshCw, Save, X } from "lucide-react";
 import { apiRequest } from "../../services/api.js";
-function SettingsAdmin() {
+function SettingsAdmin({ initialTab = "General" }) {
   const tabs = ["General", "Company", "Store & Till", "Tax / VAT", "Payment Terminals", "Hardware", "Receipts", "Users & Permissions", "Integrations", "Online Platforms"];
-  const [tab, setTab] = useState("General");
+  const [tab, setTab] = useState(initialTab);
   const [settings, setSettings] = useState(null);
   const [terminals, setTerminals] = useState([]);
   const [hardware, setHardware] = useState([]);

@@ -1,3 +1,5 @@
+import QuickDateRange from "./shared/QuickDateRange.jsx";
+
 export default function ReportHeader({
   from,
   to,
@@ -6,6 +8,7 @@ export default function ReportHeader({
   onRun,
   title = "Reports",
   subtitle = "Live sales, product and payment reporting.",
+  showQuickRange = true,
 }) {
   return (
     <div className="flex justify-between items-end mb-5">
@@ -13,16 +16,21 @@ export default function ReportHeader({
         <h1 className="text-2xl font-bold">{title}</h1>
         <p className="text-sm text-slate-500 mt-1">{subtitle}</p>
       </div>
-      <div className="flex items-end gap-2">
-        <label className="text-xs text-slate-500">
-          From
-          <input type="date" value={from} onChange={(event) => onFromChange(event.target.value)} className="block h-9 mt-1 border rounded px-2 text-sm" />
-        </label>
-        <label className="text-xs text-slate-500">
-          To
-          <input type="date" value={to} onChange={(event) => onToChange(event.target.value)} className="block h-9 mt-1 border rounded px-2 text-sm" />
-        </label>
-        <button onClick={onRun} className="h-9 px-3 bg-blue-600 text-white rounded text-sm">Run</button>
+      <div className="flex flex-col items-end gap-1.5">
+        {showQuickRange && (
+          <QuickDateRange from={from} to={to} onFromChange={onFromChange} onToChange={onToChange} />
+        )}
+        <div className="flex items-end gap-2">
+          <label className="text-xs text-slate-500">
+            From
+            <input type="date" value={from} onChange={(event) => onFromChange(event.target.value)} className="block h-9 mt-1 border rounded px-2 text-sm" />
+          </label>
+          <label className="text-xs text-slate-500">
+            To
+            <input type="date" value={to} onChange={(event) => onToChange(event.target.value)} className="block h-9 mt-1 border rounded px-2 text-sm" />
+          </label>
+          {onRun && <button onClick={onRun} className="h-9 px-3 bg-blue-600 text-white rounded text-sm">Run</button>}
+        </div>
       </div>
     </div>
   );

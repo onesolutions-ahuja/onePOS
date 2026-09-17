@@ -1,6 +1,25 @@
 import { useEffect, useRef, useState } from "react";
 import { Percent, ShoppingBag, X } from "lucide-react";
 import { apiRequest } from "../../services/api.js";
+import { isNetworkError, onNetworkChange } from "../../services/networkStatus.js";
+import {
+  getTenantFromToken,
+  loadProductCache,
+  loadSettingsCache,
+  saveProductCache,
+  saveSettingsCache,
+  saveTillContext,
+  clearTillContext,
+  saveTerminalIdentity,
+  loadTerminalIdentity,
+} from "../../services/offlineStore.js";
+import {
+  newClientRequestId,
+  enqueueOfflineSale,
+  syncOfflineQueue,
+  getQueueSnapshot,
+  subscribeQueue,
+} from "../../services/offlineQueue.js";
 import { normaliseProduct } from "../../utils/formatters.js";
 import BottomStatusBar from "../../components/BottomStatusBar.jsx";
 import TillSessionModal from "./TillSessionModal.jsx";
@@ -60,6 +79,11 @@ function POS({ onAdmin, onOpenOnlineOrders, onLogout }) {
   const [products, setProducts] = useState([]);
   const [loadingProducts, setLoadingProducts] = useState(true);
   const [productError, setProductError] = useState("");
+  /* T8B: set when cached products/settings are in use (transport failure only). */
+  const [offlineNotice, setOfflineNotice] = useState("");
+  /* T8C-F: offline sale queue state. */
+  const [offlineCount, setOfflineCount] = useState(0);
+  const [failedCount, setFailedCount] = useState(0);
   const [vatEnabled, setVatEnabled] = useState(true);
   const [vatRate, setVatRate] = useState(0.2);
 
@@ -69,6 +93,48 @@ function POS({ onAdmin, onOpenOnlineOrders, onLogout }) {
       const data = await apiRequest("/api/till/sessions/current");
       if (!data.success) throw new Error(data.message || "Unable to load till");
       setTill(data.data || null);
+
+      /*
+       * T8B: remember the server-confirmed open till (context only) and the
+       * terminal/store/company identity. On network errors the previous
+       * till state is left untouched (below) - the server-side open-till
+       * requirement is NOT bypassed.
+       */
+      const tenant = getTenantFromToken();
+      if (tenant) {
+        if (data.data && data.data.status === "open") {
+          /*
+           * T8E: one identity object, merged with any previously stored
+           * terminal_number so the offline provisional-receipt prefix stays
+           * stable across sessions (server payloads have not always
+           * included the number).
+           */
+          const identity = {
+            terminalId: data.data.terminal_id,
+            terminalName: data.data.terminal_name || null,
+            terminalNumber: data.data.terminal_number || null,
+            storeId: tenant.storeId,
+            companyId: tenant.companyId,
+          };
+          saveTillContext(tenant, {
+            sessionId: data.data.id,
+            ...identity,
+            userId: data.data.user_id || tenant.userId,
+            openedAt: data.data.opened_at,
+          });
+          const previous = loadTerminalIdentity(tenant);
+          saveTerminalIdentity(tenant, {
+            ...identity,
+            terminalNumber:
+              identity.terminalNumber ||
+              previous?.terminalNumber ||
+              loadSettingsCache(tenant)?.till?.terminalNumber ||
+              null,
+          });
+        } else {
+          clearTillContext(tenant);
+        }
+      }
     } catch (error) {
       const message = error.message || "";
       if (message.includes("No open till session") || message.includes("401") || message.includes("403")) {
@@ -103,11 +169,35 @@ function POS({ onAdmin, onOpenOnlineOrders, onLogout }) {
         : [];
 
       setProducts(databaseProducts);
+
+      /* T8B: keep the freshest product list available for offline selling. */
+      const tenant = getTenantFromToken();
+      if (tenant) saveProductCache(tenant, databaseProducts);
+      setOfflineNotice("");
     } catch (error) {
       console.error(
         "onePOS product loading error:",
         error
       );
+
+      /*
+       * T8B: only a transport failure (request never reached the server)
+       * may fall back to the cached product list. Server answers such as
+       * 401/403/400/500 must surface as real errors - never silently
+       * become cached data.
+       */
+      if (isNetworkError(error)) {
+        const tenant = getTenantFromToken();
+        const cached = tenant ? loadProductCache(tenant) : null;
+        if (cached && cached.length) {
+          setProducts(cached);
+          setProductError("");
+          setOfflineNotice(
+            "Offline — showing saved products. Selling resumes when the connection returns."
+          );
+          return;
+        }
+      }
 
       setProductError(
         error.message ||
@@ -132,13 +222,58 @@ function POS({ onAdmin, onOpenOnlineOrders, onLogout }) {
         if (data.success && data.data?.store) {
           setStoreName(data.data.store.name);
         }
+        /* T8B: cache the settings payload for offline reuse. */
+        if (data.success) {
+          const tenant = getTenantFromToken();
+          if (tenant) saveSettingsCache(tenant, data.data);
+        }
       })
       .catch((error) => {
         console.error("onePOS settings loading error:", error);
+        /*
+         * T8B: transport failure only - reuse cached VAT/store settings.
+         * VAT calculation itself is unchanged; only the data source falls
+         * back. Server answers are never replaced by cache.
+         */
+        if (isNetworkError(error)) {
+          const tenant = getTenantFromToken();
+          const cached = tenant ? loadSettingsCache(tenant) : null;
+          if (cached?.tax) {
+            setVatEnabled(cached.tax.vatEnabled !== false);
+            setVatRate(Number(cached.tax.defaultVatRate || 0) / 100);
+          }
+          if (cached?.store) {
+            setStoreName(cached.store.name);
+          }
+        }
       });
 
     const onlineOrderTimer = setInterval(loadOnlineOrderCount, 15000);
     return () => clearInterval(onlineOrderTimer);
+  }, []);
+
+  /*
+   * T8C-F: offline sale queue lifecycle.
+   *  - initial snapshot + live subscription keeps the header badge exact;
+   *  - syncing when POS loads while online;
+   *  - syncing when the browser comes back online.
+   */
+  useEffect(() => {
+    const applySnapshot = () => {
+      const snapshot = getQueueSnapshot();
+      setOfflineCount(snapshot.pending);
+      setFailedCount(snapshot.failed);
+    };
+    applySnapshot();
+    const unsubscribe = subscribeQueue(applySnapshot);
+    const removeNetworkListener = onNetworkChange((online) => {
+      if (online) syncOfflineQueue();
+    });
+    syncOfflineQueue(); // drain anything queued while the till was closed
+    return () => {
+      unsubscribe();
+      removeNetworkListener();
+    };
   }, []);
 
   const productsRef = useRef(products);
@@ -334,42 +469,102 @@ function POS({ onAdmin, onOpenOnlineOrders, onLogout }) {
       setShowTill(true);
       return;
     }
+    /*
+     * T8C-F: every sale carries a clientRequestId. The backend deduplicates
+     * on it (T8C-SMALL), so a retried/queued sale can never be recorded
+     * twice. Built at function scope so the offline fallback can reuse the
+     * EXACT payload (and the SAME clientRequestId): if the original request
+     * was only timeout-ambiguous, the later sync becomes a no-op server-side
+     * instead of a duplicate sale. Payload shape and VAT/discount maths are
+     * unchanged.
+     */
+    const payload = {
+      clientRequestId: newClientRequestId(),
+      items: basket.map((item) => {
+        const lineGross = Number(item.price || 0) * item.quantity;
+        const lineDiscount = grossSubtotal
+          ? discountAmount * (lineGross / grossSubtotal)
+          : 0;
+        const lineNet = lineGross - lineDiscount;
+        return {
+          productId: item.id,
+          quantity: item.quantity,
+          unitPrice: item.price,
+          tax: vatEnabled ? lineNet * vatRate : 0,
+          discount: lineDiscount,
+          total: lineNet + (vatEnabled ? lineNet * vatRate : 0),
+        };
+      }),
+      customerId: selectedCustomer?.id || null,
+      subtotal,
+      tax: vat,
+      discount: discountAmount,
+      total,
+      paymentMethod,
+    };
     try {
       setSaleError("");
       setSaleMessage("");
       const data = await apiRequest("/api/sales", {
         method: "POST",
-        body: JSON.stringify({
-          items: basket.map((item) => {
-            const lineGross = Number(item.price || 0) * item.quantity;
-            const lineDiscount = grossSubtotal
-              ? discountAmount * (lineGross / grossSubtotal)
-              : 0;
-            const lineNet = lineGross - lineDiscount;
-            return {
-              productId: item.id,
-              quantity: item.quantity,
-              unitPrice: item.price,
-              tax: vatEnabled ? lineNet * vatRate : 0,
-              discount: lineDiscount,
-              total: lineNet + (vatEnabled ? lineNet * vatRate : 0),
-            };
-          }),
-          customerId: selectedCustomer?.id || null,
-          subtotal,
-          tax: vat,
-          discount: discountAmount,
-          total,
-          paymentMethod,
-        }),
+        body: JSON.stringify(payload),
       });
       if (!data.success) throw new Error(data.message || "Sale could not be completed");
       setBasket([]);
       setSelectedCustomer(null);
       setShowPayment(false);
-      setSaleMessage("Sale completed successfully.");
+      /*
+       * T8E: show the server's authoritative receipt number for online
+       * sales (falls back to the plain message if the server did not
+       * return one, e.g. older backend).
+       */
+      setSaleMessage(
+        data.sale?.receipt_number
+          ? `Sale completed — Receipt ${data.sale.receipt_number}`
+          : "Sale completed successfully."
+      );
       await loadProducts();
+      syncOfflineQueue(); // T8C-F: opportunistic drain now that connectivity is proven
     } catch (error) {
+      /*
+       * T8C-F: transport failure (request never reached the server) -> save
+       * the exact payload to the offline queue. The cart clears only after
+       * the queue write succeeds; otherwise the sale stays on screen so
+       * nothing is lost. Server answers (400/403/500/...) keep the existing
+       * error behaviour and are never queued.
+       */
+      if (isNetworkError(error)) {
+        /*
+         * The SAME clientRequestId is queued: if the original request was
+         * only timeout-ambiguous (it actually reached the server), the
+         * backend's idempotency key makes the later sync a no-op instead
+         * of a duplicate sale.
+         */
+        const tenant = getTenantFromToken();
+        const identity = tenant ? loadTerminalIdentity(tenant) : null;
+        const queued = enqueueOfflineSale({
+          sale: payload,
+          terminalNumber: identity?.terminalNumber || null,
+        });
+        if (queued.ok) {
+          setBasket([]);
+          setSelectedCustomer(null);
+          setShowPayment(false);
+          /*
+           * T8E: the provisional receipt is displayed while offline; after
+           * sync the server's authoritative number replaces it (POS only
+           * ever shows the provisional one here, never as permanent).
+           */
+          setSaleMessage(
+            queued.entry?.provisionalReceipt
+              ? `Saved offline — Receipt ${queued.entry.provisionalReceipt} (will sync automatically).`
+              : "Sale saved offline — will sync automatically."
+          );
+          return;
+        }
+        setSaleError("Could not save the sale offline. The sale is still on screen — do not clear it.");
+        return;
+      }
       setSaleError(error.message || "Sale could not be completed");
     }
   };
@@ -384,7 +579,18 @@ function POS({ onAdmin, onOpenOnlineOrders, onLogout }) {
         onOpenOnlineOrders={onOpenOnlineOrders}
         onLogout={onLogout}
         onlineOrderCount={onlineOrderCount}
+        offlineCount={offlineCount}
+        failedCount={failedCount}
       />
+
+      {/* T8B: small non-blocking notice while cached data is in use. */}
+      {offlineNotice && (
+        <div className="fixed top-16 left-1/2 -translate-x-1/2 z-40">
+          <div className="bg-amber-50 border border-amber-200 text-amber-800 shadow-lg rounded-lg px-4 py-2 text-sm">
+            {offlineNotice}
+          </div>
+        </div>
+      )}
 
       {/* Non-blocking new-online-order notification: a small toast over the
           till that never interrupts the current sale. Auto-dismisses. */}

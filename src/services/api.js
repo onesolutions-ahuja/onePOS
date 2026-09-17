@@ -11,7 +11,7 @@ export async function apiRequest(url, options = {}) {
   });
   const text = await response.text();
   let data = {};
-  try { data = text ? JSON.parse(text) : {}; } catch { throw new Error(`Server returned an invalid response (${response.status})`); }
-  if (!response.ok) throw new Error(data?.message || data?.error || `Request failed (${response.status})`);
+  try { data = text ? JSON.parse(text) : {}; } catch { throw Object.assign(new Error(`Server returned an invalid response (${response.status})`), { code: "INVALID_RESPONSE", status: response.status, payload: {} }); }
+  if (!response.ok) throw Object.assign(new Error(data?.message || data?.error || `Request failed (${response.status})`), { code: data?.code, status: response.status, payload: data });
   return data;
 }

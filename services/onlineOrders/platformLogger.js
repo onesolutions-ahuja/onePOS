@@ -58,17 +58,44 @@ export function redactHeaders(headers = {}) {
   return redacted;
 }
 
+let logPool = null;
+let logPoolPromise = null;
+
+function getLogPool() {
+  if (logPool) return logPool;
+  if (logPoolPromise) return logPoolPromise;
+  
+  logPoolPromise = (async () => {
+    const { Pool } = await import("pg");
+    const pool = new Pool({
+      connectionString: process.env.DATABASE_URL,
+      ssl: { rejectUnauthorized: false },
+      max: 2,
+      connectionTimeoutMillis: 5000,
+      idleTimeoutMillis: 30000,
+      // No lock_timeout/statement_timeout for logging pool - best effort
+    });
+    pool.on("error", (err) => console.error("Logging pool error:", err.message));
+    logPool = pool;
+    return pool;
+  })();
+  
+  return logPoolPromise;
+}
+
 /*
  * Writes one platform_api_logs row. Never throws - logging problems are
  * reported to the server console only.
  */
 export async function logPlatformApiCall(db, entry = {}) {
   try {
-    if (!db || !entry.platform) {
+    if (!entry.platform) {
       return;
     }
 
-    await db(
+    const pool = await getLogPool();
+    
+    await pool.query(
       `
       INSERT INTO platform_api_logs (
         company_id, platform, environment, action, endpoint, http_method,

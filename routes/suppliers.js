@@ -17,6 +17,7 @@ export default function createSuppliersRouter({ authenticate, authorize, db }) {
           SELECT
             s.id,
             s.name,
+            s.contact_name,
             s.phone,
             s.email,
             s.address,
@@ -28,7 +29,7 @@ export default function createSuppliersRouter({ authenticate, authorize, db }) {
             s.updated_at
           FROM suppliers s
           LEFT JOIN purchases p
-            ON p.supplier_id = s.id
+            ON p.supplier_id = s.id AND p.company_id = s.company_id
           WHERE s.company_id = $1
           GROUP BY s.id
           ORDER BY s.name
@@ -58,12 +59,12 @@ export default function createSuppliersRouter({ authenticate, authorize, db }) {
         const supplier = await db(
           `
           SELECT
-            s.id, s.name, s.phone, s.email, s.address, s.notes, s.active,
+            s.id, s.name, s.contact_name, s.phone, s.email, s.address, s.notes, s.active,
             COUNT(p.id)::int AS purchase_count,
             COALESCE(SUM(p.total), 0) AS total_purchase_value,
             s.created_at, s.updated_at
           FROM suppliers s
-          LEFT JOIN purchases p ON p.supplier_id = s.id
+          LEFT JOIN purchases p ON p.supplier_id = s.id AND p.company_id = s.company_id
           WHERE s.id = $1 AND s.company_id = $2
           GROUP BY s.id
           `,
@@ -121,9 +122,9 @@ export default function createSuppliersRouter({ authenticate, authorize, db }) {
       try {
         const result = await db(
           `
-          INSERT INTO suppliers (company_id, name, phone, email, address, notes)
-          VALUES ($1,$2,$3,$4,$5,$6)
-          RETURNING id, name, phone, email, address, notes, active, created_at, updated_at
+          INSERT INTO suppliers (company_id, name, phone, email, address, notes, contact_name)
+          VALUES ($1,$2,$3,$4,$5,$6,$7)
+          RETURNING id, name, contact_name, phone, email, address, notes, active, created_at, updated_at
           `,
           [
             req.user.companyId,
@@ -132,6 +133,7 @@ export default function createSuppliersRouter({ authenticate, authorize, db }) {
             email || null,
             address || null,
             notes || null,
+            req.body.contactName == null ? null : String(req.body.contactName).trim() || null,
           ]
         );
 
@@ -168,9 +170,11 @@ export default function createSuppliersRouter({ authenticate, authorize, db }) {
         const result = await db(
           `
           UPDATE suppliers
-          SET name = $1, phone = $2, email = $3, address = $4, notes = $5, updated_at = NOW()
+          SET name = $1, phone = $2, email = $3, address = $4, notes = $5,
+            contact_name = CASE WHEN $8::boolean THEN $9::varchar ELSE contact_name END,
+            updated_at = NOW()
           WHERE id = $6 AND company_id = $7
-          RETURNING id, name, phone, email, address, notes, active, created_at, updated_at
+          RETURNING id, name, contact_name, phone, email, address, notes, active, created_at, updated_at
           `,
           [
             String(name).trim(),
@@ -180,6 +184,8 @@ export default function createSuppliersRouter({ authenticate, authorize, db }) {
             notes || null,
             req.params.id,
             req.user.companyId,
+            Object.prototype.hasOwnProperty.call(req.body, "contactName"),
+            req.body.contactName == null ? null : String(req.body.contactName).trim() || null,
           ]
         );
 
@@ -225,7 +231,7 @@ export default function createSuppliersRouter({ authenticate, authorize, db }) {
           UPDATE suppliers
           SET active = $1, updated_at = NOW()
           WHERE id = $2 AND company_id = $3
-          RETURNING id, name, phone, email, address, notes, active, created_at, updated_at
+          RETURNING id, name, contact_name, phone, email, address, notes, active, created_at, updated_at
           `,
           [active, req.params.id, req.user.companyId]
         );

@@ -187,33 +187,33 @@ function ProductsAdmin({ openCreate = false }) {
   return (
     <div>
       {/* PAGE HEADER */}
-      <div className="flex items-center justify-between mb-5">
-        <div>
-          <h1 className="text-2xl font-bold">
+      <div className="flex items-center justify-between gap-3 mb-4">
+        <div className="min-w-0">
+          <h1 className="text-xl font-bold">
             Products
           </h1>
 
-          <p className="text-sm text-slate-500 mt-1">
+          <p className="text-xs text-slate-500 mt-0.5 hidden lg:block">
             Manage products available in
             your onePOS system.
           </p>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 shrink-0">
           <button
             onClick={loadProducts}
-            className="h-10 px-4 bg-white border border-slate-200 rounded-lg text-sm flex items-center gap-2 hover:bg-slate-50"
+            className="h-9 px-3 bg-white border border-slate-200 rounded-lg text-sm flex items-center gap-2 hover:bg-slate-50"
           >
-            <RefreshCw size={16} />
-            Refresh
+            <RefreshCw size={15} />
+            <span className="hidden md:inline">Refresh</span>
           </button>
 
           <button
             onClick={openCreateForm}
-            className="h-10 px-4 bg-blue-600 text-white rounded-lg text-sm font-medium flex items-center gap-2 hover:bg-blue-700"
+            className="h-9 px-3 bg-blue-600 text-white rounded-lg text-sm font-medium flex items-center gap-2 hover:bg-blue-700"
           >
-            <Plus size={17} />
-            Add Product
+            <Plus size={16} />
+            <span className="hidden md:inline">Add Product</span>
           </button>
         </div>
       </div>
@@ -232,33 +232,33 @@ function ProductsAdmin({ openCreate = false }) {
         </div>
       )}
 
-      <div className="grid grid-cols-3 gap-4 mb-5">
-        <div className="bg-white border border-slate-200 rounded-xl p-5">
-          <div className="text-sm text-slate-500">
+      <div className="grid grid-cols-3 gap-3 mb-4">
+        <div className="bg-white border border-slate-200 rounded-lg px-4 py-2.5">
+          <div className="text-xs text-slate-500">
             Total Products
           </div>
 
-          <div className="text-2xl font-bold mt-2">
+          <div className="text-lg font-bold leading-tight">
             {products.length}
           </div>
         </div>
 
-        <div className="bg-white border border-slate-200 rounded-xl p-5">
-          <div className="text-sm text-slate-500">
+        <div className="bg-white border border-slate-200 rounded-lg px-4 py-2.5">
+          <div className="text-xs text-slate-500">
             Active Products
           </div>
 
-          <div className="text-2xl font-bold mt-2">
+          <div className="text-lg font-bold leading-tight">
             {activeCount}
           </div>
         </div>
 
-        <div className="bg-white border border-slate-200 rounded-xl p-5">
-          <div className="text-sm text-slate-500">
+        <div className="bg-white border border-slate-200 rounded-lg px-4 py-2.5">
+          <div className="text-xs text-slate-500">
             Low Stock
           </div>
 
-          <div className="text-2xl font-bold mt-2 text-orange-600">
+          <div className="text-lg font-bold leading-tight text-orange-600">
             {lowStockCount}
           </div>
         </div>
@@ -266,10 +266,10 @@ function ProductsAdmin({ openCreate = false }) {
 
       {/* PRODUCT TABLE */}
       <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
-        <div className="p-4 border-b border-slate-200">
+        <div className="p-3 border-b border-slate-200">
           <div className="relative max-w-md">
             <Search
-              size={18}
+              size={16}
               className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"
             />
 
@@ -281,39 +281,39 @@ function ProductsAdmin({ openCreate = false }) {
                 )
               }
               placeholder="Search products, SKU, barcode..."
-              className="w-full h-10 pl-10 pr-3 border border-slate-200 rounded-lg text-sm outline-none focus:ring-2 focus:ring-blue-500"
+              className="w-full h-9 pl-9 pr-3 border border-slate-200 rounded-lg text-sm outline-none focus:ring-2 focus:ring-blue-500"
             />
           </div>
         </div>
 
         {loading ? (
-          <div className="p-12 text-center text-slate-400">
+          <div className="p-8 text-center text-slate-400">
             <RefreshCw
-              size={28}
-              className="mx-auto mb-3 animate-spin"
+              size={24}
+              className="mx-auto mb-2 animate-spin"
             />
 
             Loading products...
           </div>
         ) : error ? (
-          <div className="p-12 text-center">
+          <div className="p-8 text-center">
             <div className="text-red-600 font-medium">
               {error}
             </div>
 
             <button
               onClick={loadProducts}
-              className="mt-4 px-4 py-2 bg-blue-600 text-white rounded-lg text-sm"
+              className="mt-3 h-9 px-4 bg-blue-600 text-white rounded-lg text-sm"
             >
               Try Again
             </button>
           </div>
         ) : filteredProducts.length ===
           0 ? (
-          <div className="p-12 text-center text-slate-400">
+          <div className="p-8 text-center text-slate-400">
             <Package
-              size={40}
-              className="mx-auto mb-3"
+              size={32}
+              className="mx-auto mb-2"
             />
 
             <div className="font-medium text-slate-600">
@@ -331,31 +331,31 @@ function ProductsAdmin({ openCreate = false }) {
             <table className="w-full">
               <thead>
                 <tr className="bg-slate-50 border-b border-slate-200">
-                  <th className="text-left px-5 py-3 text-xs font-semibold text-slate-500 uppercase">
+                  <th className="text-left px-4 py-2 text-xs font-semibold text-slate-500 uppercase">
                     Product
                   </th>
 
-                  <th className="text-left px-5 py-3 text-xs font-semibold text-slate-500 uppercase">
+                  <th className="hidden lg:table-cell text-left px-4 py-2 text-xs font-semibold text-slate-500 uppercase">
                     SKU
                   </th>
 
-                  <th className="text-left px-5 py-3 text-xs font-semibold text-slate-500 uppercase">
+                  <th className="hidden lg:table-cell text-left px-4 py-2 text-xs font-semibold text-slate-500 uppercase">
                     Category
                   </th>
 
-                  <th className="text-right px-5 py-3 text-xs font-semibold text-slate-500 uppercase">
+                  <th className="text-right px-4 py-2 text-xs font-semibold text-slate-500 uppercase">
                     Price
                   </th>
 
-                  <th className="text-right px-5 py-3 text-xs font-semibold text-slate-500 uppercase">
+                  <th className="text-right px-4 py-2 text-xs font-semibold text-slate-500 uppercase">
                     Stock
                   </th>
 
-                  <th className="text-center px-5 py-3 text-xs font-semibold text-slate-500 uppercase">
+                  <th className="text-center px-4 py-2 text-xs font-semibold text-slate-500 uppercase">
                     Status
                   </th>
 
-                  <th className="text-right px-5 py-3 text-xs font-semibold text-slate-500 uppercase">
+                  <th className="text-right px-4 py-2 text-xs font-semibold text-slate-500 uppercase">
                     Action
                   </th>
                 </tr>
@@ -368,22 +368,22 @@ function ProductsAdmin({ openCreate = false }) {
                       key={product.id}
                       className="border-b border-slate-100 hover:bg-slate-50"
                     >
-                      <td className="px-5 py-4">
-                        <div className="flex items-center gap-3">
-                          <div className="w-10 h-10 rounded-lg bg-slate-100 flex items-center justify-center shrink-0">
+                      <td className="px-4 py-2">
+                        <div className="flex items-center gap-3 min-w-0">
+                          <div className="w-8 h-8 rounded-lg bg-slate-100 flex items-center justify-center shrink-0">
                             <Package
-                              size={19}
+                              size={16}
                               className="text-slate-400"
                             />
                           </div>
 
-                          <div>
-                            <div className="font-medium text-sm">
+                          <div className="min-w-0">
+                            <div className="font-medium text-sm max-w-[260px] 2xl:max-w-[380px] truncate" title={product.name}>
                               {product.name}
                             </div>
 
                             {product.barcode && (
-                              <div className="text-xs text-slate-400 mt-1">
+                              <div className="text-xs text-slate-400 mt-0.5 max-w-[260px] 2xl:max-w-[380px] truncate" title={product.barcode}>
                                 {product.barcode}
                               </div>
                             )}
@@ -391,25 +391,25 @@ function ProductsAdmin({ openCreate = false }) {
                         </div>
                       </td>
 
-                      <td className="px-5 py-4 text-sm text-slate-600">
+                      <td className="hidden lg:table-cell px-4 py-2 text-sm text-slate-600">
                         {product.sku ||
                           "—"}
                       </td>
 
-                      <td className="px-5 py-4">
-                        <span className="px-2.5 py-1 rounded-full bg-slate-100 text-slate-600 text-xs">
+                      <td className="hidden lg:table-cell px-4 py-2">
+                        <span className="px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 text-xs">
                           {product.category}
                         </span>
                       </td>
 
-                      <td className="px-5 py-4 text-right font-semibold text-sm">
+                      <td className="px-4 py-2 text-right font-semibold text-sm">
                         £
                         {Number(
                           product.price || 0
                         ).toFixed(2)}
                       </td>
 
-                      <td className="px-5 py-4 text-right">
+                      <td className="px-4 py-2 text-right">
                         <span
                           className={`text-sm font-medium ${
                             product.stock <=
@@ -430,9 +430,9 @@ function ProductsAdmin({ openCreate = false }) {
                         </span>
                       </td>
 
-                      <td className="px-5 py-4 text-center">
+                      <td className="px-4 py-2 text-center">
                         <span
-                          className={`px-2.5 py-1 rounded-full text-xs font-medium ${
+                          className={`px-2 py-0.5 rounded-full text-xs font-medium ${
                             product.active
                               ? "bg-emerald-50 text-emerald-700"
                               : "bg-red-50 text-red-700"
@@ -444,23 +444,23 @@ function ProductsAdmin({ openCreate = false }) {
                         </span>
                       </td>
 
-                      <td className="px-5 py-4 text-right">
+                      <td className="px-4 py-2 text-right">
                         <button
                           onClick={() => openEditForm(product)}
-                          className="p-2 rounded-lg hover:bg-slate-100 text-slate-500"
+                          className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-500"
                           title="Edit product"
                         >
                           <Edit
-                            size={17}
+                            size={16}
                           />
                         </button>
 
                         <button
                           onClick={() => deleteProduct(product)}
-                          className="p-2 rounded-lg hover:bg-red-50 text-red-500"
+                          className="p-1.5 rounded-lg hover:bg-red-50 text-red-500"
                           title="Deactivate product"
                         >
-                          <X size={17} />
+                          <X size={16} />
                         </button>
                       </td>
                     </tr>
@@ -517,6 +517,66 @@ function ProductFormModal({
     }));
   };
 
+  /*
+   * EAN master lookup (create mode only). Calls the EXISTING read-only
+   * GET /api/ean-lookup/:ean and fills ONLY reference fields — pricing,
+   * stock and supplier stay user-entered. Not-found / offline results never
+   * block manual creation. Scanners behave like keyboards: Enter triggers
+   * the lookup.
+   */
+  const [eanInput, setEanInput] = useState("");
+  const [lookingUp, setLookingUp] = useState(false);
+  const [lookupResult, setLookupResult] = useState(null);
+
+  const runEanLookup = async () => {
+    if (lookingUp || saving) return;
+
+    const ean = eanInput.trim();
+    if (!/^([0-9]{8}|[0-9]{12,14})$/.test(ean)) {
+      setLookupResult({ type: "invalid", message: "EAN must be 8, 12, 13 or 14 digits — nothing was looked up." });
+      return;
+    }
+
+    setLookingUp(true);
+    setLookupResult(null);
+    try {
+      const response = await apiRequest(`/api/ean-lookup/${ean}`);
+      const ref = response?.data || null;
+
+      const referenceNames = [ref?.category, ref?.subcategory]
+        .filter(Boolean)
+        .map((name) => String(name).toLowerCase());
+      const categoryMatch = referenceNames.length
+        ? categories.find(
+            (category) =>
+              referenceNames.includes(String(category.name).toLowerCase()) ||
+              referenceNames.some((name) =>
+                String(category.name).toLowerCase().includes(name)
+              )
+          )
+        : null;
+
+      setForm((current) => ({
+        ...current,
+        name: ref?.product_name || current.name,
+        barcode: ean,
+        categoryId: categoryMatch ? categoryMatch.id : current.categoryId,
+      }));
+      setLookupResult({ type: "found", ref, message: "Reference details added below — enter your own pricing and stock." });
+    } catch (err) {
+      if (err?.status === 404) {
+        setForm((current) => ({ ...current, barcode: current.barcode || ean }));
+        setLookupResult({ type: "not-found", message: "EAN not found in the product master — continue creating the product manually." });
+      } else if (err?.status === 400) {
+        setLookupResult({ type: "invalid", message: err?.message || "EAN must be 8, 12, 13 or 14 digits." });
+      } else {
+        setLookupResult({ type: "error", message: "Lookup unavailable — you can still create the product manually." });
+      }
+    } finally {
+      setLookingUp(false);
+    }
+  };
+
   const submit = (event) => {
     event.preventDefault();
 
@@ -549,34 +609,94 @@ function ProductFormModal({
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-xl w-[620px] max-w-full shadow-2xl">
-        <div className="p-5 border-b border-slate-200 flex items-center justify-between">
+      <div className="bg-white rounded-xl w-[620px] max-w-full shadow-2xl max-h-[92vh] overflow-y-auto">
+        <div className="px-4 py-3 border-b border-slate-200 flex items-center justify-between">
           <div>
-            <h2 className="font-bold text-xl">
+            <h2 className="font-bold text-lg">
               {product ? "Edit Product" : "Add Product"}
             </h2>
-            <p className="text-sm text-slate-500 mt-1">
+            <p className="text-xs text-slate-500 mt-0.5">
               Product details are saved to the onePOS database.
             </p>
           </div>
           <button
             onClick={onClose}
             disabled={saving}
-            className="p-2 hover:bg-slate-100 rounded"
+            className="p-1.5 hover:bg-slate-100 rounded"
             title="Close"
           >
-            <X size={20} />
+            <X size={18} />
           </button>
         </div>
 
-        <form onSubmit={submit} className="p-5">
+        <form onSubmit={submit} className="p-4">
+          {!product && (
+            <div className="mb-4 p-3 bg-slate-50 border border-slate-200 rounded-lg">
+              <span className="block text-xs font-medium text-slate-600 mb-1.5">
+                EAN / barcode lookup
+                <span className="font-normal text-slate-400"> — scan or type, then press Enter</span>
+              </span>
+              <div className="flex gap-2">
+                <input
+                  value={eanInput}
+                  onChange={(event) => setEanInput(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      event.preventDefault();
+                      runEanLookup();
+                    }
+                  }}
+                  inputMode="numeric"
+                  autoComplete="off"
+                  placeholder="Scan or type EAN / barcode (8, 12–14 digits)"
+                  className="flex-1 h-9 px-3 border border-slate-200 rounded-lg text-sm outline-none focus:ring-2 focus:ring-blue-500 bg-white"
+                />
+                <button
+                  type="button"
+                  onClick={runEanLookup}
+                  disabled={lookingUp || saving}
+                  className="h-9 px-3 bg-slate-800 text-white rounded-lg text-sm hover:bg-slate-700 disabled:opacity-60 flex items-center gap-1.5 shrink-0"
+                >
+                  {lookingUp ? <RefreshCw size={14} className="animate-spin" /> : <Search size={14} />}
+                  {lookingUp ? "Looking up…" : "Lookup"}
+                </button>
+              </div>
+              {lookupResult && (
+                <div
+                  role="status"
+                  aria-live="polite"
+                  className={`mt-2 text-xs rounded px-2.5 py-1.5 ${
+                    lookupResult.type === "found"
+                      ? "bg-emerald-50 border border-emerald-200 text-emerald-700"
+                      : lookupResult.type === "not-found"
+                        ? "bg-slate-100 border border-slate-200 text-slate-600"
+                        : "bg-amber-50 border border-amber-200 text-amber-700"
+                  }`}
+                >
+                  {lookupResult.type === "found" && (
+                    <>
+                      <span className="font-medium">{lookupResult.ref?.product_name}</span>
+                      {[lookupResult.ref?.brand, lookupResult.ref?.category, lookupResult.ref?.subcategory, lookupResult.ref?.unit_description]
+                        .filter(Boolean)
+                        .join(" · ") && (
+                        <span> — {[lookupResult.ref?.brand, lookupResult.ref?.category, lookupResult.ref?.subcategory, lookupResult.ref?.unit_description].filter(Boolean).join(" · ")}</span>
+                      )}
+                      {" — "}{lookupResult.message}
+                    </>
+                  )}
+                  {lookupResult.type !== "found" && lookupResult.message}
+                </div>
+              )}
+            </div>
+          )}
+
           {error && (
             <div className="mb-4 px-3 py-2 bg-red-50 border border-red-200 text-red-700 rounded text-sm">
               {error}
             </div>
           )}
 
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-2 gap-3">
             {fields.map(([field, label, type, required]) => (
               <label key={field} className="text-sm text-slate-600">
                 <span className="block mb-1 font-medium">{label}</span>
@@ -589,7 +709,7 @@ function ProductFormModal({
                   onChange={(event) =>
                     updateField(field, event.target.value)
                   }
-                  className="w-full h-10 px-3 border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-blue-500"
+                  className="w-full h-9 px-3 border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-blue-500"
                 />
               </label>
             ))}
@@ -601,7 +721,7 @@ function ProductFormModal({
                 onChange={(event) =>
                   updateField("categoryId", event.target.value)
                 }
-                className="w-full h-10 px-3 border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-blue-500 bg-white"
+                className="w-full h-9 px-3 border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-blue-500 bg-white"
               >
                 <option value="">Uncategorised</option>
                 {categories.map((category) => (
@@ -623,9 +743,7 @@ function ProductFormModal({
               />
               Track stock for this product
             </label>
-          </div>
-
-          <div className="mt-5 pt-4 border-t border-slate-200">
+          </div>          <div className="mt-4 pt-3 border-t border-slate-200">
             <p className="text-sm font-semibold text-slate-700 mb-3">
               Online platforms (Uber Eats / Deliveroo)
             </p>
@@ -647,7 +765,7 @@ function ProductFormModal({
                     placeholder="Uber item ID (optional)"
                     value={form.uberItemId}
                     onChange={(event) => updateField("uberItemId", event.target.value)}
-                    className="w-full h-10 px-3 border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+                    className="w-full h-9 px-3 border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-blue-500 text-sm"
                   />
                 )}
               </div>
@@ -675,19 +793,19 @@ function ProductFormModal({
             </div>
           </div>
 
-          <div className="flex justify-end gap-2 mt-6 pt-4 border-t border-slate-200">
+          <div className="flex justify-end gap-2 mt-4 pt-3 border-t border-slate-200">
             <button
               type="button"
               onClick={onClose}
               disabled={saving}
-              className="h-10 px-4 border border-slate-200 rounded-lg text-sm hover:bg-slate-50"
+              className="h-9 px-4 border border-slate-200 rounded-lg text-sm hover:bg-slate-50"
             >
               Cancel
             </button>
             <button
               type="submit"
               disabled={saving || !form.name.trim()}
-              className="h-10 px-5 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700"
+              className="h-9 px-4 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700"
             >
               {saving ? "Saving..." : product ? "Save changes" : "Create product"}
             </button>

@@ -199,6 +199,39 @@ ON categories(company_id);
 -- PRODUCTS
 -- ============================================================
 
+-- ============================================================
+-- GLOBAL EAN REFERENCE (separate from customer products; no pricing)
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS ean_product_master (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    ean VARCHAR(14) NOT NULL CHECK (ean ~ '^([0-9]{8}|[0-9]{12,14})$'),
+    product_name VARCHAR(255) NOT NULL,
+    brand VARCHAR(200),
+    category VARCHAR(200),
+    subcategory VARCHAR(200),
+    unit_description VARCHAR(255),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS ux_ean_product_master_ean
+ON ean_product_master(ean);
+
+-- EAN lookup audit only; no limits, pricing or customer product changes.
+CREATE TABLE IF NOT EXISTS ean_lookup_usage (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+    company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+    store_id UUID REFERENCES stores(id) ON DELETE SET NULL,
+    ean VARCHAR(14) NOT NULL,
+    lookup_result VARCHAR(9) NOT NULL CHECK (lookup_result IN ('FOUND', 'NOT_FOUND')),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_ean_lookup_usage_company_created
+ON ean_lookup_usage(company_id, created_at);
+
 CREATE TABLE IF NOT EXISTS products (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
@@ -290,6 +323,8 @@ CREATE TABLE IF NOT EXISTS suppliers (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS contact_name VARCHAR(200);
 
 CREATE INDEX IF NOT EXISTS idx_suppliers_company
 ON suppliers(company_id);
@@ -432,8 +467,32 @@ CREATE TABLE IF NOT EXISTS sales (
     sync_status VARCHAR(50) NOT NULL DEFAULT 'synced',
 
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    completed_at TIMESTAMPTZ
+    completed_at TIMESTAMPTZ,
+
+    /*
+     * ONLINE ORDER -> POS SALE: set when an Uber Eats / Deliveroo order is
+     * completed. UNIQUE (below) makes duplicate sales on retry impossible.
+     * The FK itself is added after online_orders exists (see ONLINE ORDERS
+     * section) because this table is created earlier in this script.
+     */
+    online_order_id UUID
 );
+
+ALTER TABLE sales
+    ADD COLUMN IF NOT EXISTS client_request_id UUID;
+
+CREATE UNIQUE INDEX IF NOT EXISTS ux_sales_client_request
+ON sales(company_id, client_request_id);
+
+/*
+ * Receipt numbers are authoritative and sequential per terminal per
+ * business day (T8E). Partial on terminal_id so Online Order receipts
+ * (terminal_id IS NULL) are exempt from the pattern entirely.
+ */
+CREATE UNIQUE INDEX IF NOT EXISTS ux_sales_terminal_receipt
+ON sales(terminal_id, receipt_number)
+WHERE terminal_id IS NOT NULL
+  AND receipt_number LIKE '%-%-%';
 
 CREATE INDEX IF NOT EXISTS idx_sales_company
 ON sales(company_id);
@@ -680,6 +739,27 @@ CREATE INDEX IF NOT EXISTS idx_online_orders_status
 ON online_orders(company_id, status, created_at);
 
 /*
+ * ONLINE ORDER -> POS SALE link (column declared on the sales table above,
+ * before online_orders existed; the FK is added here). The UNIQUE index is
+ * the database-level guarantee that completing an order can never create a
+ * second sale, no matter how completion is retried.
+ */
+ALTER TABLE sales
+    ADD COLUMN IF NOT EXISTS online_order_id UUID;
+
+CREATE UNIQUE INDEX IF NOT EXISTS ux_sales_online_order
+ON sales(online_order_id);
+
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_sales_online_order') THEN
+        ALTER TABLE sales
+            ADD CONSTRAINT fk_sales_online_order
+            FOREIGN KEY (online_order_id) REFERENCES online_orders(id);
+    END IF;
+END $$;
+
+/*
  * An incoming platform item may arrive WITHOUT a onePOS product mapping (e.g.
  * a Deliveroo item whose POS id is not yet linked in Products). Such an item
  * must never be dropped or fail the whole order, so product_id is nullable and
@@ -828,3 +908,104 @@ VALUES
 ('online_orders.configure', 'Configure Online Platforms', 'Configure product availability on Uber Eats / Deliveroo')
 
 ON CONFLICT (code) DO NOTHING;
+
+-- ============================================================
+-- INTEGRATIONS - generic integration foundation (T9A)
+-- NOTE: the table name "integrations" is already used by the Online
+-- Orders platform configuration (company + provider + JSONB config).
+-- The generic module therefore uses "integration_connections" and must
+-- not be renamed without migrating that subsystem first.
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS integration_connections (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+    store_id UUID REFERENCES stores(id) ON DELETE CASCADE,
+    name VARCHAR(200) NOT NULL,
+    provider_name VARCHAR(100),
+    integration_type VARCHAR(50) NOT NULL DEFAULT 'generic',
+    base_url TEXT,
+    auth_type VARCHAR(30) NOT NULL DEFAULT 'none' CHECK (
+        auth_type IN ('none', 'api_key', 'bearer', 'basic')
+    ),
+    credentials_encrypted TEXT,
+    enabled BOOLEAN NOT NULL DEFAULT TRUE,
+    created_by UUID REFERENCES users(id) ON DELETE SET NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_integration_connections_company
+ON integration_connections(company_id);
+
+CREATE INDEX IF NOT EXISTS idx_integration_connections_store
+ON integration_connections(store_id);
+
+CREATE TABLE IF NOT EXISTS integration_endpoints (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    integration_id UUID NOT NULL REFERENCES integration_connections(id) ON DELETE CASCADE,
+    name VARCHAR(200) NOT NULL,
+    method VARCHAR(10) NOT NULL DEFAULT 'POST' CHECK (
+        method IN ('GET', 'POST', 'PUT', 'PATCH', 'DELETE')
+    ),
+    path TEXT NOT NULL,
+    entity_type VARCHAR(50) NOT NULL DEFAULT 'sale',
+    enabled BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_integration_endpoints_integration
+ON integration_endpoints(integration_id);
+
+CREATE TABLE IF NOT EXISTS integration_field_mappings (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    endpoint_id UUID NOT NULL REFERENCES integration_endpoints(id) ON DELETE CASCADE,
+    partner_field_path TEXT NOT NULL,
+    onepos_source_path TEXT,
+    mapping_type VARCHAR(20) NOT NULL DEFAULT 'direct' CHECK (
+        mapping_type IN ('direct', 'constant', 'template')
+    ),
+    static_value TEXT,
+    display_order INTEGER NOT NULL DEFAULT 0,
+    /* direct mappings must carry a source path; constant/template use static_value. */
+    CONSTRAINT integration_mappings_direct_requires_source CHECK (
+        mapping_type <> 'direct' OR onepos_source_path IS NOT NULL
+    ),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_integration_field_mappings_endpoint
+ON integration_field_mappings(endpoint_id);
+
+CREATE TABLE IF NOT EXISTS integration_api_logs (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    integration_id UUID NOT NULL REFERENCES integration_connections(id) ON DELETE CASCADE,
+    endpoint_id UUID REFERENCES integration_endpoints(id) ON DELETE SET NULL,
+    company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+    store_id UUID REFERENCES stores(id) ON DELETE SET NULL,
+    entity_type VARCHAR(50),
+    entity_id UUID,
+    correlation_id VARCHAR(100),
+    method VARCHAR(10) NOT NULL,
+    url TEXT NOT NULL,
+    request_headers TEXT,
+    request_body TEXT,
+    response_status INTEGER,
+    response_headers TEXT,
+    response_body TEXT,
+    duration_ms INTEGER,
+    success BOOLEAN NOT NULL DEFAULT FALSE,
+    error_message TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_integration_api_logs_company_created
+ON integration_api_logs(company_id, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_integration_api_logs_integration
+ON integration_api_logs(integration_id, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_integration_api_logs_entity
+ON integration_api_logs(entity_type, entity_id);

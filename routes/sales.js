@@ -1,4 +1,5 @@
 import express from "express";
+import { dispatchIntegrationEvent } from "../services/integrationDispatcher.js";
 
 export default function createSalesRouter({
   authenticate,
@@ -97,8 +98,11 @@ export default function createSalesRouter({
           `
           SELECT s.*, st.name AS store_name, u.username AS cashier,
             cst.name AS customer_name, cst.phone AS customer_phone, cst.email AS customer_email,
-            pay.payment_method, pay.amount AS payment_amount, pay.status AS payment_status, pay.created_at AS payment_created_at
+            pay.payment_method, pay.amount AS payment_amount, pay.status AS payment_status, pay.created_at AS payment_created_at,
+            oo.platform, oo.external_order_id
           FROM sales s
+          LEFT JOIN online_orders oo ON oo.id = s.online_order_id
+            AND oo.company_id = s.company_id AND oo.store_id = s.store_id
           LEFT JOIN stores st ON st.id = s.store_id
           LEFT JOIN users u ON u.id = s.user_id
           LEFT JOIN customers cst ON cst.id = s.customer_id
@@ -147,30 +151,55 @@ export default function createSalesRouter({
         });
       }
 
-      const session = await db(
-        `
-        SELECT id, terminal_id
-        FROM till_sessions
-        WHERE company_id = $1
-          AND store_id = $2
-          AND status = 'open'
-        ORDER BY opened_at DESC
-        LIMIT 1
-        `,
-        [req.user.companyId, req.user.storeId]
-      );
-
-      if (!session.rows.length) {
-        return res.status(400).json({
-          success: false,
-          message: "No open till session. Open a till before selling.",
-        });
+      const clientRequestId = req.body.clientRequestId ?? null;
+      if (clientRequestId !== null && (typeof clientRequestId !== "string" ||
+        !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(clientRequestId))) {
+        return res.status(400).json({ success: false, message: "Invalid clientRequestId UUID" });
       }
 
       const client = await pool.connect();
 
       try {
         await client.query("BEGIN");
+
+        if (clientRequestId !== null) {
+          // Serialize retries before any customer, inventory or payment writes.
+          await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [
+            `${req.user.companyId}:${clientRequestId.toLowerCase()}`,
+          ]);
+          const existing = await client.query(
+            "SELECT id, created_at, total, receipt_number FROM sales WHERE company_id = $1 AND client_request_id = $2",
+            [req.user.companyId, clientRequestId]
+          );
+          if (existing.rows.length) {
+            await client.query("COMMIT");
+            return res.status(201).json({ success: true, message: "Sale completed", sale: existing.rows[0] });
+          }
+        }
+
+        const session = await db(
+          `
+          SELECT ts.id, ts.terminal_id, t.terminal_number, c.timezone
+          FROM till_sessions ts
+          INNER JOIN terminals t ON t.id = ts.terminal_id
+          INNER JOIN stores s ON s.id = ts.store_id
+          INNER JOIN companies c ON c.id = s.company_id
+          WHERE ts.company_id = $1
+            AND ts.store_id = $2
+            AND ts.status = 'open'
+          ORDER BY ts.opened_at DESC
+          LIMIT 1
+          `,
+          [req.user.companyId, req.user.storeId]
+        );
+
+        if (!session.rows.length) {
+          await client.query("ROLLBACK");
+          return res.status(400).json({
+            success: false,
+            message: "No open till session. Open a till before selling.",
+          });
+        }
 
         const {
           items = [],
@@ -241,6 +270,43 @@ export default function createSalesRouter({
         }
 
         /*
+         * Authoritative receipt number (T8E): sequential per terminal per
+         * business day, in the same shape as the offline provisional
+         * receipts (PREFIX-YYYYMMDD-NNNN). The advisory lock serialises
+         * concurrent numbering for this terminal/day, and MAX(numeric
+         * suffix)+1 stays monotonic even if old sale rows are ever
+         * removed. Online-order receipts (terminal_id NULL, platform
+         * references) never match the LIKE prefix, so they are neither
+         * renumbered nor blocked.
+         */
+        const receiptPrefix = (session.rows[0].terminal_number || "T").trim();
+        const receiptDateKey = await client.query(
+          "SELECT to_char(timezone($1, NOW()), 'YYYYMMDD') AS date_key",
+          [session.rows[0].timezone || "UTC"]
+        );
+        const dateKey = receiptDateKey.rows[0].date_key;
+
+        await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [
+          `${req.user.companyId}:${session.rows[0].terminal_id}:${dateKey}`,
+        ]);
+
+        const likePrefix =
+          `${receiptPrefix}-${dateKey}-`.replace(/([%_\\])/g, "\\$1") + "%";
+        const nextNumberResult = await client.query(
+          `
+          SELECT COALESCE(MAX(NULLIF(split_part(receipt_number, '-', 3), '')::int), 0) + 1 AS next_number
+          FROM sales
+          WHERE company_id = $1
+            AND terminal_id = $2
+            AND receipt_number LIKE $3
+          `,
+          [req.user.companyId, session.rows[0].terminal_id, likePrefix]
+        );
+        const receiptNumber = `${receiptPrefix}-${dateKey}-${String(
+          nextNumberResult.rows[0].next_number
+        ).padStart(4, "0")}`;
+
+        /*
          * Create sale.
          */
         const sale = await client.query(
@@ -251,6 +317,7 @@ export default function createSalesRouter({
             user_id,
             customer_id,
             terminal_id,
+            receipt_number,
             subtotal,
             tax,
             discount,
@@ -258,30 +325,35 @@ export default function createSalesRouter({
             status,
             offline_created,
             sync_status,
+            client_request_id,
             completed_at
           )
           VALUES (
-            $1,$2,$3,$4,$5,$6,$7,$8,$9,
+            $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,
             'completed',
             false,
             'synced',
+            $11,
             NOW()
           )
           RETURNING
             id,
             created_at,
-            total
+            total,
+            receipt_number
           `,
           [
             req.user.companyId,
             req.user.storeId,
             req.user.id,
             customerId,
-            session.terminal_id,
+            session.rows[0].terminal_id,
+            receiptNumber,
             Number(subtotal) || 0,
             Number(tax) || 0,
             Number(discount) || 0,
             Number(total) || 0,
+            clientRequestId,
           ]
         );
 
@@ -368,6 +440,17 @@ export default function createSalesRouter({
         );
 
         await client.query("COMMIT");
+
+        /*
+         * T9G: fire-and-forget integration dispatch (never blocks/throws -
+         * partner failures cannot affect the completed sale).
+         */
+        dispatchIntegrationEvent({
+          event: "SALE_CREATED",
+          deps: { db },
+          context: { companyId: req.user.companyId, storeId: req.user.storeId },
+          entityId: saleId,
+        }).catch(() => {});
 
         res.status(201).json({
           success: true,

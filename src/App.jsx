@@ -6,6 +6,7 @@ import AdminLayout from "./pages/admin/AdminLayout.jsx";
 
 export default function App() {
   const [loggedIn, setLoggedIn] = useState(false);
+  const [user, setUser] = useState(null);
 
   const [checkingSession, setCheckingSession] =
     useState(true);
@@ -32,6 +33,7 @@ export default function App() {
         }
 
         setLoggedIn(true);
+        setUser(data.user);
       } catch {
         localStorage.removeItem("onepos_token");
         setLoggedIn(false);
@@ -45,6 +47,7 @@ export default function App() {
 
   const logout = () => {
     setLoggedIn(false);
+    setUser(null);
     setView("pos");
 
     localStorage.removeItem(
@@ -63,9 +66,10 @@ export default function App() {
   if (!loggedIn) {
     return (
       <Login
-        onLogin={() =>
-          setLoggedIn(true)
-        }
+        onLogin={(loggedInUser) => {
+          setUser(loggedInUser);
+          setLoggedIn(true);
+        }}
       />
     );
   }
@@ -73,6 +77,7 @@ export default function App() {
   if (view === "admin") {
     return (
       <AdminLayout
+        user={user}
         onPOS={() =>
           setView("pos")
         }

@@ -385,6 +385,95 @@ export default function createAuthRouter(pool) {
 
 
   /*
+   * GET /api/auth/me/permissions
+   *
+   * Returns the permission codes that apply to the current session, using the
+   * SAME model as the server-side `authorize()` helper:
+   *   - Administrator / Owner roles bypass permission checks entirely, so they
+   *     are reported via the `isAdmin` flag (mirrors canViewCompanyCustomers);
+   *   - every other role reports the codes granted through role_permissions.
+   *
+   * Read-only convenience for UI gating (showing/hiding buttons and pages the
+   * backend would reject anyway). It never grants anything on its own - every
+   * API endpoint keeps enforcing its own authorize(...) checks.
+   */
+  router.get("/me/permissions", async (req, res) => {
+    try {
+      const header = req.headers.authorization;
+
+      if (!header || !header.startsWith("Bearer ")) {
+        return res.status(401).json({
+          success: false,
+          message: "Authentication required"
+        });
+      }
+
+      const token = header.substring(7);
+
+      const decoded = jwt.verify(
+        token,
+        process.env.JWT_SECRET
+      );
+
+      const result = await pool.query(
+        `
+        SELECT
+          u.role_id,
+          r.name AS role_name
+        FROM users u
+        LEFT JOIN roles r
+          ON r.id = u.role_id
+        WHERE u.id = $1
+          AND u.active = TRUE
+        `,
+        [decoded.userId]
+      );
+
+      if (result.rows.length === 0) {
+        return res.status(401).json({
+          success: false,
+          message: "User no longer exists or is disabled"
+        });
+      }
+
+      const roleName = (result.rows[0].role_name || "").toLowerCase();
+      const isAdmin = ["administrator", "admin", "owner"].includes(roleName);
+
+      let permissions = [];
+
+      if (!isAdmin && result.rows[0].role_id) {
+        const perms = await pool.query(
+          `
+          SELECT p.code
+          FROM role_permissions rp
+          INNER JOIN permissions p
+            ON p.id = rp.permission_id
+          WHERE rp.role_id = $1
+          `,
+          [result.rows[0].role_id]
+        );
+
+        permissions = perms.rows.map((row) => row.code);
+      }
+
+      res.json({
+        success: true,
+        data: {
+          isAdmin,
+          permissions
+        }
+      });
+
+    } catch (error) {
+      return res.status(401).json({
+        success: false,
+        message: "Invalid or expired session"
+      });
+    }
+  });
+
+
+  /*
    * POST /api/auth/change-password
    */
   router.post("/change-password", async (req, res) => {

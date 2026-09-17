@@ -1,59 +1,46 @@
+import useOnlineOrderActions from "./useOnlineOrderActions.js";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Loader2, RefreshCw, X } from "lucide-react";
+import { Loader2, RefreshCw, LayoutGrid, Table2, X } from "lucide-react";
 import { apiRequest } from "../../services/api.js";
 import { fmt } from "../../utils/formatters.js";
+import OnlineOrderSummary from "../../components/online/OnlineOrderSummary.jsx";
+import OnlineOrderCard from "../../components/online/OnlineOrderCard.jsx";
+import CompleteOrderModal from "../../components/online/CompleteOrderModal.jsx";
+import { printOnlineOrder } from "../../utils/onlineOrderPrint.js";
+import {
+  ACTIVE_STATUSES,
+  TERMINAL_STATUSES,
+  STATUS_BADGES,
+  ORDER_ACTIONS,
+  STATUS_ACTIONS,
+} from "./onlineOrdersShared.js";
 
 /*
  * Admin UI for the Online Orders workflow (Uber Eats / Deliveroo).
- * Focuses on incoming orders, item mapping and the order lifecycle actions.
+ *
+ * Two views over the same lifecycle:
+ *   - "Processing" (default): till-style summary + compact pending-order
+ *     cards for fast one-click order handling;
+ *   - "All orders": the original full table with the status filter, item
+ *     mapping, order detail and history.
+ *
+ * Both views share the lifecycle matrix, busy feedback and completion OTP
+ * behaviour from onlineOrdersShared / the extracted components, so actions
+ * behave identically everywhere.
  */
-
-const STATUS_BADGES = {
-  RECEIVED: "bg-blue-50 text-blue-700",
-  ACCEPTED: "bg-indigo-50 text-indigo-700",
-  PREPARING: "bg-amber-50 text-amber-700",
-  READY: "bg-emerald-50 text-emerald-700",
-  COMPLETED: "bg-slate-100 text-slate-500",
-  REJECTED: "bg-red-50 text-red-700",
-  CANCELLED: "bg-red-50 text-red-700",
-};
-
-const TERMINAL_STATUSES = ["COMPLETED", "REJECTED", "CANCELLED"];
-
-/*
- * Every lifecycle action the table offers. `label` is the button text at rest,
- * `busy` is the text shown the instant the button is clicked, so a click is
- * always visibly acknowledged while the platform call is in flight.
- */
-const ORDER_ACTIONS = {
-  accept: { label: "Accept", busy: "Accepting...", className: "bg-indigo-600 text-white hover:bg-indigo-700" },
-  reject: { label: "Reject", busy: "Rejecting...", className: "bg-red-50 text-red-600 hover:bg-red-100" },
-  preparing: { label: "Preparing", busy: "Preparing...", className: "bg-amber-500 text-white hover:bg-amber-600" },
-  ready: { label: "Ready", busy: "Marking ready...", className: "bg-emerald-600 text-white hover:bg-emerald-700" },
-  complete: { label: "Complete", busy: "Completing...", className: "bg-blue-600 text-white hover:bg-blue-700" },
-  cancel: { label: "Cancel", busy: "Cancelling...", className: "bg-slate-100 text-slate-600 hover:bg-slate-200" },
-};
-
-/*
- * Which actions each status offers - exactly the transitions the backend
- * accepts:
- *   RECEIVED  -> ACCEPTED (accept) / REJECTED (reject)
- *   ACCEPTED  -> PREPARING (preparing)
- *   PREPARING -> READY (ready) / COMPLETED (complete)
- *   READY     -> COMPLETED (complete)
- *   any active status -> CANCELLED (cancel)
- * PREPARING is a status: it never offers a "Preparing" action of its own.
- * Terminal orders (COMPLETED / REJECTED / CANCELLED) offer nothing.
- */
-const STATUS_ACTIONS = {
-  RECEIVED: ["accept", "reject", "cancel"],
-  ACCEPTED: ["preparing", "cancel"],
-  PREPARING: ["ready", "complete", "cancel"],
-  READY: ["complete", "cancel"],
-};
 
 export default function OnlineOrdersAdmin() {
   const [orders, setOrders] = useState([]);
+  /*
+   * Unfiltered list (all statuses) that feeds the summary strip and the
+   * pending-order processing cards - the summary needs completed/cancelled
+   * counts even while the table below is filtered.
+   */
+  const [allOrders, setAllOrders] = useState([]);
+  /* "processing" = pending-order cards (default) | "all" = full table */
+  const [viewMode, setViewMode] = useState("processing");
+  /* Item lines per order id for the processing cards ({ order, items, events }) */
+  const [orderDetails, setOrderDetails] = useState({});
   const [statusFilter, setStatusFilter] = useState("");
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
@@ -64,13 +51,7 @@ export default function OnlineOrdersAdmin() {
    * button that was clicked show its own "Processing..." label, and holds back
    * only that order's own row - the rest of the page stays usable.
    */
-  const [busyAction, setBusyAction] = useState(null);
-
-  // Completion OTP modal
-  const [completeTarget, setCompleteTarget] = useState(null);
-  const [otpInput, setOtpInput] = useState("");
-  const [otpError, setOtpError] = useState("");
-  const [otpBusy, setOtpBusy] = useState(false);
+  const [platformFilter, setPlatformFilter] = useState("");
 
   // Deliveroo item mapping modal
   const [mapTarget, setMapTarget] = useState(null); // { order, item }
@@ -86,6 +67,7 @@ export default function OnlineOrdersAdmin() {
 
   // Guards the mount-time double fetch (see the statusFilter effect below).
   const initialLoadDone = useRef(false);
+  const detailFetches = useRef(new Set());
 
   const loadOrders = useCallback(async () => {
     const suffix = statusFilter ? `?status=${encodeURIComponent(statusFilter)}` : "";
@@ -93,11 +75,16 @@ export default function OnlineOrdersAdmin() {
     if (data.success) setOrders(data.data || []);
   }, [statusFilter]);
 
+  const loadAllOrders = useCallback(async () => {
+    const data = await apiRequest("/api/online/orders?limit=500");
+    if (data.success) setAllOrders(data.data || []);
+  }, []);
+
   const loadAll = useCallback(async () => {
     setLoading(true);
     setError("");
     try {
-      await loadOrders();
+      await Promise.all([loadOrders(), loadAllOrders()]);
       const platformsData = await apiRequest("/api/settings/online-platforms");
       if (platformsData.success) {
         const required = {};
@@ -109,7 +96,7 @@ export default function OnlineOrdersAdmin() {
     } finally {
       setLoading(false);
     }
-  }, [loadOrders]);
+  }, [loadOrders, loadAllOrders]);
 
   useEffect(() => {
     loadAll();
@@ -130,13 +117,6 @@ export default function OnlineOrdersAdmin() {
     loadOrders().catch((err) => setError(err.message || "Unable to load orders"));
   }, [statusFilter, loadOrders]);
 
-  /*
-   * Applies the order returned by an action response to the already-loaded
-   * table, so the new status appears without re-fetching the whole list. The
-   * list-only columns (item_count / unmapped_count) are kept from the row we
-   * already have; a row that no longer matches the active status filter is
-   * dropped, exactly as a full reload would do.
-   */
   const applyOrderUpdate = useCallback((updatedOrder) => {
     if (!updatedOrder) return;
 
@@ -153,6 +133,14 @@ export default function OnlineOrdersAdmin() {
       return next;
     });
 
+    setAllOrders((current) => {
+      const index = current.findIndex((row) => row.id === updatedOrder.id);
+      if (index === -1) return current;
+      const next = current.slice();
+      next[index] = { ...current[index], ...updatedOrder };
+      return next;
+    });
+
     // Keep an open detail panel in step with its row.
     setDetail((current) =>
       current && current.order && current.order.id === updatedOrder.id
@@ -161,121 +149,99 @@ export default function OnlineOrdersAdmin() {
     );
   }, [statusFilter]);
 
+  const { busyActions, runAction, completeTarget, setCompleteTarget, otpInput, setOtpInput, otpError, otpBusy, submitComplete } = useOnlineOrderActions({ applyOrderUpdate, otpRequired, setError, setMessage });
+
   /*
-   * Runs one lifecycle action.
-   *
-   * busyAction is set before the request is awaited, so the clicked button
-   * switches to its "Processing..." label on the very next paint. On success
-   * the affected row is patched from the response (no extra list GET). On
-   * failure the row is deliberately left untouched: the platform did not
-   * confirm, so the onePOS status must not advance.
+   * Quiet 20s refresh of the summary/card data so the processing view stays
+   * current on a till. Skipped while an action or the OTP modal is in flight
+   * so an in-flight platform call is never visually disturbed.
    */
-  const orderAction = async (order, action, body) => {
-    if (busyAction && busyAction.orderId === order.id) return; // one action per order
+  useEffect(() => {
+    const timer = setInterval(() => {
+      if (Object.keys(busyActions).length || completeTarget) return;
+      loadAllOrders().catch((err) => console.error("Online orders refresh:", err));
+    }, 20000);
+    return () => clearInterval(timer);
+  }, [busyActions, completeTarget, loadAllOrders]);
 
-    setBusyAction({ orderId: order.id, action });
-    setError("");
+  /*
+   * Applies the order returned by an action response to BOTH loaded lists,
+   * so the new status appears without re-fetching anything:
+   *   - `orders`   the (possibly status-filtered) table list: a row that no
+   *     longer matches the active filter is dropped, exactly as a full
+   *     reload would do - a completed order leaves the pending view;
+   *   - `allOrders` the unfiltered summary/card list: the row is patched in
+   *     place so summary counts stay correct.
+   * The list-only columns (item_count / unmapped_count) are kept from the
+   * row we already have.
+   */
+  /*
+   * Loads the item lines for a processing card (the list endpoint only
+   * returns counts). Each order's detail is fetched once; cards show a
+   * compact "N item(s)…" line until their detail arrives. Returns the detail
+   * so printing can use fresh data immediately.
+   */
+  const ensureDetail = useCallback(
+    async (orderId) => {
+      if (!orderId) return null;
+      if (orderDetails[orderId]) return orderDetails[orderId];
+      if (detailFetches.current.has(orderId)) return null;
 
-    try {
-      const data = await apiRequest(`/api/online/orders/${order.id}/${action}`, {
-        method: "POST",
-        body: body ? JSON.stringify(body) : JSON.stringify({}),
-      });
-
-      if (!data.success) {
-        throw Object.assign(new Error(data.message || "Action failed"), { code: data.code });
+      detailFetches.current.add(orderId);
+      try {
+        const data = await apiRequest(`/api/online/orders/${orderId}`);
+        if (data.success) {
+          setOrderDetails((current) => ({ ...current, [orderId]: data.data }));
+          return data.data;
+        }
+      } catch {
+        /* card keeps its "N item(s)…" fallback; not fatal for processing */
+      } finally {
+        detailFetches.current.delete(orderId);
       }
+      return null;
+    },
+    [orderDetails]
+  );
 
-      applyOrderUpdate(data.data && data.data.order);
-      setMessage(`Order ${order.external_order_id}: ${data.message}`);
-    } catch (err) {
-      if (err.code === "OTP_REQUIRED" && action === "complete") {
-        // The platform demands the handover code: ask for it instead of failing.
-        openComplete(order, "The platform requires the handover OTP to complete this order.");
-      } else {
-        setError(err.message || "Action failed");
-      }
-    } finally {
-      setBusyAction((current) => (current && current.orderId === order.id ? null : current));
+  const pendingOrders = allOrders.filter((order) => ACTIVE_STATUSES.includes(order.status) && (!platformFilter || order.platform === platformFilter));
+
+  useEffect(() => {
+    for (const order of pendingOrders) {
+      ensureDetail(order.id);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [allOrders]);
+
+  const handlePrint = async (order) => {
+    const freshDetail = await ensureDetail(order.id);
+    if (!freshDetail || !Array.isArray(freshDetail.items)) {
+      setError("Order items are still loading or unavailable. Please retry printing.");
+      return;
+    }
+    printOnlineOrder(order, freshDetail.items);
   };
 
   /*
-   * Complete is the ONLY action that may ask for a handover OTP, and only when
-   * the platform setting "Require customer OTP on completion" is on (Settings
-   * -> Online Platforms) or when the platform itself rejects a direct attempt
-   * with OTP_REQUIRED (passed in as `notice`). Every other action never asks.
+   * Summary chip click: a status key applies that filter and opens the full
+   * table; the Pending chip returns to the processing view with no filter.
    */
-  const openComplete = (order, notice = "") => {
-    if (otpRequired[order.platform] || notice) {
-      setCompleteTarget(order);
-      setOtpInput("");
-      setOtpError(notice);
-    } else {
-      orderAction(order, "complete");
-    }
-  };
-
-  /*
-   * Completes an order with the handover OTP collected in the modal. The OTP is
-   * verified by the PLATFORM: only a confirmed response advances the order, and
-   * the row is patched from that response instead of re-fetching the list.
-   */
-  const submitComplete = async (event) => {
-    event.preventDefault();
-    if (!completeTarget) return;
-
-    const order = completeTarget;
-    setOtpBusy(true);
-    setOtpError("");
-
-    try {
-      const data = await apiRequest(`/api/online/orders/${order.id}/complete`, {
-        method: "POST",
-        body: JSON.stringify({ otp: otpInput.trim() }),
-      });
-
-      if (!data.success) {
-        throw Object.assign(new Error(data.message || "Unable to complete order"), { code: data.code });
-      }
-
-      applyOrderUpdate(data.data && data.data.order);
-      setMessage(`Order ${order.external_order_id} completed - OTP verified by the platform`);
-      setCompleteTarget(null);
-    } catch (err) {
-      setOtpError(
-        err.code === "INVALID_OTP"
-          ? "The platform rejected this OTP. Enter the correct handover code."
-          : err.message || "Unable to complete order"
-      );
-    } finally {
-      setOtpBusy(false);
-    }
-  };
-
-  /*
-   * Click handler for the action buttons. Cancel and Reject keep their existing
-   * confirmation / fixed reason, Complete routes through the OTP decision, and
-   * everything else posts straight away.
-   */
-  const runAction = (order, action) => {
-    if (action === "cancel") {
-      if (!window.confirm("Cancel this order and release reserved stock?")) return;
-      orderAction(order, "cancel", { reason: "Cancelled by store" });
+  const handleSummarySelect = (key) => {
+    if (key === "__pending") {
+      setPlatformFilter("");
+      setStatusFilter("");
+      setViewMode("processing");
       return;
     }
 
-    if (action === "reject") {
-      orderAction(order, "reject", { reason: "Rejected by store" });
+    if (key === "__uber" || key === "__deliveroo") {
+      setPlatformFilter(key.slice(2));
+      setViewMode("processing");
       return;
     }
 
-    if (action === "complete") {
-      openComplete(order);
-      return;
-    }
-
-    orderAction(order, action);
+    setStatusFilter(key);
+    setViewMode("all");
   };
 
   /*
@@ -295,7 +261,7 @@ export default function OnlineOrdersAdmin() {
       );
     }
 
-    const busyForOrder = busyAction && busyAction.orderId === order.id ? busyAction.action : null;
+    const busyForOrder = busyActions[order.id] || null;
 
     return (
       <span className="inline-flex items-center gap-1">
@@ -376,13 +342,20 @@ export default function OnlineOrdersAdmin() {
       setMessage(
         `Mapped "${mapTarget.item.product_name}" to a onePOS product${mapSaveForFuture ? " (saved for future Deliveroo orders)" : ""}`
       );
+      const mappedOrderId = mapTarget.order.id;
       setMapTarget(null);
-      await loadOrders();
+      await Promise.all([loadOrders(), loadAllOrders()]);
 
       // Refresh the open detail so the item shows as MAPPED.
-      if (detail && detail.order.id === mapTarget.order.id) {
-        const refreshed = await apiRequest(`/api/online/orders/${mapTarget.order.id}`);
+      if (detail && detail.order.id === mappedOrderId) {
+        const refreshed = await apiRequest(`/api/online/orders/${mappedOrderId}`);
         if (refreshed.success) setDetail(refreshed.data);
+      }
+
+      // Refresh the processing card's detail for the same reason.
+      const cardRefresh = await apiRequest(`/api/online/orders/${mappedOrderId}`);
+      if (cardRefresh.success) {
+        setOrderDetails((current) => ({ ...current, [mappedOrderId]: cardRefresh.data }));
       }
     } catch (err) {
       setMapError(err.message || "Unable to map this item");
@@ -417,7 +390,17 @@ export default function OnlineOrdersAdmin() {
         </div>
       )}
 
-      {/* ORDERS LIST */}
+      <OnlineOrderSummary orders={allOrders} selectedStatus={viewMode === "processing" ? platformFilter ? `__${platformFilter}` : "__pending" : statusFilter || "__all"} onSelectStatus={handleSummarySelect} />
+      <div className="flex flex-wrap items-center gap-2 mb-3">
+        <button onClick={() => { setViewMode("processing"); setPlatformFilter(""); }} aria-pressed={viewMode === "processing"} className={`px-3 py-2 rounded text-sm inline-flex gap-2 items-center ${viewMode === "processing" ? "bg-blue-600 text-white" : "bg-white border"}`}><LayoutGrid size={16} />Pending orders</button>
+        <button onClick={() => setViewMode("all")} aria-pressed={viewMode === "all"} className={`px-3 py-2 rounded text-sm inline-flex gap-2 items-center ${viewMode === "all" ? "bg-blue-600 text-white" : "bg-white border"}`}><Table2 size={16} />All orders / history</button>
+        <span className="text-xs text-slate-500">Counts cover the latest {allOrders.length} loaded orders (maximum 500); platform counts are pending only.</span>
+      </div>
+      {viewMode === "processing" ? (
+        pendingOrders.length ? <div className="grid gap-3 md:grid-cols-2 2xl:grid-cols-3">
+          {pendingOrders.map((order) => <OnlineOrderCard key={order.id} order={order} detail={orderDetails[order.id]} busyAction={busyActions[order.id] ? { orderId: order.id, action: busyActions[order.id] } : null} allowedActions={STATUS_ACTIONS[order.status] || []} onAction={runAction} onOpenDetail={openDetail} onPrint={handlePrint} />)}
+        </div> : <div className="bg-white border rounded-lg p-6 text-center text-slate-500">{loading ? "Loading orders..." : "No pending orders"}</div>
+      ) : (
       <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
         <div className="p-5 border-b border-slate-100 flex items-center justify-between">
           <h2 className="font-bold">Orders</h2>
@@ -478,6 +461,8 @@ export default function OnlineOrdersAdmin() {
           </table>
         </div>
       </div>
+
+      )}
 
       {/* ORDER DETAIL */}
       {detail && (
@@ -572,41 +557,7 @@ export default function OnlineOrdersAdmin() {
         </div>
       )}
 
-      {/* COMPLETE WITH OTP */}
-      {completeTarget && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" onClick={() => !otpBusy && setCompleteTarget(null)}>
-          <div className="bg-white rounded-xl w-[440px] max-w-full shadow-2xl" onClick={(e) => e.stopPropagation()}>
-            <div className="p-5 border-b border-slate-200 flex items-center justify-between">
-              <div>
-                <h2 className="font-bold text-lg">Complete order</h2>
-                <p className="text-xs text-slate-500 mt-1">
-                  {completeTarget.platform === "uber" ? "Uber Eats" : "Deliveroo"} order {completeTarget.external_order_id}
-                </p>
-              </div>
-              <button onClick={() => !otpBusy && setCompleteTarget(null)} disabled={otpBusy} className="p-2 hover:bg-slate-100 rounded"><X size={20} /></button>
-            </div>
-            <form onSubmit={submitComplete} className="p-5">
-              <p className="text-sm text-slate-600 mb-1">Enter the handover OTP from the {completeTarget.platform === "uber" ? "Uber" : "Deliveroo"} app/customer.</p>
-              <p className="text-xs text-slate-400 mb-4">
-                The OTP is verified by the {completeTarget.platform === "uber" ? "Uber" : "Deliveroo"} platform
-                {completeTarget.otp_code ? " (code was supplied with the order)" : " (no OTP was recorded on this order - in stub mode any code is accepted)"}.
-                The order is only marked completed after the platform confirms.
-              </p>
-              {otpError && <div className="mb-3 px-3 py-2 bg-red-50 border border-red-200 text-red-700 rounded text-sm">{otpError}</div>}
-              <label className="block text-sm text-slate-600">
-                <span className="block mb-1 font-medium">Handover OTP</span>
-                <input autoFocus value={otpInput} onChange={(event) => setOtpInput(event.target.value)} placeholder="e.g. 1234" className="w-full h-12 px-3 border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-blue-500 text-lg tracking-[0.3em] font-mono" />
-              </label>
-              <div className="flex justify-end gap-2 mt-5">
-                <button type="button" onClick={() => setCompleteTarget(null)} disabled={otpBusy} className="h-10 px-4 border border-slate-200 rounded-lg text-sm hover:bg-slate-50">Cancel</button>
-                <button type="submit" disabled={otpBusy || !otpInput.trim()} className="h-10 px-5 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50">
-                  {otpBusy ? "Verifying with platform..." : "Verify & complete"}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
+      <CompleteOrderModal order={completeTarget} otpInput={otpInput} onOtpChange={setOtpInput} otpError={otpError} otpBusy={otpBusy} onSubmit={submitComplete} onClose={() => setCompleteTarget(null)} />
 
       {/* MAP DELIVEROO ITEM TO A ONEPOS PRODUCT */}
       {mapTarget && (

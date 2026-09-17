@@ -167,5 +167,27 @@ export default function createAdminRouter({
     }
   });
 
+  /*
+   * POST /api/admin/users/:id/reset-password
+   * Admin reset of ANOTHER user's password. No current-password check (the
+   * admin does not know it); requires user.manage permission + company scope.
+   * Body: { newPassword, confirmPassword }. Keeps bcrypt hashing (cost 12).
+   */
+  router.post("/admin/users/:id/reset-password", authenticate, authorize("user.manage"), async (req, res) => {
+    try {
+      const { newPassword, confirmPassword } = req.body || {};
+      if (!newPassword || !confirmPassword) return res.status(400).json({ success: false, message: "New password and confirmation are required" });
+      if (newPassword !== confirmPassword) return res.status(400).json({ success: false, message: "New password and confirmation do not match" });
+      if (String(newPassword).length < 8) return res.status(400).json({ success: false, message: "New password must be at least 8 characters" });
+      if (String(req.params.id) === String(req.user.id)) return res.status(400).json({ success: false, message: "Use change-password for your own account" });
+      const hash = await bcrypt.hash(String(newPassword), 12);
+      const result = await db("UPDATE users SET password_hash=$1, updated_at=NOW() WHERE id=$2 AND company_id=$3 RETURNING id, username", [hash, req.params.id, req.user.companyId]);
+      if (!result.rows.length) return res.status(404).json({ success: false, message: "User not found" });
+      res.json({ success: true, message: "Password reset successfully", data: result.rows[0] });
+    } catch (error) {
+      res.status(500).json({ success: false, message: "Unable to reset password" });
+    }
+  });
+
   return router;
 }
