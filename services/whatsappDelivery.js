@@ -278,8 +278,30 @@ async function logDeliveryOutcome(
  * The URL is always the opaque /i/<token> form - never a sale ID.
  */
 async function buildLinkSendPayload(db, { saleData, saleId, companyId, storeId, userId, phone, testMode }) {
+  // Use a trusted deployment origin, never a request Host header. The secure
+  // generator owns the complete URL; do not rewrite or escape its token/path.
+  let baseUrl;
+  let hostname = null;
+  try {
+    const configured = (process.env.INVOICE_PUBLIC_BASE_URL || "").trim();
+    const parsed = new URL(configured);
+    hostname = parsed.hostname;
+    if (!/^https:\/\//i.test(configured) || parsed.protocol !== "https:" ||
+        parsed.username || parsed.password || parsed.search || parsed.hash ||
+        parsed.pathname !== "/" || /[\s\\<>]/.test(configured)) throw new Error();
+    baseUrl = parsed.origin;
+  } catch {
+    // Failure-only deployment diagnostic. Never log the raw value, URL path,
+    // query, userinfo, parser exception, token, or any other environment value.
+    console.warn("[invoice-origin] invalid configuration", {
+      exists: Object.hasOwn(process.env, "INVOICE_PUBLIC_BASE_URL"),
+      hostname,
+    });
+    return { ok: false, errorText: "Configure INVOICE_PUBLIC_BASE_URL with the public HTTPS origin serving secure invoices." };
+  }
   const link = await createInvoiceDeliveryLink({
     db,
+    baseUrl,
     saleId,
     companyId,
     storeId,

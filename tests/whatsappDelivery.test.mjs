@@ -14,7 +14,12 @@
  * only) for payload-shape verification through the real code path.
  */
 import test from "node:test";
+import { createHash } from "node:crypto";
+import { sendWhatsAppTestInvoice, resendWhatsAppInvoice } from "../services/whatsappDelivery.js";
+import { buildInvoiceDeliveryMessage } from "../services/secureInvoiceLinks.js";
 import assert from "node:assert/strict";
+
+process.env.INVOICE_PUBLIC_BASE_URL = "https://pos.example.com";
 
 process.env.JWT_SECRET = process.env.JWT_SECRET || "test-secret-for-unit-tests-only";
 
@@ -311,6 +316,123 @@ test("link mode builds the T9P secure link and sends a correct Graph text messag
     globalThis.fetch = original;
   }
 });
+
+test("invalid-origin diagnostic exposes only presence and hostname", async () => {
+  const saved = process.env.INVOICE_PUBLIC_BASE_URL;
+  const originalWarn = console.warn;
+  const warnings = [];
+  console.warn = (...args) => warnings.push(args);
+  try {
+    const db = makeFullDb({ configuration: { phone_number_id: "123456789012345" }, customerPhone: null });
+    const send = () => sendWhatsAppTestInvoice({ db, saleId: "sale-1", companyId: "c1", recipientPhone: "+447700900123", deliveryMode: "link" });
+    delete process.env.INVOICE_PUBLIC_BASE_URL;
+    assert.equal((await send()).ok, false);
+    assert.deepEqual(warnings.pop(), ["[invoice-origin] invalid configuration", { exists: false, hostname: null }]);
+    process.env.INVOICE_PUBLIC_BASE_URL = "https://user:PRIVATE_VALUE@onepos.onrender.com/private?token=PRIVATE_VALUE";
+    const result = await send();
+    assert.equal(result.ok, false);
+    assert.deepEqual(warnings, [["[invoice-origin] invalid configuration", { exists: true, hostname: "onepos.onrender.com" }]]);
+    assert.equal(JSON.stringify({ warnings, result, audit: db.inserted.auditParams }).includes("PRIVATE_VALUE"), false);
+    assert.equal(db.inserted.linkHash, undefined);
+  } finally {
+    console.warn = originalWarn;
+    if (saved === undefined) delete process.env.INVOICE_PUBLIC_BASE_URL;
+    else process.env.INVOICE_PUBLIC_BASE_URL = saved;
+  }
+});
+
+
+for (const entryPoint of ["test-send", "resend"]) {
+  test(`Render HTTPS origin is read at delivery time through ${entryPoint}`, async () => {
+    const saved = process.env.INVOICE_PUBLIC_BASE_URL;
+    const originalFetch = globalThis.fetch;
+    const db = makeFullDb({ configuration: {
+      phone_number_id: "123456789012345", auto_send_enabled: false, delivery_mode: "link",
+    }, customerPhone: "+447700900123" });
+    const payloads = [];
+    globalThis.fetch = async (_url, options) => {
+      payloads.push(JSON.parse(options.body));
+      return { ok: true, status: 200, json: async () => ({ messages: [{ id: "wamid.test" }] }) };
+    };
+    const send = () => entryPoint === "test-send"
+      ? sendWhatsAppTestInvoice({ db, saleId: "sale-1", companyId: "c1", storeId: "st1", recipientPhone: "+447700900123", deliveryMode: "link" })
+      : resendWhatsAppInvoice({ db, saleId: "sale-1", companyId: "c1", storeId: "st1" });
+    try {
+      delete process.env.INVOICE_PUBLIC_BASE_URL;
+      assert.equal((await send()).ok, false);
+      assert.equal(payloads.length, 0);
+      assert.equal(db.inserted.linkHash, undefined);
+      // Set AFTER module import and a failed call: no stale environment snapshot.
+      process.env.INVOICE_PUBLIC_BASE_URL = "https://onepos.onrender.com";
+      assert.equal((await send()).ok, true);
+      assert.equal(payloads.length, 1);
+      const match = payloads[0].text.body.match(/https:\/\/onepos\.onrender\.com\/i\/[A-Za-z0-9_-]{43}/);
+      assert.ok(match, "outbound body must contain the generated HTTPS secure link");
+      assert.equal(new URL(match[0]).hostname, "onepos.onrender.com");
+      assert.equal(createHash("sha256").update(new URL(match[0]).pathname.slice(3)).digest("hex"), db.inserted.linkHash);
+      assert.equal(JSON.stringify(db.inserted.auditParams).includes(match[0]), false);
+    } finally {
+      if (saved === undefined) delete process.env.INVOICE_PUBLIC_BASE_URL;
+      else process.env.INVOICE_PUBLIC_BASE_URL = saved;
+      globalThis.fetch = originalFetch;
+    }
+  });
+}
+
+
+test("test invoice sends the exact generated absolute HTTPS link without escaping", async () => {
+  const db = makeFullDb({ configuration: {
+    phone_number_id: "123456789012345", auto_send_enabled: false, delivery_mode: "link",
+  }, customerPhone: null });
+  const originalFetch = globalThis.fetch;
+  let payload;
+  globalThis.fetch = async (_url, options) => {
+    payload = JSON.parse(options.body);
+    return { ok: true, status: 200, json: async () => ({ messages: [{ id: "wamid.test" }] }) };
+  };
+  try {
+    const result = await sendWhatsAppTestInvoice({
+      db, saleId: "sale-1", companyId: "c1", storeId: "st1",
+      recipientPhone: "+447700900123", deliveryMode: "link",
+    });
+    assert.equal(result.ok, true);
+    const url = new URL(result.url);
+    assert.equal(url.protocol, "https:");
+    assert.equal(url.origin, "https://pos.example.com");
+    assert.match(url.pathname, /^\/i\/[A-Za-z0-9_-]{43}$/);
+    assert.equal(url.search, "");
+    assert.equal(url.hash, "");
+    assert.equal(payload.type, "text");
+    assert.equal(payload.text.preview_url, true);
+    assert.equal(payload.text.body, `[TEST - demo delivery]\n${buildInvoiceDeliveryMessage({
+      url: result.url, invoiceNumber: "T01-20260917-0009", expiresAt: db.inserted.linkParams[5],
+    })}`);
+    assert.equal(payload.text.body.split(/\s+/).filter((word) => word === result.url).length, 1);
+    assert.equal(createHash("sha256").update(url.pathname.slice(3)).digest("hex"), db.inserted.linkHash);
+    const audit = JSON.stringify(db.inserted.auditParams);
+    assert.equal(audit.includes(result.url), false);
+    assert.equal(audit.includes(url.pathname.slice(3)), false);
+    assert.equal(audit.includes("test-graph-token-abc"), false);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+for (const origin of ["", "/relative", "http://pos.example.com", "https://", "https://user:secret@pos.example.com", "https://pos.example.com/?token=secret", "https://pos.example.com/#fragment", "https://pos.example.com/app", "https://pos.example.com/ bad"]) {
+  test(`invalid invoice origin fails safely (${origin ? "configured " + ["", "/relative", "http://pos.example.com", "https://", "https://user:secret@pos.example.com", "https://pos.example.com/?token=secret", "https://pos.example.com/#fragment", "https://pos.example.com/app", "https://pos.example.com/ bad"].indexOf(origin) : "missing"})`, async () => {
+    const saved = process.env.INVOICE_PUBLIC_BASE_URL;
+    const originalFetch = globalThis.fetch;
+    let calls = 0;
+    process.env.INVOICE_PUBLIC_BASE_URL = origin;
+    globalThis.fetch = async () => { calls++; throw new Error("Must not send"); };
+    const db = makeFullDb({ configuration: { phone_number_id: "123456789012345" }, customerPhone: null });
+    try {
+      const result = await sendWhatsAppTestInvoice({ db, saleId: "sale-1", companyId: "c1", recipientPhone: "+447700900123", deliveryMode: "link" });
+      assert.equal(result.ok, false);
+      assert.equal(result.errorText, "Configure INVOICE_PUBLIC_BASE_URL with the public HTTPS origin serving secure invoices.");
+      assert.equal(calls, 0);
+      assert.equal(db.inserted.linkHash, undefined);
+    } finally { process.env.INVOICE_PUBLIC_BASE_URL = saved; globalThis.fetch = originalFetch; }
+  });
+}
 
 test("graph failure produces a failed outcome and the audit log never contains secrets", async () => {
   const db = makeFullDb({
