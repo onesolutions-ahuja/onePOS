@@ -13,7 +13,7 @@ export default function createAdminRouter({
   /*
    * GET /api/admin/users
    */
-  router.get("/admin/users", authenticate, authorize("user.manage"), async (req, res) => {
+  router.get("/admin/users", authenticate, authorize("user.view"), async (req, res) => {
     try {
       const result = await db("SELECT u.id, u.username, u.full_name, u.email, u.active, u.store_id, s.name AS store_name, u.role_id, r.name AS role_name FROM users u LEFT JOIN stores s ON s.id=u.store_id LEFT JOIN roles r ON r.id=u.role_id WHERE u.company_id=$1 ORDER BY u.full_name", [req.user.companyId]);
       res.json({ success: true, data: result.rows });
@@ -23,11 +23,89 @@ export default function createAdminRouter({
   });
 
   /*
+   * GET /api/admin/users/:id/stores
+   * Returns the stores assigned to a user.
+   */
+  router.get("/admin/users/:id/stores", authenticate, authorize("user.view"), async (req, res) => {
+    try {
+      const userCheck = await db("SELECT 1 FROM users WHERE id=$1 AND company_id=$2", [req.params.id, req.user.companyId]);
+      if (!userCheck.rows.length) return res.status(404).json({ success: false, message: "User not found" });
+      
+      const result = await db(
+        `SELECT s.id, s.name, s.code, s.active, us.active AS assigned
+         FROM stores s
+         LEFT JOIN user_stores us ON us.store_id = s.id AND us.user_id = $1 AND us.active = true
+         WHERE s.company_id = $2
+         ORDER BY s.name`,
+        [req.params.id, req.user.companyId]
+      );
+      res.json({ success: true, data: result.rows });
+    } catch (error) {
+      res.status(500).json({ success: false, message: "Unable to load user stores" });
+    }
+  });
+
+  /*
+   * PUT /api/admin/users/:id/stores
+   * Updates the stores assigned to a user.
+   */
+  router.put("/admin/users/:id/stores", authenticate, authorize("user.edit"), async (req, res) => {
+    if (!pool) return res.status(500).json({ success: false, message: "DATABASE_URL is not configured" });
+    if (!Array.isArray(req.body.storeIds)) return res.status(400).json({ success: false, message: "storeIds must be an array" });
+    
+    // Prevent users from modifying their own store access
+    if (String(req.params.id) === String(req.user.id)) {
+      return res.status(403).json({ success: false, message: "Cannot modify your own store access" });
+    }
+
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      
+      const userCheck = await client.query("SELECT 1 FROM users WHERE id=$1 AND company_id=$2", [req.params.id, req.user.companyId]);
+      if (!userCheck.rows.length) { await client.query("ROLLBACK"); return res.status(404).json({ success: false, message: "User not found" }); }
+      
+      // Only allow assignment to active stores
+      const storeCheck = await client.query(
+        "SELECT id FROM stores WHERE id = ANY($1::uuid[]) AND company_id = $2 AND active = true",
+        [req.body.storeIds, req.user.companyId]
+      );
+      const validStoreIds = storeCheck.rows.map(row => row.id);
+      
+      // Deactivate all existing user-store assignments
+      await client.query(
+        "UPDATE user_stores SET active = false WHERE user_id = $1",
+        [req.params.id]
+      );
+      
+      // Reactivate or create assignments for valid stores
+      for (const storeId of validStoreIds) {
+        await client.query(
+          `INSERT INTO user_stores (user_id, store_id, active)
+           VALUES ($1, $2, true)
+           ON CONFLICT (user_id, store_id) 
+           DO UPDATE SET active = true`,
+          [req.params.id, storeId]
+        );
+      }
+      
+      await client.query("COMMIT");
+      res.json({ success: true, message: "Store access updated" });
+    } catch (error) {
+      await client.query("ROLLBACK");
+      console.error("Update user stores error:", error);
+      res.status(500).json({ success: false, message: "Unable to update store access" });
+    } finally {
+      client.release();
+    }
+  });
+
+  /*
    * GET /api/admin/roles
    */
   router.get("/admin/roles", authenticate, authorize("role.manage"), async (req, res) => {
     try {
-      const result = await db("SELECT id, name, description FROM roles WHERE company_id=$1 ORDER BY name", [req.user.companyId]);
+      const result = await db("SELECT r.id, r.name, r.description, r.is_system_role, (SELECT COUNT(*)::int FROM users u WHERE u.role_id=r.id AND u.active) AS user_count FROM roles r WHERE r.company_id=$1 ORDER BY r.name", [req.user.companyId]);
       res.json({ success: true, data: result.rows });
     } catch (error) {
       res.status(500).json({ success: false, message: "Unable to load roles" });
@@ -96,18 +174,134 @@ export default function createAdminRouter({
   });
 
   /*
+   * POST /api/admin/roles — create a role (T10J).
+   * Company-scoped. Protects the Administrator system-role name so the
+   * canViewCompanyCustomers admin bypass can never be spoofed by creating a
+   * second role with a privileged name.
+   */
+  router.post("/admin/roles", authenticate, authorize("role.manage"), async (req, res) => {
+    const name = String(req.body.name || "").trim();
+    if (!name) return res.status(400).json({ success: false, message: "Role name is required" });
+    if (name.length > 100) return res.status(400).json({ success: false, message: "Role name is too long" });
+    if ("administrator|admin|owner".split("|").includes(name.toLowerCase())) {
+      return res.status(400).json({ success: false, message: "Reserved role name" });
+    }
+    try {
+      const dup = await db("SELECT 1 FROM roles WHERE company_id=$1 AND LOWER(name)=LOWER($2)", [req.user.companyId, name]);
+      if (dup.rows.length) return res.status(409).json({ success: false, message: "A role with this name already exists" });
+      const result = await db(
+        "INSERT INTO roles (company_id, name, description, is_system_role) VALUES ($1,$2,$3,FALSE) RETURNING id, name, description, is_system_role",
+        [req.user.companyId, name, req.body.description ? String(req.body.description) : null]
+      );
+      res.status(201).json({ success: true, data: result.rows[0] });
+    } catch (error) {
+      res.status(500).json({ success: false, message: "Unable to create role" });
+    }
+  });
+
+  /*
+   * PUT /api/admin/roles/:roleId — rename / change description (T10J).
+   * Company-scoped. System roles (Administrator) keep their protected name.
+   */
+  router.put("/admin/roles/:roleId", authenticate, authorize("role.manage"), async (req, res) => {
+    const name = String(req.body.name || "").trim();
+    if (!name) return res.status(400).json({ success: false, message: "Role name is required" });
+    if (name.length > 100) return res.status(400).json({ success: false, message: "Role name is too long" });
+    try {
+      const check = await db("SELECT name, is_system_role FROM roles WHERE id=$1 AND company_id=$2", [req.params.roleId, req.user.companyId]);
+      if (!check.rows.length) return res.status(404).json({ success: false, message: "Role not found" });
+      const existing = check.rows[0];
+      const renamingProtected = existing.is_system_role && name.toLowerCase() !== String(existing.name).toLowerCase();
+      if (renamingProtected || "administrator|admin|owner".split("|").includes(name.toLowerCase())) {
+        return res.status(400).json({ success: false, message: "Reserved role name" });
+      }
+      const dup = await db("SELECT 1 FROM roles WHERE company_id=$1 AND LOWER(name)=LOWER($2) AND id<>$3", [req.user.companyId, name, req.params.roleId]);
+      if (dup.rows.length) return res.status(409).json({ success: false, message: "A role with this name already exists" });
+      const result = await db(
+        "UPDATE roles SET name=$1, description=$2 WHERE id=$3 AND company_id=$4 RETURNING id, name, description, is_system_role",
+        [name, req.body.description !== undefined ? (req.body.description ? String(req.body.description) : null) : existing.description, req.params.roleId, req.user.companyId]
+      );
+      res.json({ success: true, data: result.rows[0] });
+    } catch (error) {
+      res.status(500).json({ success: false, message: "Unable to update role" });
+    }
+  });
+
+  /*
+   * PUT /api/admin/roles/:roleId/active — activate/deactivate a role (T10J).
+   * Deactivation is a soft action (existing model has no active column);
+   * it detaches the role from the company's users so they can no longer
+   * authenticate with those permissions. The LAST Administrator (system)
+   * role is protected: the company's only active admin role can never be
+   * deactivated, preventing a full lock-out.
+   */
+  router.put("/admin/roles/:roleId/active", authenticate, authorize("role.manage"), async (req, res) => {
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const check = await client.query("SELECT id, name, is_system_role FROM roles WHERE id=$1 AND company_id=$2 FOR UPDATE", [req.params.roleId, req.user.companyId]);
+      if (!check.rows.length) { await client.query("ROLLBACK"); return res.status(404).json({ success: false, message: "Role not found" }); }
+      const role = check.rows[0];
+      const activate = req.body.active !== false;
+      if (!activate) {
+        if (role.is_system_role && String(role.name).toLowerCase() === "administrator") {
+          const activeAdmins = await client.query(
+            "SELECT COUNT(*)::int AS n FROM users u WHERE u.company_id=$1 AND u.active AND u.role_id IN (SELECT id FROM roles WHERE company_id=$1 AND is_system_role AND LOWER(name)='administrator')",
+            [req.user.companyId]
+          );
+          if (activeAdmins.rows[0].n > 0) {
+            await client.query("ROLLBACK");
+            return res.status(400).json({ success: false, message: "The Administrator role cannot be deactivated while active users hold it" });
+          }
+        } else {
+          /* Non-admin role being deactivated: block only if this role is the
+             company's LAST active administrator-capable sign-in path. A role
+             named Administrator/Admin/Owner gets the server-side bypass, so
+             deactivating the final one would lock the company out. */
+          const privileged = ["administrator", "admin", "owner"].includes(String(role.name).toLowerCase());
+          if (privileged) {
+            const others = await client.query(
+              "SELECT COUNT(*)::int AS n FROM roles r WHERE r.company_id=$1 AND r.id<>$2 AND r.is_system_role AND LOWER(r.name) IN ('administrator','admin','owner') AND EXISTS (SELECT 1 FROM users u WHERE u.role_id=r.id AND u.active)",
+              [req.user.companyId, role.id]
+            );
+            if (others.rows[0].n === 0) {
+              const holders = await client.query(
+                "SELECT COUNT(*)::int AS n FROM users WHERE role_id=$1 AND active",
+                [role.id]
+              );
+              if (holders.rows[0].n > 0) {
+                await client.query("ROLLBACK");
+                return res.status(400).json({ success: false, message: "Cannot deactivate the last administrator role with active users — this would lock the company out" });
+              }
+            }
+          }
+        }
+        /* Deactivate = detach all users from the role (soft, reversible: set
+           the role inactive then reassign users on re-activation is not
+           tracked, so we simply block sign-in by nulling their role). */
+        await client.query("UPDATE users SET role_id=NULL, updated_at=NOW() WHERE role_id=$1 AND company_id=$2", [role.id, req.user.companyId]);
+      }
+      await client.query("COMMIT");
+      res.json({ success: true, message: activate ? "Role activated" : "Role deactivated" });
+    } catch (error) {
+      await client.query("ROLLBACK").catch(() => {});
+      res.status(500).json({ success: false, message: "Unable to update role status" });
+    } finally {
+      client.release();
+    }
+  });
+
+  /*
    * GET /api/admin/stores
    */
-  router.get("/admin/stores", authenticate, async (req, res) => {
-    if (!(await canViewCompanyCustomers(req.user))) return res.status(403).json({ success: false, message: "Administrator permission required" });
+  router.get("/admin/stores", authenticate, authorize("store.view"), async (req, res) => {
     try { const result = await db("SELECT s.id, s.name, s.code, s.address_line1, s.city, s.postcode, s.phone, s.active, COALESCE(json_agg(json_build_object('id',t.id,'name',t.name,'terminalNumber',t.terminal_number,'active',t.active) ORDER BY t.created_at) FILTER (WHERE t.id IS NOT NULL),'[]') AS tills FROM stores s LEFT JOIN terminals t ON t.store_id=s.id WHERE s.company_id=$1 GROUP BY s.id ORDER BY s.name", [req.user.companyId]); res.json({ success: true, data: result.rows }); } catch (error) { res.status(500).json({ success: false, message: "Unable to load stores" }); }
   });
 
   /*
    * PUT /api/admin/stores/:id
    */
-  router.put("/admin/stores/:id", authenticate, async (req, res) => {
-    if (!(await canViewCompanyCustomers(req.user))) return res.status(403).json({ success: false, message: "Administrator permission required" });
+  router.put("/admin/stores/:id", authenticate, authorize("store.edit"), async (req, res) => {
     try { const result = await db("UPDATE stores SET name=$1, code=$2, address_line1=$3, city=$4, postcode=$5, phone=$6, active=$7, updated_at=NOW() WHERE id=$8 AND company_id=$9 RETURNING id,name,code,address_line1,city,postcode,phone,active", [req.body.name, req.body.code || null, req.body.addressLine1 || null, req.body.city || null, req.body.postcode || null, req.body.phone || null, req.body.active !== false, req.params.id, req.user.companyId]); if (!result.rows.length) return res.status(404).json({ success: false, message: "Store not found" }); res.json({ success: true, data: result.rows[0] }); } catch (error) { res.status(500).json({ success: false, message: "Unable to update store" }); }
   });
 
@@ -122,7 +316,7 @@ export default function createAdminRouter({
   /*
    * POST /api/admin/users
    */
-  router.post("/admin/users", authenticate, authorize("user.manage"), async (req, res) => {
+  router.post("/admin/users", authenticate, authorize("user.create"), async (req, res) => {
     if (!(await canViewCompanyCustomers(req.user))) return res.status(403).json({ success: false, message: "Administrator permission required" });
     const { username, fullName, email = null, password, roleId = null, storeId = null } = req.body;
     if (!username || !fullName || !password) return res.status(400).json({ success: false, message: "Username, full name and password are required" });
@@ -145,7 +339,7 @@ export default function createAdminRouter({
   /*
    * PUT /api/admin/users/:id
    */
-  router.put("/admin/users/:id", authenticate, authorize("user.manage"), async (req, res) => {
+  router.put("/admin/users/:id", authenticate, authorize("user.edit"), async (req, res) => {
     try {
       const assignment = await db(
         `
@@ -189,11 +383,27 @@ export default function createAdminRouter({
     }
   });
 
+  /*
+   * DELETE /api/admin/users/:id
+   * Soft delete — sets active = false so historical data remains intact.
+   */
+  router.delete("/admin/users/:id", authenticate, authorize("user.delete"), async (req, res) => {
+    try {
+      const result = await db(
+        `UPDATE users SET active = false, updated_at = NOW() WHERE id = $1 AND company_id = $2 RETURNING id`,
+        [req.params.id, req.user.companyId]
+      );
+      if (!result.rows.length) return res.status(404).json({ success: false, message: "User not found" });
+      res.json({ success: true, message: "User deactivated" });
+    } catch (error) {
+      res.status(500).json({ success: false, message: "Unable to deactivate user" });
+    }
+  });
+
 
   /* POST /api/admin/stores
    */
-  router.post('/admin/stores', authenticate, async (req, res) => {
-    if (!(await canViewCompanyCustomers(req.user))) return res.status(403).json({ success: false, message: 'Administrator permission required' });
+  router.post('/admin/stores', authenticate, authorize("store.create"), async (req, res) => {
     const { name, code, addressLine1, city, postcode, phone } = req.body || {};
     if (!name) return res.status(400).json({ success: false, message: 'Store name is required' });
     try {
@@ -206,6 +416,22 @@ export default function createAdminRouter({
       res.status(201).json({ success: true, data: result.rows[0] });
     } catch (error) {
       res.status(500).json({ success: false, message: 'Unable to create store' });
+    }
+  });
+
+  /* DELETE /api/admin/stores/:id
+   * Soft delete — sets active = false so historical data remains intact.
+   */
+  router.delete('/admin/stores/:id', authenticate, authorize("store.delete"), async (req, res) => {
+    try {
+      const result = await db(
+        `UPDATE stores SET active = false, updated_at = NOW() WHERE id = $1 AND company_id = $2 RETURNING id`,
+        [req.params.id, req.user.companyId]
+      );
+      if (!result.rows.length) return res.status(404).json({ success: false, message: 'Store not found' });
+      res.json({ success: true, message: 'Store deactivated' });
+    } catch (error) {
+      res.status(500).json({ success: false, message: 'Unable to deactivate store' });
     }
   });
 

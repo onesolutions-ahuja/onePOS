@@ -28,7 +28,9 @@ import createAdminRouter from "./routes/admin.js";
 import createIntegrationsRouter from "./routes/integrations.js";
 import createDashboardRouter from "./routes/dashboard.js";
 import createGlobalProductsRouter from "./routes/globalProducts.js";
+import createReplenishmentRouter from "./routes/replenishment.js";
 import createOnlineRouter from "./routes/online.js";
+import createCustomerAuthRouter from "./routes/customerAuth.js";
 
 const { Pool } = pg;
 
@@ -53,6 +55,12 @@ app.use(cors());
  * req.body to a Buffer; express.json then skips the already-parsed body).
  */
 app.use("/api/online/deliveroo/webhook", express.raw({ type: "*/*", limit: "1mb" }));
+
+/*
+ * Uber primary webhook is HMAC-signed (X-Uber-Signature) over the RAW body -
+ * same raw-parsing mechanism as the Deliveroo webhook above.
+ */
+app.use("/api/online/uber/webhook", express.raw({ type: "*/*", limit: "1mb" }));
 
 app.use(express.json({ limit: "10mb" }));
 
@@ -92,6 +100,8 @@ const pool = process.env.DATABASE_URL
       statement_timeout: 120000,
     })
   : null;
+
+app.locals.pool = pool;
 
 /*
  * A backend error on an idle pool connection (network blip, Postgres restart,
@@ -263,6 +273,20 @@ async function canViewCompanyCustomers(user) {
     [user.roleId, user.companyId]
   );
   return result.rows.length > 0;
+}
+
+async function canAccessStore(user, storeId) {
+  // Admin/Owner bypass
+  if (await canViewCompanyCustomers(user)) {
+    return true;
+  }
+  
+  // Check if store is in user's assigned stores
+  if (!user.assignedStoreIds || !Array.isArray(user.assignedStoreIds)) {
+    return false;
+  }
+  
+  return user.assignedStoreIds.includes(storeId);
 }
 
 const inventoryMovementTypes = new Set([
@@ -752,7 +776,8 @@ app.use(
 
 app.use("/api", createDashboardRouter({ authenticate, db }));
 
-app.use("/api", createSettingsRouter({ authenticate, db, pool, writeAudit, testPaymentTerminal }));
+app.use("/api", createSettingsRouter({ authenticate, authorize, db, pool, writeAudit, testPaymentTerminal }));
+app.use("/api", createCustomerAuthRouter); /* routes/customerAuth.js exports a router instance (self-contained) */
 app.use("/api", createWhatsAppSettingsRouter({ authenticate, authorize, db, pool, writeAudit }));
 app.use("/api", createInvoiceDeliveryRouter({ authenticate, authorize, db, pool, writeAudit }));
 
@@ -784,6 +809,7 @@ app.use(
     db,
     pool,
     createInventoryMovement,
+    writeAudit,
   })
 );
 
@@ -812,6 +838,9 @@ app.use(
     inventoryMovementTypes,
   })
 );
+
+/* T10H: read-only replenishment suggestions (planning layer, no writes). */
+app.use("/api", createReplenishmentRouter({ authenticate, authorize, db }));
 
 /*
 |--------------------------------------------------------------------------
@@ -867,7 +896,7 @@ app.use(
 
 app.use("/api", createSalesRouter({ authenticate, authorize, db, pool, createInventoryMovement, associateCustomerWithStore, writeAudit, selfCheckoutMode: (req) => req.user?.mode === "self_checkout" }));
 
-app.use("/api", createReturnsRouter({ authenticate, authorize, db, pool, createInventoryMovement }));
+app.use("/api", createReturnsRouter({ authenticate, authorize, db, pool, createInventoryMovement, writeAudit }));
 
 app.use("/api", createAdminRouter({ authenticate, authorize, db, pool, canViewCompanyCustomers, bcrypt }));
 
@@ -1283,6 +1312,7 @@ app.get("/api/setup/database", async (req, res) => {
       ["inventory.view", "View Inventory"],
       ["inventory.movements.view", "View Stock Movements"],
       ["inventory.adjust", "Adjust Inventory"],
+      ["inventory.replenishment.view", "View Replenishment Suggestions"],
       ["returns.view", "View Returns"],
       ["returns.create", "Create Returns"],
       ["returns.approve", "Approve / Process Returns"],
@@ -1350,6 +1380,17 @@ const distPath = path.join(__dirname, "dist");
  * route, so neither can be intercepted by the frontend fallback.
  */
 app.get(["/login", "/app", "/app/*"], (req, res) => {
+  /* T10V: never satisfy a missing static asset with HTML. A stale cached
+     index.html can reference a hashed bundle that a rebuild replaced; serving
+     HTML for the .js request turns the page blank. Return 404 instead so the
+     browser fails fast and a reload picks up the fresh index. */
+  if (path.extname(req.path) && req.path !== "/" && !req.path.endsWith(".html")) {
+    return res.status(404).type("text").send("Not found");
+  }
+  /* T10V: the app shell must never be cached — it references hashed bundles
+     that a rebuild replaces. A cached shell is what produced the blank page
+     (stale HTML requesting a no-longer-existing asset). */
+  res.set("Cache-Control", "no-store");
   res.sendFile(path.join(distPath, "app", "index.html"));
 });
 

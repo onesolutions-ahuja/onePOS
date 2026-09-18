@@ -231,6 +231,17 @@ export default function createAuthRouter(pool) {
         [username.trim()]
       );
 
+      // Get user's assigned stores
+      const userStoresResult = await pool.query(
+        `
+        SELECT store_id
+        FROM user_stores
+        WHERE user_id = $1 AND active = true
+        `,
+        [result.rows[0].id]
+      );
+      const assignedStoreIds = userStoresResult.rows.map(row => row.store_id);
+
       if (result.rows.length === 0) {
         return res.status(401).json({
           success: false,
@@ -264,7 +275,8 @@ export default function createAuthRouter(pool) {
           userId: user.id,
           companyId: user.company_id,
           storeId: user.store_id,
-          roleId: user.role_id
+          roleId: user.role_id,
+          assignedStoreIds: assignedStoreIds
         },
         process.env.JWT_SECRET,
         {

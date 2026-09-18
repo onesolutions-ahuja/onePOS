@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
-import { Store, Plus, Edit, Trash2, RotateCcw, Archive, Loader2, AlertCircle, Check } from "lucide-react";
+import { Store, Plus, Edit, Trash2, RotateCcw, Archive, Loader2, AlertCircle, Check, MapPin, Phone } from "lucide-react";
 import { apiRequest } from "../../services/api.js";
-import { Button, Input, Label, Card, CardHeader, Badge, EmptyState, Alert } from "../../components/ui.jsx";
+import { Button, Input, Label, Card, CardHeader, Badge, EmptyState, Alert, Toggle, PageHeader } from "../../components/ui.jsx";
 
 /*
  * Stores / multi-store administration (T10A + T10A-SMALL).
@@ -43,18 +43,34 @@ export default function StoresAdmin() {
      answer, not a network failure, so it must not offer a Retry loop. */
   const [forbidden, setForbidden] = useState(false);
   /*
-   * Mirrors the server-side gate for this module: the existing
-   * Administrator/Admin/Owner bypass reported by /api/auth/me/permissions
-   * (the same session data the sidebar and Reports menu use). The backend
+   * Mirrors the server-side gate for this module using the EXISTING
+   * granular permission codes (T10B/T10G): store.view / store.create /
+   * store.edit / store.delete. The Administrator/Admin/Owner bypass
+   * reported by /api/auth/me/permissions (the same session data the
+   * sidebar and Reports menu use) keeps working unchanged. The backend
    * stays the final authority — this only hides controls.
    */
-  const [canManage, setCanManage] = useState(false);
+  const [perm, setPerm] = useState({
+    isAdmin: false,
+    canCreate: false,
+    canEdit: false,
+    canDelete: false,
+  });
+  const canManage = perm.canEdit || perm.canDelete || perm.canCreate;
 
   useEffect(() => {
     let active = true;
     apiRequest("/api/auth/me/permissions")
       .then((data) => {
-        if (active && data.success) setCanManage(data.data?.isAdmin === true);
+        if (!active || !data.success) return;
+        const isAdmin = data.data?.isAdmin === true;
+        const codes = Array.isArray(data.data?.permissions) ? data.data.permissions : [];
+        setPerm({
+          isAdmin,
+          canCreate: isAdmin || codes.includes("store.create"),
+          canEdit: isAdmin || codes.includes("store.edit"),
+          canDelete: isAdmin || codes.includes("store.delete"),
+        });
       })
       .catch(() => { /* Controls stay hidden; the API still enforces access. */ });
     return () => { active = false; };
@@ -188,10 +204,11 @@ export default function StoresAdmin() {
     }
   };
 
-  /* Soft delete: never a SQL DELETE — the store is archived (active = false). */
+  /* Soft delete: never a SQL DELETE — the store is deactivated
+     (active = false) and every historical sale/stock row stays intact. */
   const handleArchive = async (store) => {
     const confirmed = window.confirm(
-      `Archive "${store.name}"? The store is deactivated and leaves the active list. Sales and stock history stay intact and it can be restored later.`
+      `Deactivate "${store.name}"?\n\nThe store is switched off and leaves the active list — it is NOT permanently deleted. All historical sales, stock movements and reports remain intact, and the store can be reactivated at any time.`
     );
     if (!confirmed) return;
     await setStoreActive(store, false);
@@ -234,26 +251,33 @@ export default function StoresAdmin() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <h1 className="onepos-page-title">Stores</h1>
-          <p className="onepos-page-subtitle">{stores.length} store{stores.length === 1 ? "" : "s"} configured</p>
-        </div>
-        <div className="flex items-center gap-2 shrink-0">
-          {archivedStores.length > 0 ? (
-            <Button variant="secondary" size="sm" onClick={() => setShowArchived((value) => !value)}>
-              <Archive size={14} /> {showArchived ? "Hide archived" : `Show archived (${archivedStores.length})`}
-            </Button>
-          ) : null}
-          {canManage ? (
-            <Button onClick={openAdd}><Plus size={16} /> Add store</Button>
-          ) : null}
-        </div>
-      </div>
+      <PageHeader
+        title="Stores"
+        subtitle={`${stores.length} store${stores.length === 1 ? "" : "s"} configured · ${activeStores.length} active`}
+        actions={
+          <>
+            <label className="inline-flex items-center gap-2 text-sm text-slate-600 mr-2" title="Show every store, including deactivated ones">
+              <Toggle
+                checked={showArchived}
+                onChange={(event) => setShowArchived(event.target.checked)}
+              />
+              Show all
+            </label>
+            {canManage && perm.canCreate ? (
+              <Button onClick={openAdd}><Plus size={16} /> Add store</Button>
+            ) : null}
+          </>
+        }
+      />
+      {archivedStores.length > 0 && !showArchived ? (
+        <Button variant="secondary" size="sm" onClick={() => setShowArchived(true)}>
+          <Archive size={14} /> Show archived ({archivedStores.length})
+        </Button>
+      ) : null}
 
       {error ? <Alert tone="error">{error}</Alert> : null}
 
-      {canManage && (adding || editingStore) ? (
+      {canManage && perm.canCreate && (adding || editingStore) ? (
         <Card>
           <CardHeader title={editingStore ? "Edit store" : "Add new store"} />
           <form onSubmit={handleSubmit} className="p-4 space-y-3 max-w-xl">
@@ -301,14 +325,14 @@ export default function StoresAdmin() {
           never a blank page. */}
       {stores.length === 0 ? (
         <EmptyState title="No stores yet" hint="Create your first store to start managing your locations.">
-          {canManage ? (
+          {canManage && perm.canCreate ? (
             <Button onClick={openAdd}><Plus size={16} /> + Add Store</Button>
           ) : (
             <p className="text-xs">Ask a company administrator to add the first store.</p>
           )}
         </EmptyState>
       ) : visibleStores.length === 0 ? (
-        <EmptyState title="No active stores" hint="Every store is archived. Use Show archived to restore one." />
+        <EmptyState title="No active stores" hint="Every store is deactivated. Turn on Show all above to view and restore one." />
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {visibleStores.map((store) => {
@@ -346,27 +370,68 @@ export default function StoresAdmin() {
                     <div className="text-xs text-slate-400 mt-0.5">Low stock</div>
                   </div>
                 </div>
+                {/* Contact / location details (T10S) — only when present. */}
+                {(store.address_line1 || store.city || store.postcode || store.phone) ? (
+                  <div className="px-4 pb-3 space-y-1 text-xs text-slate-500">
+                    {store.address_line1 || store.city || store.postcode ? (
+                      <div className="flex items-start gap-1.5">
+                        <MapPin size={13} className="mt-0.5 shrink-0 text-slate-400" />
+                        <span>
+                          {[store.address_line1, store.city, store.postcode].filter(Boolean).join(", ")}
+                        </span>
+                      </div>
+                    ) : null}
+                    {store.phone ? (
+                      <div className="flex items-center gap-1.5">
+                        <Phone size={13} className="shrink-0 text-slate-400" />
+                        <span>{store.phone}</span>
+                      </div>
+                    ) : null}
+                  </div>
+                ) : null}
                 {canManage ? (
                   <div className="px-4 py-3 border-t border-slate-100 flex items-center gap-2">
-                    <Button size="sm" variant="secondary" onClick={() => openEdit(store)} className="flex-1">
-                      <Edit size={14} /> Edit
-                    </Button>
-                    {active ? (
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        title="Archive store (kept in the database, hidden from the active list)"
-                        onClick={() => handleArchive(store)}
-                        className="text-slate-400 hover:text-red-600"
-                      >
-                        <Trash2 size={14} />
+                    {perm.canEdit ? (
+                      <Button size="sm" variant="secondary" onClick={() => openEdit(store)} className="flex-1">
+                        <Edit size={14} /> Edit
                       </Button>
-                    ) : (
-                      <Button size="sm" variant="secondary" onClick={() => setStoreActive(store, true)}>
-                        <RotateCcw size={14} /> Restore
-                      </Button>
-                    )}
+                    ) : null}
+                    {perm.canDelete ? (
+                      active ? (
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          title="Deactivate store (kept in the database, hidden from the active list)"
+                          onClick={() => handleArchive(store)}
+                          className="text-slate-400 hover:text-red-600"
+                        >
+                          <Trash2 size={14} />
+                        </Button>
+                      ) : (
+                        <Button size="sm" variant="secondary" onClick={() => setStoreActive(store, true)}>
+                          <RotateCcw size={14} /> Restore
+                        </Button>
+                      )
+                    ) : null}
+                    {!perm.canEdit && !perm.canDelete ? (
+                      <span className="text-xs text-slate-400">View only</span>
+                    ) : null}
                   </div>
+                ) : null}
+                {perm.canDelete ? (
+                  <label className="px-4 pb-3 -mt-1 flex items-center gap-2 text-xs text-slate-500" title={active ? "Turn OFF to deactivate — the store and its history are kept" : "Turn ON to reactivate this store"}>
+                    <Toggle
+                      checked={active}
+                      onChange={(event) => {
+                        if (event.target.checked) {
+                          setStoreActive(store, true);
+                        } else {
+                          handleArchive(store);
+                        }
+                      }}
+                    />
+                    {active ? "Active" : "Inactive"}
+                  </label>
                 ) : null}
               </Card>
             );

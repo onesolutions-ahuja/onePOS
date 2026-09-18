@@ -13,6 +13,7 @@ import { apiRequest } from "../../services/api.js";
 import { fmtDateTime, Flash, StatusPill } from "./shared.jsx";
 import IntegrationFormModal from "./IntegrationFormModal.jsx";
 import IntegrationDetail from "./IntegrationDetail.jsx";
+import SupplierFeedPreview from "./SupplierFeedPreview.jsx";
 
 export default function IntegrationsAdmin({ storeId }) {
   const [integrations, setIntegrations] = useState([]);
@@ -211,6 +212,8 @@ export default function IntegrationsAdmin({ storeId }) {
           </div>
         </div>
       )}
+
+      <SupplierFeedPreview />
 
       {showForm && (
         <IntegrationFormModal

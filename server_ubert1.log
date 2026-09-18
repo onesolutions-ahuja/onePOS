@@ -1,0 +1,6 @@
+onePOS: checking database...
+onePOS: checking database...
+onePOS: database ready
+onePOS: database ready
+onePOS running on port 10000
+[UBER-WEBHOOK] order intake external_order_id=UBER-SANDBOX-VERIFY-1 created=true reason=n/a unmapped_items=1

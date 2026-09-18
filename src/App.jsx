@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { apiRequest } from "./services/api.js";
 import { loadOfflineSession, saveOfflineSession, clearOfflineSession } from "./services/offlineStore.js";
 import { isNetworkError } from "./services/networkStatus.js";
+import { parseAppPath } from "./utils/adminRoutes.js";
 import Login from "./pages/auth/Login.jsx";
 import POS from "./pages/pos/POS.jsx";
 import AdminLayout from "./pages/admin/AdminLayout.jsx";
@@ -71,7 +72,29 @@ export default function App() {
     setScoError("");
   };
 
+  /*
+   * T10V: the URL is the source of truth for the starting view. A deep link
+   * like /app/sales opens straight into the admin Sales page; /app (or any
+   * unknown path) lands on the till. Permissions are still enforced by the
+   * renderer — a deep link resolves through the same gates as clicking the
+   * page's nav entry.
+   */
+  const routeFromPath = () => {
+    const parsed = parseAppPath(window.location.pathname);
+    if (parsed?.view === "admin") {
+      setView("admin");
+      setAdminInitialPage(parsed.page);
+      return;
+    }
+    setView("pos");
+  };
+
   const [adminInitialPage, setAdminInitialPage] = useState("Dashboard");
+
+  useEffect(() => {
+    routeFromPath();
+    /* eslint-disable-next-line react-hooks/exhaustive-deps */
+  }, []);
 
   useEffect(() => {
     const verifySession = async () => {
@@ -79,6 +102,9 @@ export default function App() {
 
       if (!token) {
         if (window.location.pathname === "/app" || window.location.pathname.startsWith("/app/")) {
+          /* T10V: remember the deep link so the user lands on the same page
+             after signing in instead of always returning to the till. */
+          try { sessionStorage.setItem("onepos_return_path", window.location.pathname); } catch { /* private mode */ }
           window.history.replaceState({}, "", "/login");
         }
         setCheckingSession(false);
@@ -157,7 +183,21 @@ export default function App() {
           setSessionMessage("");
           rememberSession(loggedInUser);
           setLoggedIn(true);
-          window.history.replaceState({}, "", "/app");
+          /* T10V: return to the deep-linked page after sign-in when there
+             was one; otherwise the till. Login must not create a history
+             entry pointing back at /login, so replace — never push. */
+          let returnPath = null;
+          try {
+            returnPath = sessionStorage.getItem("onepos_return_path");
+            sessionStorage.removeItem("onepos_return_path");
+          } catch { /* private mode */ }
+          const parsedReturn = returnPath ? parseAppPath(returnPath) : null;
+          const safePath = parsedReturn ? returnPath : "/app";
+          window.history.replaceState({}, "", safePath);
+          if (parsedReturn?.view === "admin") {
+            setAdminInitialPage(parsedReturn.page);
+            setView("admin");
+          }
         }}
       />
     );
@@ -178,9 +218,10 @@ export default function App() {
     return (
       <AdminLayout
         user={user}
-        onPOS={() =>
-          setView("pos")
-        }
+        onPOS={() => {
+          setView("pos");
+          window.history.pushState({}, "", "/app");
+        }}
         onLogout={logout}
         initialPage={adminInitialPage}
       />
@@ -193,11 +234,13 @@ export default function App() {
         if (offlineSession) return;
         setAdminInitialPage("Dashboard");
         setView("admin");
+        window.history.pushState({}, "", "/app/dashboard");
       }}
       onOpenOnlineOrders={() => {
         if (offlineSession) return;
         setAdminInitialPage("Online Orders");
         setView("admin");
+        window.history.pushState({}, "", "/app/online-orders");
       }}
       onStartSelfCheckout={enterSelfCheckout}
       scoStarting={scoStarting}

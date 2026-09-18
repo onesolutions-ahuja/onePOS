@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Percent, ShoppingBag, X } from "lucide-react";
+import { AlertTriangle, Percent, ShoppingBag, X } from "lucide-react";
 import { apiRequest } from "../../services/api.js";
 import {
   isNetworkError,
@@ -38,6 +38,7 @@ import BottomStatusBar from "../../components/BottomStatusBar.jsx";
 import TillSessionModal from "./TillSessionModal.jsx";
 import POSHeader from "./POSHeader.jsx";
 import CartPanel from "./CartPanel.jsx";
+import CustomerDisplayWindow from "./CustomerDisplayWindow.jsx";
 import ProductGrid from "./ProductGrid.jsx";
 import PaymentModal from "./PaymentModal.jsx";
 import CustomerSelectorModal from "./CustomerSelectorModal.jsx";
@@ -78,16 +79,45 @@ function POS({
   const [ageVerifiedThisSale, setAgeVerifiedThisSale] = useState(false);
   const [showAgeModal, setShowAgeModal] = useState(false);
 
+  /*
+   * T10U — negative-inventory billing safety. The till keeps its products
+   * (already carrying `stock` / `trackStock`) so it can warn BEFORE asking
+   * the server. The backend remains the authority: it re-checks stock
+   * inside the sale transaction and still rejects when the company setting
+   * is OFF — even if this modal is bypassed.
+   */
+  const [negativeStockNotice, setNegativeStockNotice] = useState(null);
+
   useEffect(() => {
     if (!basketHasAgeRestricted) {
       setAgeVerifiedThisSale(false);
     }
   }, [basketHasAgeRestricted]);
 
+  /* T10F-FIX-UI — listen for non-blocking notices from the customer window. */
+  useEffect(() => {
+    const onToast = (event) => {
+      if (event.detail && event.detail.message) {
+        setPopupNotice(String(event.detail.message));
+      }
+    };
+
+    window.addEventListener("onepos:toast", onToast);
+
+    return () => window.removeEventListener("onepos:toast", onToast);
+  }, []);
+
   const [till, setTill] = useState(null);
   const [showTill, setShowTill] = useState(false);
   const [loadingTill, setLoadingTill] = useState(true);
   const [storeName, setStoreName] = useState("");
+
+  /*
+   * T10F-FIX — Customer Display is a SEPARATE browser window (for a second
+   * monitor). The till always keeps its full cashier layout; the popup is a
+   * read-only mirror of the same basket/totals state.
+   */
+  const [showCustomerDisplay, setShowCustomerDisplay] = useState(false);
 
   /*
    * Online orders
@@ -130,6 +160,10 @@ function POS({
    * Offline
    */
   const [offlineNotice, setOfflineNotice] = useState("");
+
+  /* T10F-FIX-UI — non-blocking toast channel (e.g. popup-blocked notice
+     from the Customer Display window uses the same pattern as offline). */
+  const [popupNotice, setPopupNotice] = useState("");
   const [offlineCount, setOfflineCount] = useState(0);
   const [failedCount, setFailedCount] = useState(0);
   const [syncing, setSyncing] = useState(false);
@@ -838,7 +872,8 @@ function POS({
   ========================================================= */
 
   const completeSale = async (
-    paymentMethod
+    paymentMethod,
+    options = {}
   ) => {
     if (
       completing.current ||
@@ -853,6 +888,26 @@ function POS({
     ) {
       setShowPayment(false);
       setShowAgeModal(true);
+      return;
+    }
+
+    /* T10U — pre-flight insufficient-stock warning. Advisory only: the
+       backend decides via the company setting, inside the sale
+       transaction. Cards show recorded stock vs requested quantity. */
+    const stockShortfalls = basket
+      .filter((item) => item.trackStock === true)
+      .filter((item) => Number(item.stock || 0) < Number(item.quantity || 0))
+      .map((item) => ({
+        name: item.name,
+        recordedStock: Number(item.stock || 0),
+        requestedQuantity: Number(item.quantity || 0),
+      }));
+
+    if (stockShortfalls.length > 0 && !options.skipStockWarning) {
+      setNegativeStockNotice({
+        lines: stockShortfalls,
+        paymentMethod,
+      });
       return;
     }
 
@@ -1210,7 +1265,31 @@ function POS({
           onStartSelfCheckout
         }
         scoStarting={scoStarting}
+
+        /* T10F-FIX */
+        onToggleCustomerDisplay={() =>
+          setShowCustomerDisplay((v) => !v)
+        }
+        customerDisplayOn={showCustomerDisplay}
       />
+
+      {/* T10F-FIX — separate customer window (second monitor). Rendered
+          THROUGH a portal into that window so it always shows the same live
+          basket/totals state with zero duplicated logic. Closing it never
+          affects the till. */}
+      {showCustomerDisplay && (
+        <CustomerDisplayWindow
+          basket={basket}
+          subtotal={subtotal}
+          vat={vat}
+          total={total}
+          discountAmount={discountAmount}
+          hasDiscount={discountType !== null && discountValue > 0}
+          hasCustomer={Boolean(selectedCustomer)}
+          storeName={storeName}
+          onClose={() => setShowCustomerDisplay(false)}
+        />
+      )}
 
       {showQueue && (
         <QueueDetailsModal
@@ -1226,6 +1305,19 @@ function POS({
             {offlineNotice}
           </div>
         </div>
+      )}
+
+      {popupNotice && (
+        <ToastAutoDismiss
+          timeout={6000}
+          onDone={() => setPopupNotice("")}
+        >
+          <div className="fixed top-16 left-1/2 -translate-x-1/2 z-50">
+            <div className="bg-red-50 border border-red-200 text-red-700 shadow-lg rounded-lg px-4 py-2 text-sm">
+              {popupNotice}
+            </div>
+          </div>
+        </ToastAutoDismiss>
       )}
 
       {onlineOrderToast && (
@@ -1418,6 +1510,71 @@ function POS({
             setShowAgeModal(false)
           }
         />
+      )}
+
+      {/* T10U — Insufficient Inventory warning. Read-only: recorded stock and
+          requested quantity per affected line; Cancel returns to the payment
+          view, Continue proceeds through the EXISTING checkout (the server
+          still enforces the company setting and audits the sale). */}
+      {negativeStockNotice && (
+        <div
+          className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4"
+          role="alertdialog"
+          aria-modal="true"
+          aria-label="Insufficient inventory warning"
+        >
+          <div className="bg-white rounded-xl w-[440px] max-w-full shadow-2xl">
+            <div className="px-4 py-3 border-b border-amber-200 bg-amber-50 rounded-t-xl">
+              <h2 className="font-bold text-amber-800 flex items-center gap-2">
+                <AlertTriangle size={18} />
+                Insufficient Inventory
+              </h2>
+            </div>
+            <div className="p-4 space-y-2">
+              <p className="text-sm text-slate-600">
+                Recorded stock is lower than the quantity being sold:
+              </p>
+              {negativeStockNotice.lines.map((line) => (
+                <div
+                  key={line.name}
+                  data-testid="negative-stock-line"
+                  className="flex items-center justify-between border border-slate-200 rounded-md px-3 py-2 text-sm"
+                >
+                  <span className="font-medium text-slate-800 truncate mr-2">{line.name}</span>
+                  <span className="text-xs text-slate-500 shrink-0">
+                    Stock: <b className="text-slate-700">{line.recordedStock}</b>
+                    {' \u00b7 '}
+                    Requested: <b className="text-red-600">{line.requestedQuantity}</b>
+                  </span>
+                </div>
+              ))}
+              <p className="text-xs text-slate-500 pt-1">
+                Continuing will record the sale and stock may go negative; a later purchase inward, sales return or stock adjustment corrects the balance.
+              </p>
+            </div>
+            <div className="p-4 pt-0 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setNegativeStockNotice(null)}
+                className="h-10 px-4 border border-slate-200 rounded text-sm"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                data-testid="negative-stock-continue"
+                onClick={() => {
+                  const method = negativeStockNotice.paymentMethod;
+                  setNegativeStockNotice(null);
+                  completeSale(method, { skipStockWarning: true });
+                }}
+                className="h-10 px-4 bg-blue-600 text-white rounded text-sm font-medium"
+              >
+                Continue Sale
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {showPayment && (

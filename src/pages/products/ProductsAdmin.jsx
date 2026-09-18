@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
-import { AlertTriangle, Edit, Package, Plus, RefreshCw, Search, X } from "lucide-react";
+import { AlertTriangle, Clock, Edit, Package, Plus, RefreshCw, Search, X } from "lucide-react";
 import { apiRequest } from "../../services/api.js";
 import { normaliseProduct } from "../../utils/formatters.js";
 import ProductFormModal from "./ProductFormModal.jsx";
+import ProductHistoryModal from "./ProductHistoryModal.jsx";
 
 function ProductsAdmin({ openCreate = false, createPreset = null }) {
   const [products, setProducts] = useState([]);
@@ -10,6 +11,8 @@ function ProductsAdmin({ openCreate = false, createPreset = null }) {
   const [editingProduct, setEditingProduct] = useState(null);
   const [presetProduct, setPresetProduct] = useState(null);
   const [showProductForm, setShowProductForm] = useState(false);
+  const [showHistoryModal, setShowHistoryModal] = useState(false);
+  const [historyProduct, setHistoryProduct] = useState(null);
   const [actionError, setActionError] = useState("");
   const [saving, setSaving] = useState(false);
   const [search, setSearch] = useState("");
@@ -71,6 +74,11 @@ function ProductsAdmin({ openCreate = false, createPreset = null }) {
     setEditingProduct(product);
     setPresetProduct(null);
     setShowProductForm(true);
+  };
+
+  const openHistoryModal = (product) => {
+    setHistoryProduct(product);
+    setShowHistoryModal(true);
   };
 
   const closeProductForm = () => {
@@ -333,6 +341,13 @@ function ProductsAdmin({ openCreate = false, createPreset = null }) {
                         <Edit size={16} />
                       </button>
                       <button
+                        onClick={() => openHistoryModal(product)}
+                        className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-500"
+                        title="View history"
+                      >
+                        <Clock size={16} />
+                      </button>
+                      <button
                         onClick={() => deleteProduct(product)}
                         className="p-1.5 rounded-lg hover:bg-red-50 text-red-500"
                         title="Deactivate product"
@@ -357,6 +372,13 @@ function ProductsAdmin({ openCreate = false, createPreset = null }) {
           error={actionError}
           onClose={closeProductForm}
           onSave={saveProduct}
+        />
+      )}
+
+      {showHistoryModal && (
+        <ProductHistoryModal
+          product={historyProduct}
+          onClose={() => setShowHistoryModal(false)}
         />
       )}
     </div>

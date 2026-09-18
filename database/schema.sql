@@ -66,6 +66,10 @@ CREATE TABLE IF NOT EXISTS company_settings (
     date_format VARCHAR(40) NOT NULL DEFAULT 'DD/MM/YYYY',
     vat_enabled BOOLEAN NOT NULL DEFAULT TRUE,
     default_vat_rate NUMERIC(5,2) NOT NULL DEFAULT 20,
+    loyalty_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+    loyalty_earning_rate NUMERIC(5,4) NOT NULL DEFAULT 0.0100,
+    /* T10U: negative-inventory billing safety — OFF by default. */
+    allow_negative_inventory_billing BOOLEAN NOT NULL DEFAULT FALSE,
     updated_by UUID,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -178,6 +182,21 @@ ON users(company_id);
 
 CREATE INDEX IF NOT EXISTS idx_users_store
 ON users(store_id);
+
+CREATE TABLE IF NOT EXISTS user_stores (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    store_id UUID NOT NULL REFERENCES stores(id) ON DELETE CASCADE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    active BOOLEAN NOT NULL DEFAULT TRUE,
+    UNIQUE (user_id, store_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_user_stores_store
+ON user_stores(store_id, active);
+
+CREATE INDEX IF NOT EXISTS idx_user_stores_user
+ON user_stores(user_id, active);
 
 -- ============================================================
 -- CATEGORIES
@@ -451,6 +470,42 @@ ON customer_stores(store_id, active);
 
 CREATE INDEX IF NOT EXISTS idx_customer_stores_customer
 ON customer_stores(customer_id, active);
+
+-- ============================================================
+-- CUSTOMER LOYALTY
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS customer_loyalty_balances (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+    customer_id UUID NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
+    balance NUMERIC(12,4) NOT NULL DEFAULT 0,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (company_id, customer_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_loyalty_balances_customer
+ON customer_loyalty_balances(customer_id);
+
+CREATE TABLE IF NOT EXISTS customer_loyalty_transactions (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+    customer_id UUID NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
+    transaction_type VARCHAR(50) NOT NULL,
+    amount NUMERIC(12,4) NOT NULL,
+    balance_after NUMERIC(12,4) NOT NULL,
+    reference_type VARCHAR(50),
+    reference_id UUID,
+    description TEXT,
+    created_by UUID REFERENCES users(id) ON DELETE SET NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_loyalty_transactions_customer
+ON customer_loyalty_transactions(customer_id, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_loyalty_transactions_reference
+ON customer_loyalty_transactions(reference_type, reference_id);
 
 -- ============================================================
 -- SALES
@@ -904,6 +959,16 @@ VALUES
 ('product.edit', 'Edit Product', 'Edit products'),
 ('product.delete', 'Delete Product', 'Delete products'),
 
+('global_product.view', 'View Global Products', 'View global product catalogue'),
+('global_product.create', 'Create Global Product', 'Create global products'),
+('global_product.edit', 'Edit Global Product', 'Edit global products'),
+('global_product.delete', 'Delete Global Product', 'Delete global products'),
+
+('category.view', 'View Categories', 'View product categories'),
+('category.create', 'Create Category', 'Create product categories'),
+('category.edit', 'Edit Category', 'Edit product categories'),
+('category.delete', 'Delete Category', 'Delete product categories'),
+
 ('customer.view', 'View Customers', 'View customers'),
 ('customer.create', 'Create Customer', 'Create customers'),
 ('customer.edit', 'Edit Customer', 'Edit customers'),
@@ -914,9 +979,20 @@ VALUES
 ('purchase.edit', 'Edit Purchase', 'Edit purchase orders'),
 ('purchase.delete', 'Delete / Cancel Purchase', 'Delete or cancel purchase orders'),
 
+('store.view', 'View Stores', 'View store information'),
+('store.create', 'Create Store', 'Create new stores'),
+('store.edit', 'Edit Store', 'Edit store information'),
+('store.delete', 'Delete Store', 'Delete stores'),
+
+('user.view', 'View Users', 'View user accounts'),
+('user.create', 'Create User', 'Create user accounts'),
+('user.edit', 'Edit User', 'Edit user accounts'),
+('user.delete', 'Delete User', 'Delete user accounts'),
+
 ('inventory.view', 'View Inventory', 'View stock overview'),
 ('inventory.movements.view', 'View Stock Movements', 'View stock movement ledger'),
 ('inventory.adjust', 'Adjust Inventory', 'Adjust stock levels'),
+('inventory.replenishment.view', 'View Replenishment Suggestions', 'View low-stock reorder suggestions'),
 
 ('returns.view', 'View Returns', 'View return history'),
 ('returns.create', 'Create Returns', 'Process customer and supplier returns'),

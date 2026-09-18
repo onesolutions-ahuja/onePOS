@@ -63,9 +63,18 @@ test("T10A-SMALL: archiving is a soft delete - no physical store delete", () => 
   assert.match(page, /setStoreActive\(store, true\)/);
 });
 
-test("T10A-SMALL: backend keeps store records and exposes no DELETE route", () => {
+test("T10A-SMALL: backend keeps store records — soft delete only, never physical", () => {
+  /* Physical deletion is forbidden outright. */
   assert.ok(!/DELETE\s+FROM\s+stores/i.test(routes), "stores must never be physically deleted");
-  assert.ok(!/router\.delete\(\s*["'`]\/admin\/stores/.test(routes), "no store DELETE route");
+  /* T10S: a DELETE-named route is allowed ONLY as a soft delete (sets
+     stores.active = false). It must contain no physical DELETE and must
+     scope by company_id. */
+  const deleteRoutes = routes.match(/router\.delete\(\s*["'`]\/admin\/stores[\s\S]*?\n  \}\);/g) || [];
+  for (const route of deleteRoutes) {
+    assert.match(route, /UPDATE stores SET active = false/);
+    assert.match(route, /company_id = \$2/);
+    assert.ok(!/DELETE FROM/i.test(route), "soft-delete route must not physically delete");
+  }
   /* Deactivation reuses the existing columns. */
   assert.match(routes, /UPDATE stores SET name=\$1[\s\S]*?active=\$7/);
 });
@@ -80,9 +89,67 @@ test("T10A-SMALL: store routes are company-scoped and the UI never sends a compa
 test("T10A-SMALL: actions follow the existing permission model", () => {
   /* Same session permission source as the sidebar / Order Prep / Reports. */
   assert.match(page, /apiRequest\("\/api\/auth\/me\/permissions"\)/);
-  assert.match(page, /setCanManage\(data\.data\?\.isAdmin === true\)/);
-  assert.match(page, /\{canManage \? \(\s*<Button onClick=\{openAdd\}/);
   assert.match(page, /\{canManage \? \(\n\s+<div className="px-4 py-3 border-t/);
+});
+
+/* ------------------------------------------------------------------ */
+/* T10S — Stores management UI polish                                  */
+/* ------------------------------------------------------------------ */
+
+test("T10S: granular store permissions gate each control individually", () => {
+  /* The existing granular codes, checked from the SAME /me/permissions data. */
+  for (const code of ["store.create", "store.edit", "store.delete"]) {
+    assert.ok(page.includes(`"${code}"`), `permission code ${code} must be consulted`);
+  }
+  assert.match(page, /canCreate: isAdmin \|\| codes\.includes\("store\.create"\)/);
+  assert.match(page, /canEdit: isAdmin \|\| codes\.includes\("store\.edit"\)/);
+  assert.match(page, /canDelete: isAdmin \|\| codes\.includes\("store\.delete"\)/);
+  /* Add Store requires store.create; the edit button requires store.edit;
+     deactivate/restore requires store.delete. */
+  assert.match(page, /canManage && perm\.canCreate && \(adding \|\| editingStore\)/);
+  assert.match(page, /\{perm\.canEdit \? \(\s*<Button size="sm" variant="secondary" onClick=\{\(\) => openEdit\(store\)\}/);
+  assert.match(page, /\{perm\.canDelete \? \(\s*active \? \(/);
+  assert.match(page, /\{perm\.canDelete \? \(\s*<label/);
+});
+
+test("T10S: active/deactivate uses a Toggle, not a checkbox", () => {
+  assert.match(page, /import \{[^}]*Toggle[^}]*\} from "\.\.\/\.\.\/components\/ui\.jsx"/);
+  /* The card-level status toggle drives setStoreActive both ways. */
+  const cardToggle = page.match(/<Toggle\s+checked=\{active\}[\s\S]*?<\/label>/);
+  assert.ok(cardToggle, "card status Toggle missing");
+  assert.match(cardToggle[0], /setStoreActive\(store, true\)/);
+  assert.match(cardToggle[0], /handleArchive\(store\)/);
+  assert.ok(!/type="checkbox"/.test(page), "no raw checkbox for status");
+});
+
+test("T10S: deactivation wording explains soft delete (no destructive language)", () => {
+  assert.match(page, /Deactivate "\$\{store\.name\}"/);
+  assert.match(page, /NOT permanently deleted/);
+  assert.match(page, /historical sales, stock movements and reports remain intact/i);
+  /* Restore path stays available for inactive stores. */
+  assert.match(page, /RotateCcw size=\{14\} \/> Restore/);
+});
+
+test("T10S: store cards show address, city, postcode and phone", () => {
+  assert.match(page, /store\.address_line1/);
+  assert.match(page, /store\.city/);
+  assert.match(page, /store\.postcode/);
+  assert.match(page, /store\.phone/);
+  assert.match(page, /<MapPin size=\{13\}/);
+  assert.match(page, /<Phone size=\{13\}/);
+});
+
+test("T10S: status filter (Show all) keeps inactive stores viewable", () => {
+  /* A header Toggle filters active/all — independent of the archive shortcut. */
+  assert.match(page, /checked=\{showArchived\}\s*onChange=\{\(event\) => setShowArchived\(event\.target\.checked\)\}/);
+  assert.match(page, /Show every store, including deactivated ones/);
+  /* Filtering is purely client-side over the company-scoped list. */
+  assert.match(page, /const visibleStores = showArchived \? stores : activeStores;/);
+});
+
+test("T10S: shared PageHeader component is used for the page heading", () => {
+  assert.match(page, /<PageHeader\s+title="Stores"/);
+  assert.match(page, /configured \u00b7 \$\{activeStores\.length\} active/);
 });
 
 test("T10A-SMALL: API failure keeps the error state with Retry", () => {

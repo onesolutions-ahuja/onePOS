@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Edit, Eye, Plus, RefreshCw, Search, UserPlus, Users, X } from "lucide-react";
+import { Edit, Eye, Gift, Plus, RefreshCw, Search, UserPlus, Users, X } from "lucide-react";
 import { apiRequest } from "../../services/api.js";
 import {
   Alert,
@@ -12,6 +12,7 @@ import {
   Label,
   PageHeader,
 } from "../../components/ui.jsx";
+import CustomerLoyaltyModal from "./CustomerLoyaltyModal.jsx";
 
 function CustomersAdmin() {
   const [customers, setCustomers] = useState([]);
@@ -21,6 +22,7 @@ function CustomersAdmin() {
   const [message, setMessage] = useState("");
   const [formCustomer, setFormCustomer] = useState(null);
   const [detailCustomer, setDetailCustomer] = useState(null);
+  const [showLoyaltyModal, setShowLoyaltyModal] = useState(false);
 
   const loadCustomers = async (value = search) => {
     try {
@@ -208,6 +210,7 @@ function CustomersAdmin() {
                   <th>Phone</th>
                   <th>Email</th>
                   <th>Reference</th>
+                  <th>Loyalty Balance</th>
                   <th>Stores</th>
                   <th>Last purchase</th>
                   <th>Status</th>
@@ -239,6 +242,9 @@ function CustomersAdmin() {
                         <span className="text-slate-400">-</span>
                       )}
                     </td>
+                    <td className="font-semibold text-sm">
+                      £{Number(customer.loyalty_balance || 0).toFixed(2)}
+                    </td>
                     <td className="text-xs">
                       <span className="text-slate-600">
                         {customer.store_names || "Current store"}
@@ -259,11 +265,20 @@ function CustomersAdmin() {
                         <Button
                           variant="ghost"
                           size="sm"
-                          onClick={() => view(customer)}
+                          onClick={() => setDetailCustomer(customer)}
                           className="px-2"
                           title="View details"
                         >
                           <Eye size={14} />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => { setDetailCustomer(customer); setShowLoyaltyModal(true); }}
+                          className="px-2"
+                          title="View loyalty"
+                        >
+                          <Gift size={14} />
                         </Button>
                         <Button
                           variant="ghost"
@@ -309,6 +324,12 @@ function CustomersAdmin() {
             setDetailCustomer(null);
           }}
           onToggle={() => toggle(detailCustomer)}
+        />
+      )}
+      {showLoyaltyModal && (
+        <CustomerLoyaltyModal
+          customer={detailCustomer}
+          onClose={() => setShowLoyaltyModal(false)}
         />
       )}
     </div>

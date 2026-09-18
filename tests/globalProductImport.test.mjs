@@ -124,25 +124,22 @@ function makeDb() {
     const s = sql.replace(/\s+/g, " ").trim();
     state.calls.push({ sql: s, params: [...params] });
 
-    /* --------- global-products list query (exact WHERE shape) --------- */
-    if (/FROM ean_product_master gpm/.test(s) && /existsInMaster/.test(s)) {
+    /* --------- global-products list + count queries (WHERE shape) --------- */
+    if (/FROM ean_product_master gpm/.test(s)) {
       const companyId = params.find((_, i) => params.length - 3 === i) || params[params.length - 3];
-      const searchClause = s.includes("LOWER(gpm.product_name)")
-        ? params.find((p) => typeof p === "string" && p.startsWith("%") && p.endsWith("%"))
-        : null;
+      const likeOrder = [];
+      if (s.includes("LOWER(gpm.product_name)")) likeOrder.push("search");
+      if (s.includes("LOWER(gpm.brand)")) likeOrder.push("brand");
+      if (s.includes("LOWER(gpm.category)")) likeOrder.push("category");
+      const likeParams = params.filter((p) => typeof p === "string" && p.startsWith("%") && p.endsWith("%"));
+      const likeByKey = Object.fromEntries(likeOrder.map((key, i) => [key, likeParams[i] || null]));
+      const searchClause = likeByKey.search || null;
       const eanClause = s.includes("gpm.ean LIKE") ? (() => {
         const likeParams = params.filter((p) => typeof p === "string" && !p.startsWith("%") && p.endsWith("%"));
         return likeParams[0] || null;
       })() : null;
-      const brandClause = s.includes("LOWER(gpm.brand)")
-        ? params.filter((p) => typeof p === "string" && p.startsWith("%") && p.endsWith("%"))[1] || null
-        : null;
-      const catClause = s.includes("LOWER(gpm.category)")
-        ? (() => {
-            const allLike = params.filter((p) => typeof p === "string" && p.startsWith("%") && p.endsWith("%"));
-            return allLike[allLike.length - 1] || null;
-          })()
-        : null;
+      const brandClause = likeByKey.brand || null;
+      const catClause = likeByKey.category || null;
 
       const rows = state.global
         .filter((r) => {
@@ -300,7 +297,7 @@ function makeDb() {
         description: params[5] || null,
         price: Number(params[6]) || 0,
         cost_price: Number(params[7]) || 0,
-        vat_rate: Number(params[8]) || 20,
+        vat_rate: Number(params[8] ?? 20) || 0,
         vat_applicable: params[9] !== false,
         stock_quantity: 0,
         low_stock_level: Number(params[10]) || 0,

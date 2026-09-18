@@ -1,0 +1,53 @@
+{
+  "attempts": [
+    {
+      "url": "https://world.openfoodfacts.org/country/united-kingdom.json?fields=code,product_name,product_name_en,brands,quantity,categories,categories_tags,image_front_url,image_url,countries,countries_tags,last_modified_t&page_size=100&page=1",
+      "status": 503,
+      "date": "2026-09-17T21:09:33.351186+00:00",
+      "error": "HTTPError"
+    },
+    {
+      "url": "https://world.openfoodfacts.org/api/v2/search?countries_tags=en%3Aunited-kingdom&fields=code,product_name,product_name_en,brands,quantity,categories,categories_tags,image_front_url,image_url,countries,countries_tags,last_modified_t&page_size=100&page=1",
+      "status": 503,
+      "date": "2026-09-17T21:09:34.151644+00:00",
+      "error": "HTTPError"
+    },
+    {
+      "url": "https://world.openfoodfacts.org/country/united-kingdom/products.csv",
+      "status": 404
+    },
+    {
+      "url": "https://uk.openfoodfacts.org/cgi/search.pl?action=process&json=1&page_size=100&page=1",
+      "status": 503
+    },
+    {
+      "url": "https://world.openfoodfacts.org/cgi/search.pl?action=process&tagtype_0=countries&tag_contains_0=contains&tag_0=united-kingdom&json=1&page_size=100&page=1",
+      "status": 503
+    },
+    {
+      "url": "https://world.openfoodfacts.org/api/v2/search?countries_tags_en=united-kingdom&page_size=100",
+      "status": 503
+    },
+    {
+      "url": "https://mirabelle.openfoodfacts.org/products.json",
+      "error": "ReadTimeout after 60 seconds"
+    },
+    {
+      "url": "https://mirabelle.openfoodfacts.org/products/products.json?_size=1",
+      "error": "ReadTimeout after 60 seconds"
+    }
+  ],
+  "url": "https://openfoodfacts-ds.s3.eu-west-3.amazonaws.com/en.openfoodfacts.org.products.csv",
+  "downloaded_at": "2026-09-17T21:21:37.839322+00:00",
+  "last_modified": "Thu, 17 Sep 2026 12:03:40 GMT",
+  "etag": "\"08b7d0c6ff057d2941ebb6b78407a51d-778\"",
+  "global_content_length": "13042211705",
+  "status": 200,
+  "raw_rows": 50000,
+  "row_limit": 50000,
+  "partial": true,
+  "snapshot_format": "First complete source records, losslessly reserialized as UTF-8 TSV; not original global file bytes",
+  "limitation": "Partial, source-order-biased starter extract; NOT the complete UK catalogue",
+  "license": "https://world.openfoodfacts.org/data (ODbL; images separately licensed)",
+  "raw_sha256": "4b0efe1c4bb663b0c5e99c8cfe082a3aa13f68b09eb853c354862905452631a7"
+}

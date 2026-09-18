@@ -8,6 +8,7 @@ import {
 
 export default function createSettingsRouter({
   authenticate,
+  authorize,
   db,
   pool,
   writeAudit,
@@ -21,7 +22,9 @@ export default function createSettingsRouter({
         `
         SELECT
           c.id AS company_id, c.name AS company_name, c.legal_name, c.email AS company_email, c.phone AS company_phone, c.currency, c.timezone, c.logo_url,
-          cs.date_format, cs.vat_enabled, cs.default_vat_rate,
+          cs.date_format, cs.vat_enabled, cs.default_vat_rate, cs.loyalty_enabled, cs.loyalty_earning_rate,
+          cs.allow_negative_inventory_billing,
+          cs.scan_go_enabled, cs.online_ordering_enabled, cs.online_payment_methods,
           s.id AS store_id, s.name AS store_name,
           t.id AS till_id, t.name AS till_name, t.terminal_number
         FROM companies c
@@ -60,6 +63,21 @@ export default function createSettingsRouter({
             vatEnabled: settings.vat_enabled ?? true,
             defaultVatRate: Number(settings.default_vat_rate ?? 20),
           },
+          inventory: {
+            /* T10U: negative-inventory billing safety — OFF unless explicitly enabled. */
+            allowNegativeInventoryBilling: settings.allow_negative_inventory_billing === true,
+          },
+          loyalty: {
+            enabled: settings.loyalty_enabled ?? false,
+            earningRate: Number(settings.loyalty_earning_rate ?? 0.0100),
+          },
+          scanGo: {
+            enabled: settings.scan_go_enabled ?? false,
+          },
+          onlineOrdering: {
+            enabled: settings.online_ordering_enabled ?? false,
+            paymentMethods: Array.isArray(settings.online_payment_methods) ? settings.online_payment_methods : ["card", "cash", "cod"],
+          },
           store: {
             id: settings.store_id,
             name: settings.store_name,
@@ -77,6 +95,73 @@ export default function createSettingsRouter({
     }
   });
 
+  /*
+   * T10U — Negative Inventory Billing safety setting.
+   * Admin/Owner control ONLY: gated by the existing settings.manage
+   * permission (Administrator/Admin/Owner bypass applies unchanged via
+   * authorize). Every change is audited with the previous value.
+   */
+  router.put("/settings/negative-inventory-billing", authenticate, authorize("settings.manage"), async (req, res) => {
+    const enabled = req.body.enabled === true;
+    if (!pool) {
+      return res.status(500).json({ success: false, message: "DATABASE_URL is not configured" });
+    }
+
+    /* Strong confirmation: an enabling request must carry the exact
+       acknowledgement string (the settings UI shows the same warning). */
+    if (enabled && req.body.acknowledged !== true) {
+      return res.status(400).json({
+        success: false,
+        message: "Enabling negative-inventory billing requires explicit acknowledgement of the warning",
+      });
+    }
+
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const previous = await client.query(
+        "SELECT allow_negative_inventory_billing FROM company_settings WHERE company_id=$1 FOR UPDATE",
+        [req.user.companyId]
+      );
+      const previousValue = previous.rows.length ? previous.rows[0].allow_negative_inventory_billing === true : false;
+
+      if (previousValue === enabled) {
+        await client.query("COMMIT");
+        return res.json({ success: true, message: enabled ? "Already enabled" : "Already disabled", data: { enabled } });
+      }
+
+      await client.query(
+        `
+        INSERT INTO company_settings (company_id, allow_negative_inventory_billing, updated_by, updated_at)
+        VALUES ($1, $2, $3, NOW())
+        ON CONFLICT (company_id) DO UPDATE SET
+          allow_negative_inventory_billing = $2, updated_by = $3, updated_at = NOW()
+        `,
+        [req.user.companyId, enabled, req.user.id]
+      );
+
+      /* Audit: setting change (previous + new value, who, when). */
+      await client.query(
+        `INSERT INTO audit_logs (company_id, user_id, action, entity_type, entity_id, details)
+         VALUES ($1,$2,'inventory.negative_billing_setting','company',$1,$3)`,
+        [
+          req.user.companyId,
+          req.user.id,
+          JSON.stringify({ enabled, previousValue, storeId: req.user.storeId ?? null }),
+        ]
+      );
+
+      await client.query("COMMIT");
+      res.json({ success: true, message: enabled ? "Negative-inventory billing enabled" : "Negative-inventory billing disabled", data: { enabled } });
+    } catch (error) {
+      await client.query("ROLLBACK").catch(() => {});
+      console.error("Negative-inventory billing setting error:", error);
+      res.status(500).json({ success: false, message: "Unable to update the setting" });
+    } finally {
+      client.release();
+    }
+  });
+
   router.put("/settings", authenticate, async (req, res) => {
     const {
       companyName,
@@ -88,6 +173,11 @@ export default function createSettingsRouter({
       dateFormat,
       vatEnabled,
       defaultVatRate,
+      loyaltyEnabled,
+      loyaltyEarningRate,
+      scanGoEnabled,
+      onlineOrderingEnabled,
+      onlinePaymentMethods,
       logoUrl = null,
     } = req.body;
 
@@ -98,6 +188,26 @@ export default function createSettingsRouter({
     const vatRate = Number(defaultVatRate);
     if (!Number.isFinite(vatRate) || vatRate < 0 || vatRate > 100) {
       return res.status(400).json({ success: false, message: "VAT rate must be between 0 and 100" });
+    }
+
+    // Validate loyalty earning rate
+    if (loyaltyEarningRate !== undefined && loyaltyEarningRate !== null) {
+      const earningRate = Number(loyaltyEarningRate);
+      if (!Number.isFinite(earningRate) || earningRate < 0 || earningRate > 1) {
+        return res.status(400).json({ success: false, message: "Loyalty earning rate must be between 0 and 1 (0% to 100%)" });
+      }
+    }
+
+    // Validate online payment methods
+    if (onlinePaymentMethods !== undefined && onlinePaymentMethods !== null) {
+      if (!Array.isArray(onlinePaymentMethods)) {
+        return res.status(400).json({ success: false, message: "Online payment methods must be an array" });
+      }
+      const validMethods = ["card", "cash", "cod"];
+      const invalidMethods = onlinePaymentMethods.filter((m) => !validMethods.includes(m));
+      if (invalidMethods.length > 0) {
+        return res.status(400).json({ success: false, message: `Invalid payment methods: ${invalidMethods.join(", ")}` });
+      }
     }
 
     if (!pool) {
@@ -113,15 +223,26 @@ export default function createSettingsRouter({
       );
       await client.query(
         `
-        INSERT INTO company_settings (company_id, date_format, vat_enabled, default_vat_rate, updated_by, updated_at)
-        VALUES ($1,$2,$3,$4,$5,NOW())
-        ON CONFLICT (company_id) DO UPDATE SET date_format=$2, vat_enabled=$3, default_vat_rate=$4, updated_by=$5, updated_at=NOW()
+        INSERT INTO company_settings (company_id, date_format, vat_enabled, default_vat_rate, loyalty_enabled, loyalty_earning_rate, scan_go_enabled, online_ordering_enabled, online_payment_methods, updated_by, updated_at)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,NOW())
+        ON CONFLICT (company_id) DO UPDATE SET date_format=$2, vat_enabled=$3, default_vat_rate=$4, loyalty_enabled=$5, loyalty_earning_rate=$6, scan_go_enabled=$7, online_ordering_enabled=$8, online_payment_methods=$9, updated_by=$10, updated_at=NOW()
         `,
-        [req.user.companyId, dateFormat || "DD/MM/YYYY", vatEnabled !== false, vatRate, req.user.id]
+        [
+          req.user.companyId,
+          dateFormat || "DD/MM/YYYY",
+          vatEnabled !== false,
+          vatRate,
+          loyaltyEnabled !== false,
+          loyaltyEarningRate !== undefined ? loyaltyEarningRate : null,
+          scanGoEnabled === true,
+          onlineOrderingEnabled === true,
+          onlinePaymentMethods !== undefined ? JSON.stringify(onlinePaymentMethods) : null,
+          req.user.id
+        ]
       );
       await client.query(
         `INSERT INTO audit_logs (company_id, user_id, action, entity_type, entity_id, details) VALUES ($1,$2,'settings.updated','company',$1,$3)`,
-        [req.user.companyId, req.user.id, JSON.stringify({ currency, timezone, dateFormat, vatEnabled, defaultVatRate: vatRate })]
+        [req.user.companyId, req.user.id, JSON.stringify({ currency, timezone, dateFormat, vatEnabled, defaultVatRate: vatRate, loyaltyEnabled, loyaltyEarningRate, scanGoEnabled, onlineOrderingEnabled, onlinePaymentMethods })]
       );
       await client.query("COMMIT");
       res.json({ success: true, message: "Settings updated" });

@@ -1,9 +1,11 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
+import { SETTINGS_TAB_SLUGS } from "../../utils/adminRoutes.js";
 import { Edit, Plus, RefreshCw, Save, X } from "lucide-react";
 import { apiRequest } from "../../services/api.js";
 import WhatsAppSettings from "./whatsapp/WhatsAppSettings.jsx";
 import InvoiceDeliverySettings from "./invoiceDeliverySettings.jsx";
 import { Toggle } from "../../components/ui.jsx";
+import UserFormModal from "./UserFormModal.jsx";
 /*
  * Settings navigation - compact grouped tabs.
  *
@@ -14,11 +16,11 @@ import { Toggle } from "../../components/ui.jsx";
  */
 const SETTING_GROUPS = [
   { label: "General", sections: ["General", "Company", "Store & Till"] },
-  { label: "Sales & Tax", sections: ["Tax / VAT", "Receipts", "Payment Terminals"] },
+  { label: "Sales & Tax", sections: ["Tax / VAT", "Receipts", "Payment Terminals", "Customer Loyalty"] },
   { label: "Hardware", sections: ["Hardware"] },
   { label: "Users", sections: ["Users & Permissions"] },
   { label: "Integrations", sections: ["Integrations", "Online Platforms", "WhatsApp"] },
-  { label: "Delivery", sections: ["SMS Delivery", "Email Delivery"] },
+  { label: "Communications", sections: ["SMS Delivery", "Email Delivery"] },
 ];
 
 function SettingsAdmin({ initialTab = "General" }) {
@@ -26,6 +28,21 @@ function SettingsAdmin({ initialTab = "General" }) {
   const [tab, setTab] = useState(
     tabs.includes(initialTab) ? initialTab : "General"
   );
+  /*
+   * T10V: the active section is mirrored into the URL
+   * (/app/settings/<section-slug>) so refresh, direct links and
+   * Back/Forward keep the exact section. One-way sync only — the URL is a
+   * reflection of the section, never a second source of state.
+   */
+  useEffect(() => {
+    const slug = SETTINGS_TAB_SLUGS[tab];
+    if (!slug) return;
+    /* The General tab is the plain /app/settings page. */
+    const target = slug === "general" ? "/app/settings" : `/app/settings/${slug}`;
+    if (window.location.pathname !== target) {
+      window.history.replaceState({}, "", target);
+    }
+  }, [tab]);
   const activeGroup =
     SETTING_GROUPS.find((group) => group.sections.includes(tab)) || SETTING_GROUPS[0];
   const [settings, setSettings] = useState(null);
@@ -60,6 +77,8 @@ setForm({
           dateFormat: settingsResponse.data.general.dateFormat,
           vatEnabled: settingsResponse.data.tax.vatEnabled,
           defaultVatRate: settingsResponse.data.tax.defaultVatRate,
+          loyaltyEnabled: settingsResponse.data.loyalty?.enabled || false,
+          loyaltyEarningRate: settingsResponse.data.loyalty?.earningRate || 0.01,
         });
       }
       if (terminalsResponse.success) setTerminals(terminalsResponse.data || []);
@@ -107,17 +126,276 @@ setForm({
 
   if (!settings || !form) return <div className="bg-white border border-slate-200 rounded-xl p-8 max-w-2xl"><h2 className="font-semibold text-red-700">Settings are unavailable</h2><p className="text-sm text-slate-600 mt-2">No settings data was returned by the server.</p><button onClick={load} className="mt-5 h-10 px-4 bg-blue-600 text-white rounded-lg text-sm font-medium flex items-center gap-2"><RefreshCw size={16} /> Retry</button></div>;
 
-  return <div><div className="mb-5"><h1 className="text-2xl font-bold">Settings</h1><p className="text-sm text-slate-500 mt-1">Company, till, tax, hardware and integration configuration.</p></div><div className="mb-3"><div className="flex gap-1 overflow-x-auto">{SETTING_GROUPS.map((group) => { const groupActive = group === activeGroup; return <button key={group.label} onClick={() => { setTab(group.sections[0]); setMessage(""); setError(""); }} className={`px-3 h-8 text-sm whitespace-nowrap rounded-md transition-colors ${groupActive ? "bg-blue-600 text-white font-medium" : "text-slate-600 hover:bg-slate-100"}`}>{group.label}</button>; })}</div><div className="flex gap-1 border-b border-slate-200 overflow-x-auto">{activeGroup.sections.map((item) => <button key={item} onClick={() => { setTab(item); setMessage(""); setError(""); }} className={`px-3 py-2 text-sm whitespace-nowrap border-b-2 -mb-px ${tab === item ? "border-blue-600 text-blue-700 font-medium" : "border-transparent text-slate-500 hover:text-slate-800"}`}>{item}</button>)}</div></div>{message && <div className="mb-4 px-4 py-3 bg-emerald-50 border border-emerald-200 text-emerald-700 rounded-lg text-sm">{message}</div>}{error && <div className="mb-4 px-4 py-3 bg-red-50 border border-red-200 text-red-700 rounded-lg text-sm">{error}</div>}{["General", "Company", "Tax / VAT"].includes(tab) && <SettingsForm tab={tab} form={form} setForm={setForm} onSave={saveSettings} />}{tab === "Store & Till" && <StoreTillSettings settings={settings} onMessage={setMessage} onError={setError} />}{tab === "Payment Terminals" && <PaymentTerminalSettings terminals={terminals} onSaved={load} onMessage={setMessage} onError={setError} />}{tab === "Hardware" && <HardwareSettings hardware={hardware} onSave={saveHardware} onTest={testHardware} />}{tab === "Integrations" && <IntegrationHealth health={health} />}{tab === "Online Platforms" && <OnlinePlatformSettings onMessage={setMessage} onError={setError} />}{tab === "WhatsApp" && <WhatsAppSettings onMessage={setMessage} onError={setError} />}{tab === "SMS Delivery" && <InvoiceDeliverySettings channel="sms" onMessage={setMessage} onError={setError} />}{tab === "Email Delivery" && <InvoiceDeliverySettings channel="email" onMessage={setMessage} onError={setError} />}{tab === "Users & Permissions" && <UsersPermissionsSettings onMessage={setMessage} onError={setError} />}{tab === "Receipts" && <ReceiptSettings settings={settings} form={form} setForm={setForm} onSave={saveSettings} />}</div>;
+  return <div><div className="mb-5"><h1 className="text-2xl font-bold">Settings</h1><p className="text-sm text-slate-500 mt-1">Company, till, tax, hardware and integration configuration.</p></div><div className="mb-3"><div className="flex gap-1 overflow-x-auto">{SETTING_GROUPS.map((group) => { const groupActive = group === activeGroup; return <button key={group.label} onClick={() => { setTab(group.sections[0]); setMessage(""); setError(""); }} className={`px-3 h-8 text-sm whitespace-nowrap rounded-md transition-colors ${groupActive ? "bg-blue-600 text-white font-medium" : "text-slate-600 hover:bg-slate-100"}`}>{group.label}</button>; })}</div><div className="flex gap-1 border-b border-slate-200 overflow-x-auto">{activeGroup.sections.map((item) => <button key={item} onClick={() => { setTab(item); setMessage(""); setError(""); }} className={`px-3 py-2 text-sm whitespace-nowrap border-b-2 -mb-px ${tab === item ? "border-blue-600 text-blue-700 font-medium" : "border-transparent text-slate-500 hover:text-slate-800"}`}>{item}</button>)}</div></div>{message && <div className="mb-4 px-4 py-3 bg-emerald-50 border border-emerald-200 text-emerald-700 rounded-lg text-sm">{message}</div>}{error && <div className="mb-4 px-4 py-3 bg-red-50 border border-red-200 text-red-700 rounded-lg text-sm">{error}</div>}{["General", "Company", "Tax / VAT"].includes(tab) && <SettingsForm tab={tab} form={form} setForm={setForm} onSave={saveSettings} />}{tab === "Store & Till" && <StoreTillSettings settings={settings} onMessage={setMessage} onError={setError} />}{tab === "Payment Terminals" && <PaymentTerminalSettings terminals={terminals} onSaved={load} onMessage={setMessage} onError={setError} />}{tab === "Hardware" && <HardwareSettings hardware={hardware} onSave={saveHardware} onTest={testHardware} />}{tab === "Integrations" && <IntegrationHealth health={health} />}{tab === "Online Platforms" && <OnlinePlatformSettings onMessage={setMessage} onError={setError} />}{tab === "WhatsApp" && <WhatsAppSettings onMessage={setMessage} onError={setError} />}{tab === "Customer Loyalty" && <LoyaltySettings settings={settings} form={form} setForm={setForm} onSave={saveSettings} />}{tab === "SMS Delivery" && <InvoiceDeliverySettings channel="sms" onMessage={setMessage} onError={setError} />}{tab === "Email Delivery" && <InvoiceDeliverySettings channel="email" onMessage={setMessage} onError={setError} />}{tab === "Users & Permissions" && <UsersPermissionsSettings onMessage={setMessage} onError={setError} />}{tab === "Receipts" && <ReceiptSettings settings={settings} form={form} setForm={setForm} onSave={saveSettings} />}</div>;
 }
 
 function UsersPermissionsSettings({ onMessage, onError }) {
-  const [users, setUsers] = useState([]); const [roles, setRoles] = useState([]); const [stores, setStores] = useState([]); const [form, setForm] = useState(null); const [loading, setLoading] = useState(true);
-  const load = async () => { try { setLoading(true); const [u, r, s] = await Promise.all([apiRequest("/api/admin/users"), apiRequest("/api/admin/roles"), apiRequest("/api/admin/stores")]); if (!u.success) throw new Error(u.message); setUsers(u.data || []); setRoles(r.data || []); setStores(s.data || []); } catch (err) { onError(err.message || "Unable to load users"); } finally { setLoading(false); } };
+  const [users, setUsers] = useState([]); 
+  const [roles, setRoles] = useState([]); 
+  const [stores, setStores] = useState([]); 
+  const [form, setForm] = useState(null); 
+  const [loading, setLoading] = useState(true);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [statusFilter, setStatusFilter] = useState("all");
+  const [error, setError] = useState("");
+  const [permissions, setPermissions] = useState([]);
+  const [isAdmin, setIsAdmin] = useState(false);
+  
+  const load = async () => { 
+    try { 
+      setLoading(true); 
+      setError("");
+      const [u, r, s, p] = await Promise.all([
+        apiRequest("/api/admin/users"), 
+        apiRequest("/api/admin/roles"), 
+        apiRequest("/api/admin/stores"),
+        apiRequest("/api/auth/me/permissions")
+      ]); 
+      if (!u.success) throw new Error(u.message); 
+      setUsers(u.data || []); 
+      setRoles(r.data || []); 
+      setStores(s.data || []);
+      if (p.success) {
+        setPermissions(p.data.permissions || []);
+        setIsAdmin(p.data.isAdmin || false);
+      }
+    } catch (err) { 
+      setError(err.message || "Unable to load users"); 
+      onError(err.message || "Unable to load users");
+    } finally { 
+      setLoading(false); 
+    } 
+  };
+  
   useEffect(() => { load(); }, []);
-  const save = async (value) => { const data = await apiRequest(value.id ? `/api/admin/users/${value.id}` : "/api/admin/users", { method: value.id ? "PUT" : "POST", body: JSON.stringify(value) }); if (!data.success) throw new Error(data.message); await load(); setForm(null); onMessage("User saved."); };
-  const toggle = async (user) => { try { await save({ id: user.id, fullName: user.full_name, email: user.email, roleId: user.role_id, storeId: user.store_id, active: !user.active }); } catch (err) { onError(err.message || "Unable to update user"); } };
+  
+  const save = async (value) => { 
+    const data = await apiRequest(value.id ? `/api/admin/users/${value.id}` : "/api/admin/users", { method: value.id ? "PUT" : "POST", body: JSON.stringify(value) }); 
+    if (!data.success) throw new Error(data.message); 
+    await load(); 
+    setForm(null); 
+    onMessage("User saved."); 
+  };
+  
+  const toggle = async (user) => { 
+    try { 
+      await save({ id: user.id, fullName: user.full_name, email: user.email, roleId: user.role_id, storeId: user.store_id, active: !user.active }); 
+    } catch (err) { 
+      onError(err.message || "Unable to update user"); 
+    } 
+  };
+
+  const filteredUsers = users.filter(user => {
+    const matchesSearch = 
+      user.full_name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      user.username?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      user.email?.toLowerCase().includes(searchQuery.toLowerCase());
+    
+    const matchesStatus = statusFilter === "all" || 
+                          (statusFilter === "active" && user.active) ||
+                          (statusFilter === "inactive" && !user.active);
+    
+    return matchesSearch && matchesStatus;
+  });
+
+  const canViewUsers = isAdmin || permissions.includes("user.view");
+  const canCreateUsers = isAdmin || permissions.includes("user.create");
+  const canEditUsers = isAdmin || permissions.includes("user.edit");
+  const canDeleteUsers = isAdmin || permissions.includes("user.delete");
+
   if (loading) return <div className="p-8 text-center text-slate-400">Loading users...</div>;
-  return <div className="space-y-6"><ChangePasswordCard /><div className="bg-white border rounded-xl overflow-hidden"><div className="p-4 border-b flex justify-between items-center"><h2 className="font-semibold">Users & Permissions</h2><button onClick={() => setForm({})} className="h-9 px-3 bg-blue-600 text-white rounded text-sm"><Plus size={15} className="inline mr-1" />Add user</button></div><table className="w-full"><thead><tr className="bg-slate-50">{["Name", "Username / Email", "Role", "Store", "Status", "Actions"].map((heading) => <th key={heading} className="text-left px-4 py-3 text-xs uppercase text-slate-500">{heading}</th>)}</tr></thead><tbody>{users.map((user) => <tr key={user.id} className="border-t"><td className="px-4 py-3 text-sm font-medium">{user.full_name}</td><td className="px-4 py-3 text-sm">{user.username}<div className="text-xs text-slate-500">{user.email || "-"}</div></td><td className="px-4 py-3 text-sm">{user.role_name || "-"}</td><td className="px-4 py-3 text-sm">{user.store_name || "Unassigned"}</td><td className="px-4 py-3 text-sm">{user.active ? "Active" : "Inactive"}</td><td className="px-4 py-3"><button onClick={() => setForm({ id:user.id, username:user.username, fullName:user.full_name, email:user.email || "", roleId:user.role_id || "", storeId:user.store_id || "", active:user.active })} className="p-2 text-slate-500" title="Edit user"><Edit size={16} /></button><button onClick={() => toggle(user)} className="ml-1 px-2 py-1 text-sm border rounded">{user.active ? "Deactivate" : "Activate"}</button></td></tr>)}</tbody></table>{form && <UserFormModal form={form} roles={roles} stores={stores} onClose={() => setForm(null)} onSave={save} />}<RolePermissionsManager roles={roles} onMessage={onMessage} onError={onError} /></div></div>;
+  
+  if (error) return <div className="p-8 text-center text-red-500">{error}</div>;
+  
+  if (!canViewUsers) return <div className="p-8 text-center text-slate-400">You don't have permission to view users</div>;
+  
+  return (
+    <div className="space-y-6">
+      <ChangePasswordCard />
+      <div className="bg-white border rounded-xl overflow-hidden">
+        <div className="p-4 border-b flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+          <h2 className="font-semibold">Users & Permissions</h2>
+          {canCreateUsers && (
+            <button onClick={() => setForm({})} className="h-9 px-3 bg-blue-600 text-white rounded text-sm">
+              <Plus size={15} className="inline mr-1" />Add user
+            </button>
+          )}
+        </div>
+        <div className="p-4 border-b flex flex-col sm:flex-row gap-3">
+          <div className="flex-1">
+            <input 
+              type="text" 
+              placeholder="Search by name, username, or email..." 
+              value={searchQuery} 
+              onChange={(e) => setSearchQuery(e.target.value)} 
+              className="w-full h-9 px-3 border rounded text-sm" 
+            />
+          </div>
+          <select 
+            value={statusFilter} 
+            onChange={(e) => setStatusFilter(e.target.value)} 
+            className="h-9 px-3 border rounded bg-white text-sm"
+          >
+            <option value="all">All Status</option>
+            <option value="active">Active</option>
+            <option value="inactive">Inactive</option>
+          </select>
+        </div>
+        {filteredUsers.length === 0 ? (
+          <div className="p-8 text-center text-slate-400">No users found matching your criteria</div>
+        ) : (
+          <table className="w-full">
+            <thead>
+              <tr className="bg-slate-50">
+                {["Name", "Username / Email", "Role", "Primary Store", "Status", "Actions"].map((heading) => (
+                  <th key={heading} className="text-left px-4 py-3 text-xs uppercase text-slate-500">{heading}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {filteredUsers.map((user) => (
+                <tr key={user.id} className="border-t">
+                  <td className="px-4 py-3 text-sm font-medium">{user.full_name}</td>
+                  <td className="px-4 py-3 text-sm">
+                    {user.username}
+                    <div className="text-xs text-slate-500">{user.email || "-"}</div>
+                  </td>
+                  <td className="px-4 py-3 text-sm">{user.role_name || "-"}</td>
+                  <td className="px-4 py-3 text-sm">{user.store_name || "Unassigned"}</td>
+                  <td className="px-4 py-3 text-sm">
+                    <span className={`px-2 py-1 rounded text-xs ${user.active ? "bg-green-100 text-green-700" : "bg-slate-100 text-slate-600"}`}>
+                      {user.active ? "Active" : "Inactive"}
+                    </span>
+                  </td>
+                  <td className="px-4 py-3">
+                    {canEditUsers && (
+                      <button 
+                        onClick={() => setForm({ 
+                          id: user.id, 
+                          username: user.username, 
+                          fullName: user.full_name, 
+                          email: user.email || "", 
+                          roleId: user.role_id || "", 
+                          storeId: user.store_id || "", 
+                          active: user.active 
+                        })} 
+                        className="p-2 text-slate-500" 
+                        title="Edit user"
+                      >
+                        <Edit size={16} />
+                      </button>
+                    )}
+                    {canDeleteUsers && (
+                      <button 
+                        onClick={() => toggle(user)} 
+                        className="ml-1 px-2 py-1 text-sm border rounded"
+                      >
+                        {user.active ? "Deactivate" : "Activate"}
+                      </button>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+        {form && <UserFormModal form={form} roles={roles} stores={stores} onClose={() => setForm(null)} onSave={save} />}
+      </div>
+      <NegativeInventoryBillingSetting isAdmin={isAdmin} onError={onError} />
+      <RoleListManager roles={roles} onChanged={load} onMessage={onMessage} onError={onError} />
+      <RolePermissionsManager roles={roles} onMessage={onMessage} onError={onError} onChanged={load} />
+    </div>
+  );
+}
+
+/*
+ * T10U — Negative Inventory Billing safety setting (Admin/Owner only).
+ *
+ * OFF by default: the till rejects sales where recorded stock is
+ * insufficient. Enabling it is a deliberate business decision, so the UI
+ * shows a strong warning and the request carries an explicit
+ * acknowledgement — the backend rejects an enabling call without it.
+ * Turning it OFF needs no confirmation and never deletes anything; the
+ * setting is company-wide and every change is audited server-side.
+ */
+function NegativeInventoryBillingSetting({ isAdmin, onError }) {
+  const [enabled, setEnabled] = useState(false);
+  const [loaded, setLoaded] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  const load = useCallback(async () => {
+    try {
+      const data = await apiRequest("/api/settings");
+      if (data.success) {
+        setEnabled(data.data?.inventory?.allowNegativeInventoryBilling === true);
+      }
+      setLoaded(true);
+    } catch (err) {
+      onError(err.message || "Unable to load the negative-inventory setting");
+    }
+  }, [onError]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const changeSetting = async (nextEnabled) => {
+    if (saving) return;
+
+    if (nextEnabled) {
+      const confirmed = window.confirm(
+        "WARNING — Allow Negative Inventory Billing?\n\n" +
+        "The till will be allowed to complete sales even when recorded stock is insufficient.\n\n" +
+        "• Stock balances may go NEGATIVE.\n" +
+        "• Every such sale is recorded in the audit trail.\n" +
+        "• Later deliveries, sales returns or stock adjustments will correct the balance.\n\n" +
+        "Only continue if you accept responsibility for negative stock balances."
+      );
+      if (!confirmed) return;
+    }
+
+    try {
+      setSaving(true);
+      const data = await apiRequest("/api/settings/negative-inventory-billing", {
+        method: "PUT",
+        body: JSON.stringify({ enabled: nextEnabled, acknowledged: nextEnabled }),
+      });
+      if (!data.success) throw new Error(data.message || "Unable to update the setting");
+      setEnabled(nextEnabled);
+    } catch (err) {
+      onError(err.message || "Unable to update the setting");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (!isAdmin || !loaded) return null;
+
+  return (
+    <div className="bg-white border rounded-xl overflow-hidden" data-testid="negative-inventory-setting">
+      <div className="p-4 border-b flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+        <div>
+          <h2 className="font-semibold">Allow Negative Inventory Billing</h2>
+          <p className="text-xs text-slate-500 mt-0.5">Company-wide. Admin/Owner control only — every change and every affected sale is audited.</p>
+        </div>
+        <label className="inline-flex items-center gap-2 text-sm text-slate-600 shrink-0">
+          <Toggle
+            checked={enabled}
+            disabled={saving}
+            onChange={(event) => changeSetting(event.target.checked)}
+          />
+          {enabled ? "ON" : "OFF"}
+        </label>
+      </div>
+      {enabled ? (
+        <div className="px-4 py-3 bg-amber-50 border-t border-amber-200 text-amber-800 text-xs">
+          ON — the till may sell beyond recorded stock; balances can go negative and are corrected by later deliveries, returns or adjustments. Every such sale is audited.
+        </div>
+      ) : (
+        <div className="px-4 py-3 bg-slate-50 border-t border-slate-200 text-slate-500 text-xs">
+          OFF — the till blocks sales where recorded stock is insufficient (default, recommended).
+        </div>
+      )}
+    </div>
+  );
 }
 
 function ChangePasswordCard() {
@@ -158,13 +436,11 @@ function ChangePasswordCard() {
   );
 }
 
-function UserFormModal({ form: initial, roles, stores, onClose, onSave }) {
-  const [form, setForm] = useState({ password: "", ...initial }); const [error, setError] = useState(""); const [saving, setSaving] = useState(false); const update = (field, value) => setForm((current) => ({ ...current, [field]: value }));
-  const submit = async (event) => { event.preventDefault(); if (!form.fullName || (!form.id && !form.password)) { setError("Full name and a password for new users are required"); return; } try { setSaving(true); await onSave(form); } catch (err) { setError(err.message || "Unable to save user"); } finally { setSaving(false); } };
-  return <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4"><div className="bg-white rounded-xl w-[560px] max-w-full shadow-2xl"><div className="p-4 border-b flex justify-between"><h2 className="font-bold text-lg">{form.id ? "Edit User" : "Add User"}</h2><button onClick={onClose} title="Close"><X size={18} /></button></div><form onSubmit={submit} className="p-4">{error && <div className="mb-3 p-2 bg-red-50 text-red-700 rounded text-sm">{error}</div>}<div className="grid grid-cols-2 gap-3">{[["fullName","Full name"],["username","Username"],["email","Email"],["password","Password"]].map(([field,label]) => <label key={field} className="text-sm text-slate-600"><span className="block mb-1 font-medium">{label}</span><input disabled={field === "username" && Boolean(form.id)} required={field === "fullName" || field === "username" || (!form.id && field === "password")} type={field === "password" ? "password" : field === "email" ? "email" : "text"} value={form[field] || ""} onChange={(event) => update(field,event.target.value)} className="w-full h-9 px-2 border rounded" /></label>)}</div><label className="block mt-3 text-sm text-slate-600">Role<select value={form.roleId} onChange={(event) => update("roleId",event.target.value)} className="block w-full h-9 mt-1 border rounded bg-white"><option value="">Unassigned</option>{roles.map((role)=><option key={role.id} value={role.id}>{role.name}</option>)}</select></label><label className="block mt-3 text-sm text-slate-600">Store<select value={form.storeId} onChange={(event) => update("storeId",event.target.value)} className="block w-full h-9 mt-1 border rounded bg-white"><option value="">Unassigned</option>{stores.map((store)=><option key={store.id} value={store.id}>{store.name}</option>)}</select></label><div className="flex justify-end gap-2 mt-5"><button type="button" onClick={onClose} className="h-9 px-3 border rounded text-sm">Cancel</button><button disabled={saving} className="h-9 px-4 bg-blue-600 text-white rounded text-sm">{saving ? "Saving..." : "Save user"}</button></div></form></div></div>;
-}
-
 const PERMISSION_GROUPS = [
+  {
+    label: "Cash Management",
+    codes: ["cash.open_drawer", "cash.payout", "cash.adjustment"],
+  },
   {
     label: "Sales",
     codes: [
@@ -176,15 +452,23 @@ const PERMISSION_GROUPS = [
       "sale.invoice.reprint",
       "sale.discount",
       "sale.void_item",
-      "sale.void",
       "sale.refund",
       "sale.refund_without_receipt",
       "sale.price_change",
       "sale.hold",
     ],
   },
-  { label: "Cash Management", codes: ["cash.open_drawer", "cash.payout", "cash.adjustment"] },
-  { label: "Till", codes: ["till.open", "till.close"] },
+  {
+    label: "Users/Employees",
+    codes: [
+      "user.view",
+      "user.create",
+      "user.edit",
+      "user.delete",
+      "user.manage",
+    ],
+  },
+  { label: "Cash/Till", codes: ["cash.open_drawer", "cash.payout", "cash.adjustment", "till.open", "till.close"] },
   {
     label: "Customers",
     codes: [
@@ -204,6 +488,24 @@ const PERMISSION_GROUPS = [
     ],
   },
   {
+    label: "Global Products",
+    codes: [
+      "global_product.view",
+      "global_product.create",
+      "global_product.edit",
+      "global_product.delete",
+    ],
+  },
+  {
+    label: "Categories",
+    codes: [
+      "category.view",
+      "category.create",
+      "category.edit",
+      "category.delete",
+    ],
+  },
+  {
     label: "Purchases",
     codes: [
       "purchase.view",
@@ -213,10 +515,20 @@ const PERMISSION_GROUPS = [
     ],
   },
   {
+    label: "Stores",
+    codes: [
+      "store.view",
+      "store.create",
+      "store.edit",
+      "store.delete",
+    ],
+  },
+  {
     label: "Inventory",
     codes: [
       "inventory.view",
       "inventory.movements.view",
+      "inventory.replenishment.view",
       "inventory.adjust",
     ],
   },
@@ -253,7 +565,129 @@ const PERMISSION_GROUPS = [
   },
 ];
 
-function RolePermissionsManager({ roles, onMessage, onError }) {
+/*
+ * T10J — Role list + create/edit/rename. Kept beside the permission matrix
+ * so "Role Management" is one coherent page: pick a role, toggle its
+ * permissions (persisted via the existing PUT role-permissions API),
+ * create/edit roles via the existing role.manage authorization.
+ */
+function RoleListManager({ roles, onChanged, onMessage, onError }) {
+  const [form, setForm] = useState(null); // null | { id?, name, description }
+  const [busy, setBusy] = useState(false);
+
+  const submit = async (event) => {
+    event.preventDefault();
+    if (!form.name.trim()) {
+      onError("Role name is required");
+      return;
+    }
+    try {
+      setBusy(true);
+      const data = await apiRequest(
+        form.id ? `/api/admin/roles/${form.id}` : "/api/admin/roles",
+        {
+          method: form.id ? "PUT" : "POST",
+          body: JSON.stringify({ name: form.name.trim(), description: form.description || "" }),
+        }
+      );
+      if (!data.success) throw new Error(data.message || "Unable to save role");
+      setForm(null);
+      await onChanged();
+      onMessage(form.id ? "Role updated." : "Role created.");
+    } catch (err) {
+      onError(err.message || "Unable to save role");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="mt-4 bg-white border border-slate-200 rounded-lg overflow-hidden">
+      <div className="p-4 border-b border-slate-200 flex justify-between items-center">
+        <div>
+          <h3 className="font-semibold text-slate-800">Roles</h3>
+          <p className="text-xs text-slate-500 mt-0.5">Create and name roles, then assign permissions per role below.</p>
+        </div>
+        <button
+          onClick={() => setForm({ name: "", description: "" })}
+          className="h-9 px-3 bg-blue-600 text-white rounded-lg text-sm font-medium"
+        >
+          <Plus size={15} className="inline mr-1" />
+          Add role
+        </button>
+      </div>
+      {form && (
+        <form onSubmit={submit} className="p-4 bg-slate-50 border-b border-slate-200">
+          <div className="flex flex-wrap gap-2 items-end">
+            <label className="text-sm text-slate-600 flex-1 min-w-[180px]">
+              <span className="block mb-1 font-medium">Role name</span>
+              <input
+                value={form.name}
+                onChange={(e) => setForm({ ...form, name: e.target.value })}
+                placeholder="e.g. Store Manager"
+                maxLength={100}
+                className="w-full h-9 px-2 border border-slate-200 rounded"
+                autoFocus
+              />
+            </label>
+            <label className="text-sm text-slate-600 flex-1 min-w-[220px]">
+              <span className="block mb-1 font-medium">Description (optional)</span>
+              <input
+                value={form.description || ""}
+                onChange={(e) => setForm({ ...form, description: e.target.value })}
+                className="w-full h-9 px-2 border border-slate-200 rounded"
+              />
+            </label>
+            <button type="submit" disabled={busy} className="h-9 px-4 bg-blue-600 text-white rounded text-sm disabled:opacity-50">
+              {busy ? "Saving…" : form.id ? "Save role" : "Create role"}
+            </button>
+            <button type="button" onClick={() => setForm(null)} className="h-9 px-3 border border-slate-200 rounded text-sm">
+              Cancel
+            </button>
+          </div>
+        </form>
+      )}
+      <table className="w-full">
+        <thead>
+          <tr className="bg-slate-50">
+            {["Role", "Description", "", ""].map((heading, index) => (
+              <th key={index} className="text-left px-4 py-2 text-xs uppercase text-slate-500">{heading}</th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {roles.map((role) => (
+            <tr key={role.id} className="border-t border-slate-100">
+              <td className="px-4 py-2 text-sm font-medium text-slate-800">
+                {role.name}
+                {role.is_system_role && (
+                  <span className="ml-2 text-[10px] px-1.5 py-0.5 rounded bg-slate-100 text-slate-500 align-middle">System</span>
+                )}
+              </td>
+              <td className="px-4 py-2 text-sm text-slate-500">{role.description || "—"}</td>
+              <td className="px-4 py-2 text-right">
+                <button
+                  onClick={() => setForm({ id: role.id, name: role.name, description: role.description || "" })}
+                  disabled={role.is_system_role}
+                  title={role.is_system_role ? "The Administrator role is protected" : "Rename role"}
+                  className="p-2 text-slate-500 hover:text-slate-700 disabled:opacity-30"
+                >
+                  <Edit size={15} />
+                </button>
+              </td>
+              <td className="px-4 py-2 text-right text-xs text-slate-400">{role.is_system_role ? "Protected" : ""}</td>
+            </tr>
+          ))}
+          {roles.length === 0 && (
+            <tr><td colSpan={4} className="px-4 py-6 text-center text-sm text-slate-400">No roles yet.</td></tr>
+          )}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function RolePermissionsManager({ roles, onMessage, onError, onChanged }) {
   const [selectedRoleId, setSelectedRoleId] = useState("");
   const [allPermissions, setAllPermissions] = useState([]);
   const [rolePermissions, setRolePermissions] = useState([]);
@@ -287,6 +721,8 @@ function RolePermissionsManager({ roles, onMessage, onError }) {
       if (!data.success) throw new Error(data.message);
       setRolePermissions(data.data);
       onMessage("Permissions saved.");
+      /* T10J: role holder counts may change nothing, but keep the list fresh. */
+      if (onChanged) await onChanged();
       /* Reload permissions from the server so the saved state is confirmed and
          any codes filtered out server-side (e.g. invalid / missing permission
          rows) are reflected back in the UI before the user reopens the panel.
@@ -344,6 +780,44 @@ function RolePermissionsManager({ roles, onMessage, onError }) {
   };
 
   const selectedRoleName = roles.find((r) => r.id === selectedRoleId)?.name || "";
+  const selectedRole = roles.find((r) => r.id === selectedRoleId) || null;
+  /*
+   * T10J activation semantics: a role is "inactive" when no active user
+   * holds it AND it has no assigned permissions (the existing roles table
+   * has no active column — users hold roles, not the reverse). System
+   * roles (Administrator) are always active and protected.
+   */
+  const selectedRoleActive = selectedRole
+    ? selectedRole.is_system_role || (selectedRole.user_count || 0) > 0
+    : false;
+
+  const setRoleActive = async (active) => {
+    if (!selectedRoleId || !selectedRole) return;
+    if (selectedRole.is_system_role) {
+      onError("The Administrator role is protected and cannot be deactivated.");
+      return;
+    }
+    if (!active) {
+      const holders = selectedRole.user_count || 0;
+      const confirmed = window.confirm(
+        holders > 0
+          ? `Deactivate "${selectedRole.name}"? ${holders} active user${holders === 1 ? "" : "s"} will be detached from this role.`
+          : `Deactivate "${selectedRole.name}"?`
+      );
+      if (!confirmed) return;
+    }
+    try {
+      const data = await apiRequest(`/api/admin/roles/${selectedRoleId}/active`, {
+        method: "PUT",
+        body: JSON.stringify({ active }),
+      });
+      if (!data.success) throw new Error(data.message || "Unable to update role");
+      onMessage(data.message || (active ? "Role activated." : "Role deactivated."));
+      if (onChanged) await onChanged();
+    } catch (err) {
+      onError(err.message || "Unable to update role");
+    }
+  };
 
   return (
     <div className="mt-8">
@@ -366,11 +840,33 @@ function RolePermissionsManager({ roles, onMessage, onError }) {
       </div>
       {selectedRoleId && (
         <>
-          <div className="mb-4 flex items-center justify-between">
-            <h4 className="font-medium text-slate-700">Permissions for {selectedRoleName}</h4>
-            <button onClick={save} disabled={saving} className="h-9 px-4 bg-blue-600 text-white rounded-lg text-sm font-medium flex items-center gap-2 disabled:opacity-50">
-              <Save size={16} /> {saving ? "Saving…" : "Save changes"}
-            </button>
+          <div className="mb-4 flex items-center justify-between gap-3 flex-wrap">
+            <div>
+              <h4 className="font-medium text-slate-700">Permissions for {selectedRoleName}</h4>
+              {selectedRole && (
+                <p className="text-xs text-slate-500 mt-0.5">
+                  {selectedRole.is_system_role
+                    ? "System role — protected, always active."
+                    : selectedRoleActive
+                      ? `Active — ${selectedRole.user_count} active user${selectedRole.user_count === 1 ? "" : "s"} hold this role.`
+                      : "Inactive — no active users hold this role."}
+                </p>
+              )}
+            </div>
+            <div className="flex items-center gap-3">
+              {!selectedRole?.is_system_role && (
+                <label className="inline-flex items-center gap-2 text-sm text-slate-600" title="Active means at least one active user holds this role">
+                  <Toggle
+                    checked={selectedRoleActive}
+                    onChange={(event) => setRoleActive(event.target.checked)}
+                  />
+                  Role active
+                </label>
+              )}
+              <button onClick={save} disabled={saving} className="h-9 px-4 bg-blue-600 text-white rounded-lg text-sm font-medium flex items-center gap-2 disabled:opacity-50">
+                <Save size={16} /> {saving ? "Saving…" : "Save changes"}
+              </button>
+            </div>
           </div>
           {loading ? (
             <div className="p-8 text-center text-slate-400">Loading permissions…</div>
@@ -382,11 +878,9 @@ function RolePermissionsManager({ roles, onMessage, onError }) {
                   <div className="p-3 grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2">
                     {group.codes.map((code) => (
                       <label key={code} className="inline-flex items-center gap-2 text-sm text-slate-700 cursor-pointer" title={permTooltip(code)}>
-                        <input
-                          type="checkbox"
+                        <Toggle
                           checked={rolePermissions.includes(code)}
                           onChange={() => toggle(code)}
-                          className="accent-blue-600"
                         />
                         <span className={allPermissions.some((p) => p.code === code) ? "" : "text-orange-600"}>
                           {permLabels[code] || code}
@@ -492,6 +986,96 @@ const companyFields = <>{field("companyName", "Company name")}{field("legalName"
 
 function ReceiptSettings({ settings, form, setForm, onSave }) {
   return <div className="bg-white border border-slate-200 rounded-xl p-5 max-w-2xl"><h2 className="font-semibold mb-4">Receipt settings</h2><p className="text-sm text-slate-500 mb-4">Receipts use the existing company and tax settings. Printer configuration is managed under Hardware.</p><div className="grid grid-cols-2 gap-4 text-sm"><div><span className="text-slate-500">Header company</span><div className="font-medium mt-1">{settings.company.name}</div></div><div><span className="text-slate-500">VAT display</span><div className="font-medium mt-1">{form.vatEnabled ? `Enabled (${form.defaultVatRate}%)` : "Disabled"}</div></div><div><span className="text-slate-500">Date format</span><div className="font-medium mt-1">{form.dateFormat}</div></div><div><span className="text-slate-500">Paper width</span><div className="font-medium mt-1">Configure under Hardware</div></div></div><button onClick={onSave} className="mt-5 h-10 px-5 bg-blue-600 text-white rounded-lg text-sm font-medium">Save receipt settings</button></div>;
+}
+
+function LoyaltySettings({ settings, form, setForm, onSave }) {
+  const [error, setError] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  const handleSave = async (event) => {
+    event.preventDefault();
+    setError("");
+
+    const rate = Number(form.loyaltyEarningRate);
+    if (!Number.isFinite(rate) || rate < 0 || rate > 1) {
+      setError("Earning rate must be between 0% and 100%");
+      return;
+    }
+
+    try {
+      setSaving(true);
+      await onSave(event);
+      setMessage("Loyalty settings saved.");
+    } catch (err) {
+      setError(err.message || "Unable to save loyalty settings");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const formatRate = (value) => {
+    const num = Number(value);
+    if (!Number.isFinite(num)) return "0.00";
+    return (num * 100).toFixed(2);
+  };
+
+  const handleRateChange = (event) => {
+    const val = event.target.value;
+    setForm((current) => ({ ...current, loyaltyEarningRate: val }));
+  };
+
+  return (
+    <form onSubmit={handleSave} className="bg-white border border-slate-200 rounded-xl p-5 max-w-2xl">
+      <h2 className="font-semibold mb-4">Customer Loyalty</h2>
+      <p className="text-sm text-slate-500 mb-5">Configure the customer loyalty programme. Customers earn points on purchases when enabled.</p>
+
+      {error && <div className="mb-4 p-3 bg-red-50 border border-red-200 text-red-700 rounded-lg text-sm">{error}</div>}
+
+      <div className="space-y-5">
+        <div className="bg-slate-50 border border-slate-200 rounded-xl p-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <h3 className="font-medium text-slate-800">Enable Loyalty Programme</h3>
+              <p className="text-sm text-slate-500 mt-1">When enabled, customers earn points on eligible purchases based on the earning rate.</p>
+            </div>
+            <label className="inline-flex items-center gap-2">
+              <Toggle
+                checked={form.loyaltyEnabled !== false}
+                onChange={(event) => setForm((current) => ({ ...current, loyaltyEnabled: event.target.checked }))}
+              />
+            </label>
+          </div>
+        </div>
+
+        <div className="bg-slate-50 border border-slate-200 rounded-xl p-4">
+          <h3 className="font-medium text-slate-800 mb-3">Earning Rate</h3>
+          <p className="text-sm text-slate-500 mb-3">Customers earn this percentage of their purchase total as loyalty points (e.g., 1% = 1 point per £1 spent).</p>
+          <div className="flex items-center gap-3">
+            <label className="text-sm text-slate-600">
+              <span className="block mb-1 font-medium">Earning rate %</span>
+              <input
+                type="number"
+                step="0.01"
+                min="0"
+                max="100"
+                value={formatRate(form.loyaltyEarningRate)}
+                onChange={handleRateChange}
+                className="w-24 h-10 px-3 border border-slate-200 rounded-lg text-right"
+                aria-describedby="rate-hint"
+              />
+            </label>
+            <span className="text-slate-400 text-sm" id="rate-hint">Maximum 100%</span>
+          </div>
+        </div>
+      </div>
+
+      <div className="flex justify-end gap-2 mt-6">
+        <button type="submit" disabled={saving} className="h-10 px-5 bg-blue-600 text-white rounded-lg text-sm font-medium disabled:opacity-50">
+          {saving ? "Saving…" : "Save loyalty settings"}
+        </button>
+      </div>
+    </form>
+  );
 }
 
 function SettingsInfo({ settings }) {
@@ -617,12 +1201,27 @@ function OnlinePlatformSettings({ onMessage, onError }) {
           </label>
         </div>
       </div>
-      <p className="text-xs text-slate-500 mb-4">Credentials are stored encrypted and never leave the server. Order actions use the real {platform.name} API once credentials are configured (stub mode until then); menu sync and webhooks are not yet connected.</p>
+      <p className="text-xs text-slate-500 mb-4">Credentials are stored encrypted and never leave the server. Order actions use the real {platform.name} API once credentials are configured (stub mode until then); webhook events are received at the URL below and every exchange is recorded in the platform API audit log.</p>
       {platform.platform === "uber" && (platform.store_id || platform.brand_id) && (
         <p className="text-xs text-slate-600 mb-4">
           Saved Store ID: <span className="font-mono">{platform.store_id || "not set"}</span>
           {platform.brand_id ? <> &nbsp;|&nbsp; Saved Brand ID: <span className="font-mono">{platform.brand_id}</span></> : null}
         </p>
+      )}
+      {platform.platform === "uber" && (
+        <div className="mt-4 text-xs text-slate-500 bg-slate-50 border border-slate-200 rounded-lg p-3">
+          <p>
+            <span className="font-medium">Primary Webhook URL (configure in the Uber Developer Dashboard for this Client ID):</span>{" "}
+            <span className="font-mono select-all">{String(window.location.origin)}/api/online/uber/webhook</span>
+          </p>
+          <p className="mt-1">
+            Uber signs each delivery with <span className="font-mono">X-Uber-Signature</span> (HMAC-SHA256 over the raw
+            body using your Client Secret). Keep the Client Secret stored above - it is used to verify every webhook;
+            no extra entry is required. Events handled: <span className="font-mono">store.provisioned</span>,{" "}
+            <span className="font-mono">store.deprovisioned</span>, <span className="font-mono">orders.notification</span>.
+            Each delivery is acknowledged with HTTP 200 (empty body) and recorded in the platform API audit log.
+          </p>
+        </div>
       )}
       {platform.platform === "deliveroo" && (
         <div className="mt-4 text-xs text-slate-500 bg-slate-50 border border-slate-200 rounded-lg p-3">

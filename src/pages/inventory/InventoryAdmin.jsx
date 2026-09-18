@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Calculator, History, RefreshCw, Search, X } from "lucide-react";
 import { apiRequest } from "../../services/api.js";
 import { normaliseProduct, getStockStatus } from "../../utils/formatters.js";
+import StockAdjustmentModal from "./StockAdjustmentModal.jsx";
 function ReconciliationModal({ data, onClose }) {
   return <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4"><div className="bg-white rounded-xl w-[850px] max-w-full max-h-[85vh] shadow-2xl flex flex-col"><div className="p-4 border-b flex justify-between"><div><h2 className="font-bold text-lg">Stock Reconciliation</h2><p className="text-xs text-slate-500">{data.product}</p></div><button onClick={onClose} title="Close"><X size={18} /></button></div><div className="p-4 overflow-auto"><div className={`p-3 rounded text-sm mb-4 ${data.mismatch ? "bg-red-50 text-red-700" : "bg-emerald-50 text-emerald-700"}`}>{data.mismatch ? "Stock balance mismatch" : "Stock balance matches ledger"} <span className="ml-3">Current {data.currentStock} · Ledger {data.ledgerBalance}</span></div><table className="w-full"><thead><tr className="bg-slate-50">{["Date/time", "Type", "Quantity", "Balance", "Reference", "User", "Reason"].map((heading) => <th key={heading} className="text-left px-3 py-2 text-xs uppercase text-slate-500">{heading}</th>)}</tr></thead><tbody>{(data.movements || []).map((movement, index) => <tr key={`${movement.created_at}-${index}`} className="border-t"><td className="px-3 py-2 text-xs">{new Date(movement.created_at).toLocaleString()}</td><td className="px-3 py-2 text-sm font-semibold">{movement.movement_type}</td><td className="px-3 py-2 text-sm">{movement.quantity_change}</td><td className="px-3 py-2 text-sm font-semibold">{movement.balance_after}</td><td className="px-3 py-2 text-xs">{movement.reference_type || "-"}</td><td className="px-3 py-2 text-sm">{movement.username || "-"}</td><td className="px-3 py-2 text-sm">{movement.reason || "-"}</td></tr>)}</tbody></table></div></div></div>;
 }
@@ -418,127 +419,5 @@ function InventoryAdmin() {
       );
     }
 
-function StockAdjustmentModal({ product, onClose, onSave }) {
-  const [direction, setDirection] = useState("increase");
-  const [quantity, setQuantity] = useState("");
-  const [reason, setReason] = useState("");
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState("");
-
-  const submit = async (event) => {
-    event.preventDefault();
-    const amount = Number(quantity);
-
-    if (!Number.isFinite(amount) || amount <= 0) {
-      setError("Enter an adjustment quantity greater than zero.");
-      return;
-    }
-
-    try {
-      setSaving(true);
-      setError("");
-      await onSave(
-        product,
-        direction === "increase" ? amount : -amount,
-        reason
-      );
-    } catch (err) {
-      setError(err.message || "Unable to adjust stock");
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-xl w-[440px] max-w-full shadow-2xl">
-        <div className="p-5 border-b border-slate-200 flex items-center justify-between">
-          <div>
-            <h2 className="font-bold text-xl">Adjust Stock</h2>
-            <p className="text-sm text-slate-500 mt-1">
-              {product.name} · Current stock: {product.stock}
-            </p>
-          </div>
-          <button
-            onClick={onClose}
-            disabled={saving}
-            className="p-2 hover:bg-slate-100 rounded"
-            title="Close"
-          >
-            <X size={20} />
-          </button>
-        </div>
-
-        <form onSubmit={submit} className="p-5">
-          {error && (
-            <div className="mb-4 px-3 py-2 bg-red-50 border border-red-200 text-red-700 rounded text-sm">
-              {error}
-            </div>
-          )}
-
-          <div className="grid grid-cols-2 gap-2 mb-4">
-            {["increase", "decrease"].map((option) => (
-              <button
-                key={option}
-                type="button"
-                onClick={() => setDirection(option)}
-                className={`h-10 rounded-lg border text-sm font-medium capitalize ${
-                  direction === option
-                    ? "border-blue-600 bg-blue-50 text-blue-700"
-                    : "border-slate-200 text-slate-600 hover:bg-slate-50"
-                }`}
-              >
-                {option} stock
-              </button>
-            ))}
-          </div>
-
-          <label className="block text-sm text-slate-600 mb-4">
-            <span className="block mb-1 font-medium">Adjustment quantity</span>
-            <input
-              autoFocus
-              required
-              type="number"
-              min="0.01"
-              step="0.01"
-              value={quantity}
-              onChange={(event) => setQuantity(event.target.value)}
-              className="w-full h-10 px-3 border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-blue-500"
-            />
-          </label>
-
-          <label className="block text-sm text-slate-600">
-            <span className="block mb-1 font-medium">Reason (optional)</span>
-            <textarea
-              rows="3"
-              value={reason}
-              onChange={(event) => setReason(event.target.value)}
-              className="w-full px-3 py-2 border border-slate-200 rounded-lg outline-none resize-none focus:ring-2 focus:ring-blue-500"
-              placeholder="For example: delivery received or stock count"
-            />
-          </label>
-
-          <div className="flex justify-end gap-2 mt-6 pt-4 border-t border-slate-200">
-            <button
-              type="button"
-              onClick={onClose}
-              disabled={saving}
-              className="h-10 px-4 border border-slate-200 rounded-lg text-sm hover:bg-slate-50"
-            >
-              Cancel
-            </button>
-            <button
-              type="submit"
-              disabled={saving}
-              className="h-10 px-5 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700"
-            >
-              {saving ? "Saving..." : "Save adjustment"}
-            </button>
-          </div>
-        </form>
-      </div>
-    </div>
-  );
-}
-
 export default InventoryAdmin;
+

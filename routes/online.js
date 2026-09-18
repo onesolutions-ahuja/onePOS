@@ -1645,10 +1645,18 @@ export default function createOnlineRouter({
       fromStatuses: ["RECEIVED"],
       toStatus: "PREPARING",
       platformAction: "acceptOrder",
+      /* TAT groundwork: manual acceptance IS the start of preparation, so
+       * accepted_at and preparing_at are stamped here (preparing_at is the
+       * existing timestampColumn below; accepted_at is written explicitly). */
       timestampColumn: "preparing_at",
       callPlatform: (service, order, runtime) => service.acceptOrder(order, runtime),
       buildMessage: (order) => `Order accepted - preparation started (platform call ${order.platform})`,
       onTransition: async (client, { order, toStatus }) => {
+        await client.query(
+          "UPDATE online_orders SET accepted_at = NOW() WHERE id = $1 AND accepted_at IS NULL",
+          [order.id]
+        );
+
         await recordEvent(client, {
           orderId: order.id,
           eventType: "ACKED_ACCEPTED",
@@ -1671,6 +1679,7 @@ export default function createOnlineRouter({
       platformAction: "rejectOrder",
       releaseInventory: true,
       reason,
+      timestampColumn: "cancelled_at",
       callPlatform: (service, order, runtime) => service.rejectOrder(order, reason, runtime),
       buildMessage: (order) => `Order rejected; inventory reservation released (${order.platform})`,
     });
@@ -1705,6 +1714,7 @@ export default function createOnlineRouter({
       platformAction: "cancelOrder",
       releaseInventory: true,
       reason,
+      timestampColumn: "cancelled_at",
       callPlatform: (service, order, runtime) => service.cancelOrder(order, reason, runtime),
       buildMessage: (order) => `Order cancelled; inventory reservation released (${order.platform})`,
     });
@@ -2063,6 +2073,285 @@ export default function createOnlineRouter({
   }
 
   /*
+   * Resolves the onePOS store an Uber event/order belongs to. Resolution
+   * order (never invented):
+   *   1. the Uber store_id saved in the integration configuration (set by
+   *      the store.provisioned handler or the Settings "Save this Store ID"
+   *      action) - matched against a store code,
+   *   2. the store/location id from the event payload (same code match),
+   *   3. the company's default store so the order is still recorded when no
+   *      explicit mapping exists.
+   */
+  async function resolveUberStoreId(companyId, { storeId = null, locationId = null } = {}) {
+    const candidates = [storeId, locationId].filter(Boolean).map(String);
+
+    for (const candidate of candidates) {
+      const matchedStore = await db(
+        "SELECT id FROM stores WHERE company_id = $1 AND code = $2 LIMIT 1",
+        [companyId, candidate]
+      );
+
+      if (matchedStore.rows.length) {
+        return matchedStore.rows[0].id;
+      }
+    }
+
+    const fallback = await db(
+      "SELECT id FROM stores WHERE company_id = $1 ORDER BY created_at LIMIT 1",
+      [companyId]
+    );
+
+    return fallback.rows.length ? fallback.rows[0].id : null;
+  }
+
+  /*
+   * Maps Uber order items onto onePOS products (same policy as Deliveroo):
+   * matching is by the stable Uber identifier (pos_item_id) against the
+   * products.uber_item_id column ONLY - an unmatched item stays UNMAPPED and
+   * is never dropped, so the order still arrives and can be reconciled.
+   */
+  async function resolveUberItems(client, companyId, normalized) {
+    const mapped = [];
+    const unmapped = [];
+
+    for (const item of normalized.items || []) {
+      const externalItemId = item.externalItemId !== undefined && item.externalItemId !== null ? String(item.externalItemId) : null;
+
+      let product = null;
+
+      if (externalItemId) {
+        const productResult = await client.query(
+          `
+          SELECT id, name, price, vat_rate, track_stock
+          FROM products
+          WHERE company_id = $1
+            AND active = true
+            AND uber_item_id = $2
+          LIMIT 1
+          `,
+          [companyId, externalItemId]
+        );
+
+        product = productResult.rows[0] || null;
+      }
+
+      const quantity = Number(item.quantity) > 0 ? Number(item.quantity) : 1;
+      const unitPrice = Number(item.unitPrice) || 0;
+      const lineTotal = Number(item.totalPrice) || Number((unitPrice * quantity).toFixed(2));
+
+      const platformData = {
+        source: "uber_webhook",
+        external_item_id: externalItemId,
+        uber_item_name: item.name || item.operationalName || null,
+        operational_name: item.operationalName,
+        modifiers: item.modifiers,
+        special_requests: item.specialRequests,
+        raw: item.raw,
+      };
+
+      if (product) {
+        mapped.push({
+          productId: product.id,
+          productName: product.name,
+          externalItemId,
+          quantity,
+          unitPrice,
+          tax: Number(((unitPrice * quantity * Number(product.vat_rate || 0)) / 100).toFixed(2)),
+          total: lineTotal,
+          trackStock: product.track_stock,
+          mappingStatus: "MAPPED",
+          platformData,
+        });
+      } else {
+        unmapped.push({
+          productId: null,
+          productName: item.name || item.operationalName || externalItemId || "Unmapped Uber Eats item",
+          externalItemId,
+          quantity,
+          unitPrice,
+          tax: 0,
+          total: lineTotal,
+          trackStock: false,
+          mappingStatus: "UNMAPPED",
+          platformData,
+        });
+      }
+    }
+
+    return { items: [...mapped, ...unmapped], mapped, unmapped };
+  }
+
+  /*
+   * Creates the online_orders row for a verified Uber orders.notification
+   * webhook - IDEMPOTENT (UNIQUE (company_id, platform, external_order_id),
+   * ON CONFLICT DO NOTHING) and using the EXISTING lifecycle/inventory
+   * machinery: the order enters RECEIVED, tracked+MAPPED items are reserved
+   * via reserveOrderInventory, and the full payload is preserved as an event.
+   * onePOS never auto-accepts; the existing manual-accept endpoint drives the
+   * next transition (status is sent back to Uber by the same accept/complete
+   * platform calls used for every other action).
+   */
+  async function createUberOrder({
+    companyId,
+    normalized,
+    storeId,
+    loggedPayload,
+    signatureState,
+  }) {
+    if (!pool) {
+      return { created: false, reason: "database_not_configured", orderId: null, unmappedCount: 0 };
+    }
+
+    const client = await pool.connect();
+    let transactionStarted = false;
+
+    try {
+      await client.query("BEGIN");
+      transactionStarted = true;
+
+      const { items, mapped, unmapped } = await resolveUberItems(client, companyId, normalized);
+
+      const subtotal = mapped.reduce((sum, item) => sum + item.total, 0);
+      const tax = mapped.reduce((sum, item) => sum + item.tax, 0);
+      const deliveryFee = Number(normalized.deliveryFee) || 0;
+      const total = normalized.total || Number((subtotal + deliveryFee).toFixed(2));
+
+      const orderResult = await client.query(
+        `
+        INSERT INTO online_orders (
+          company_id, store_id, platform, external_order_id, external_reference,
+          status, customer_name, customer_phone, fulfilment_type, otp_code, currency,
+          subtotal, tax, delivery_fee, total, notes, platform_data, inventory_reserved
+        )
+        VALUES ($1,$2,'uber',$3,$4,'RECEIVED',$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,FALSE)
+        ON CONFLICT (company_id, platform, external_order_id) DO NOTHING
+        RETURNING *
+        `,
+        [
+          companyId,
+          storeId,
+          normalized.externalOrderId,
+          normalized.externalReference || null,
+          normalized.customer.name || null,
+          normalized.customer.phone || null,
+          normalized.fulfilmentType || "DELIVERY",
+          normalized.customer.otp ? String(normalized.customer.otp) : null,
+          normalized.currency || "GBP",
+          Number(normalized.subtotal || subtotal).toFixed(2),
+          tax.toFixed(2),
+          deliveryFee.toFixed(2),
+          Number(total).toFixed(2),
+          normalized.notes || null,
+          JSON.stringify({
+            received_via: "uber_webhook",
+            event: normalized.eventType,
+            signature_state: signatureState,
+            uber_store_id: normalized.storeId || null,
+            uber_user_id: normalized.userId || null,
+            resource_href: normalized.resourceHref || null,
+            unmapped_item_count: unmapped.length,
+          }),
+        ]
+      );
+
+      if (!orderResult.rows.length) {
+        // Duplicate delivery: no new row may be created.
+        await client.query("ROLLBACK");
+        transactionStarted = false;
+
+        const existing = await db(
+          "SELECT id, status FROM online_orders WHERE company_id = $1 AND platform = 'uber' AND external_order_id = $2 LIMIT 1",
+          [companyId, normalized.externalOrderId]
+        );
+
+        return {
+          created: false,
+          reason: "duplicate",
+          orderId: existing.rows.length ? existing.rows[0].id : null,
+          orderStatus: existing.rows.length ? existing.rows[0].status : null,
+          unmappedCount: 0,
+        };
+      }
+
+      const order = orderResult.rows[0];
+
+      for (const item of items) {
+        await client.query(
+          `
+          INSERT INTO online_order_items (
+            order_id, product_id, external_item_id, product_name, quantity, unit_price, tax, total, mapping_status, platform_data
+          )
+          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+          `,
+          [
+            order.id,
+            item.productId,
+            item.externalItemId,
+            item.productName,
+            item.quantity,
+            item.unitPrice.toFixed(2),
+            item.tax.toFixed(2),
+            item.total.toFixed(2),
+            item.mappingStatus,
+            JSON.stringify(item.platformData),
+          ]
+        );
+      }
+
+      // Existing inventory design: only MAPPED, tracked items are reserved.
+      const reservable = mapped.filter((item) => item.trackStock);
+      let inventoryReserved = false;
+
+      if (reservable.length) {
+        await reserveOrderInventory(client, {
+          companyId,
+          storeId,
+          order,
+          items: reservable,
+          userId: null,
+        });
+        await client.query(
+          "UPDATE online_orders SET inventory_reserved = TRUE, updated_at = NOW() WHERE id = $1",
+          [order.id]
+        );
+        inventoryReserved = true;
+      }
+
+      await recordEvent(client, {
+        orderId: order.id,
+        eventType: `UBER_${String(normalized.eventType || "ORDERS_NOTIFICATION").toUpperCase().replace(/[^A-Z0-9]+/g, "_").slice(0, 40)}`,
+        toStatus: "RECEIVED",
+        message:
+          `Uber Eats order created from webhook (${signatureState})` +
+          (unmapped.length ? `; ${unmapped.length} item(s) without a onePOS mapping` : "") +
+          (inventoryReserved ? "; inventory reserved" : ""),
+        platformResponse: loggedPayload,
+        actorUserId: null,
+      });
+
+      await client.query("COMMIT");
+
+      return {
+        created: true,
+        reason: null,
+        orderId: order.id,
+        orderStatus: order.status,
+        unmappedCount: unmapped.length,
+        unmapped,
+        inventoryReserved,
+      };
+    } catch (error) {
+      if (transactionStarted) {
+        await client.query("ROLLBACK");
+      }
+
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  /*
    * Records a Deliveroo status-update (or any later) webhook against an
    * existing order. If no order exists yet the event is still stored safely -
    * as a webhook audit row in platform_api_logs (written by the caller) - and
@@ -2142,6 +2431,306 @@ export default function createOnlineRouter({
 
     return res.status(200).json(acknowledgement);
   }
+
+  /*
+   * GET /api/online/uber/webhook/health
+   *
+   * Reachability probe (no authentication, no side effects) so the Uber
+   * Developer Dashboard URL entry can be smoke-tested before signing
+   * deliveries start.
+   */
+  router.get("/online/uber/webhook/health", (req, res) => {
+    res.status(200).json({
+      success: true,
+      service: "uber-webhook",
+      status: "reachable",
+    });
+  });
+
+  /*
+   * POST /api/online/uber/webhook                <- the Uber PRIMARY WEBHOOK URL
+   *
+   * Public, unauthenticated endpoint: authenticity is enforced via
+   * `X-Uber-Signature` (HMAC-SHA256 of the raw body with the Client Secret,
+   * hex) whenever the secret is configured in Settings -> Online Platforms ->
+   * Uber Eats (Client secret / Webhook secret). The raw body is provided by
+   * the express.raw parser mounted in server.js (same mechanism as the
+   * Deliveroo webhook).
+   *
+   * HANDLED EVENTS
+   *   store.provisioned      -> map the Uber store onto the onePOS store and
+   *                             remember it in the integration configuration
+   *                             (store_id / brand_id), so orders from this
+   *                             store land on the right tenant/store. Store
+   *                             mapping resolution: config store_id, then
+   *                             config store_location_id, then the company
+   *                             default store - the mapping itself is never
+   *                             invented.
+   *   store.deprovisioned    -> records the event on the configuration and
+   *                             the audit log (no destructive change).
+   *   orders.notification    -> creates the online_orders row (RECEIVED,
+   *                             idempotent via UNIQUE (company_id, platform,
+   *                             external_order_id)) through the SAME
+   *                             inventory/reservation/event machinery as the
+   *                             Deliveroo intake. Status transitions are left
+   *                             to the existing lifecycle endpoints (manual
+   *                             accept by default).
+   *
+   * TRANSPORT ACK: Uber requires HTTP 200 with an EMPTY body - a non-200 or
+   * garbage body triggers retries. Intake failures are logged and still
+   * acknowledged, so a transient intake problem can never wedge the
+   * delivery (the audit log keeps the payload for reprocessing).
+   *
+   * ISOLATION: the company is resolved EXCLUSIVELY by verifying the request
+   * signature against the stored secret of that company's integration row -
+   * a request that verifies under company A's secret can never touch
+   * company B's data. A request that verifies under NO configured secret is
+   * rejected 401; if no secret is configured anywhere the event is recorded
+   * transparently as signature-unverified (sandbox setup stage).
+   */
+  router.post("/online/uber/webhook", async (req, res) => {
+    const rawBody = Buffer.isBuffer(req.body) ? req.body : Buffer.from(JSON.stringify(req.body || {}));
+    const signatureHeader = req.headers["x-uber-signature"] || null;
+    const rawBodyText = rawBody.toString("utf8");
+
+    let payload = null;
+    try {
+      payload = JSON.parse(rawBodyText);
+    } catch {
+      payload = null;
+    }
+
+    /* The raw webhook payload must never be lost (parsed payload preferred). */
+    const loggedPayload = payload !== null ? payload : rawBodyText || null;
+
+    const uber = getPlatformService("uber");
+    let integrations = null;
+
+    try {
+      integrations = await db(
+        "SELECT company_id, active, configuration FROM integrations WHERE provider = 'uber' ORDER BY created_at"
+      );
+
+      if (!integrations.rows.length) {
+        console.error("Uber webhook received but no Uber Eats integration is configured");
+        return res.status(200).send(""); // empty-body ack: no config yet is not a transport error
+      }
+
+      /* Resolve the company via signature verification (see ISOLATION above). */
+      let matched = null;
+      let signatureState = "unverified_no_secret_configured";
+      let verifiedVia = null;
+
+      for (const row of integrations.rows) {
+        const configuration = row.configuration || {};
+        // Uber signs primary-webhook deliveries with the CLIENT SECRET; the
+        // dedicated webhook_secret field is honoured as well (rotation path).
+        const secret =
+          decryptSecret(configuration.client_secret) || decryptSecret(configuration.webhook_secret);
+
+        if (!secret) continue;
+
+        if (uber.verifyWebhookSignature(rawBody, signatureHeader, secret)) {
+          matched = row;
+          signatureState = "verified";
+          verifiedVia = configuration.webhook_secret ? "webhook_secret" : "client_secret";
+          break;
+        }
+      }
+
+      if (!matched) {
+        const anySecretConfigured = integrations.rows.some(
+          (row) =>
+            decryptSecret((row.configuration || {}).client_secret) ||
+            decryptSecret((row.configuration || {}).webhook_secret)
+        );
+
+        if (anySecretConfigured) {
+          await logPlatformApiCall(db, {
+            companyId: integrations.rows[0].company_id,
+            platform: "uber",
+            environment: (integrations.rows[0].configuration || {}).environment || null,
+            action: "WEBHOOK_REJECTED",
+            endpoint: "/api/online/uber/webhook",
+            httpMethod: "POST",
+            requestPayload: loggedPayload,
+            requestHeaders: { "x-uber-signature": signatureHeader ? "(present - did not verify)" : "(absent)" },
+            responseStatus: 401,
+            responseBody: { error: "invalid_signature" },
+            success: false,
+            errorMessage: "Uber webhook signature verification failed",
+          });
+
+          return res.status(401).json({ error: "invalid_signature" });
+        }
+
+        matched = integrations.rows.find((row) => row.active !== false) || integrations.rows[0];
+      }
+
+      const companyId = matched.company_id;
+      const configuration = matched.configuration || {};
+      const event = payload ? uber.parseWebhookEvent(payload) : null;
+
+      const action = `WEBHOOK_${String((event && event.eventType) || "UNKNOWN")
+        .toUpperCase()
+        .replace(/[^A-Z0-9]+/g, "_")
+        .slice(0, 80)}`;
+
+      let attachedOrderId = null;
+      let storeMappingResult = null;
+      let intakeResult = null;
+
+      /*
+       * STORE PROVISIONING: remember the Uber store on the integration
+       * configuration (idempotent) and record the event. The onePOS store is
+       * resolved from the saved mapping - never auto-created.
+       */
+      if (event && (event.eventKind === "store_provisioned" || event.eventKind === "store_deprovisioned")) {
+        try {
+          const resolvedStoreId = await resolveUberStoreId(companyId, { storeId: event.storeId });
+
+          await db(
+            `UPDATE integrations
+             SET configuration = configuration || $2::jsonb, updated_at = NOW()
+             WHERE company_id = $1 AND provider = 'uber'`,
+            [
+              companyId,
+              JSON.stringify({
+                store_id: event.storeId || (configuration.store_id || null),
+                uber_org_id: event.userId || (configuration.uber_org_id || null),
+                uber_store_status: event.eventKind === "store_provisioned" ? "provisioned" : "deprovisioned",
+                last_store_event_at: new Date().toISOString(),
+              }),
+            ]
+          );
+
+          storeMappingResult = { uberStoreId: event.storeId, onePosStoreId: resolvedStoreId };
+
+          /* online_order_events.order_id is NOT NULL, so store-level events are
+           * recorded in the platform API audit log (below, with the mapping
+           * result) instead of the per-order event table. */
+        } catch (provisionError) {
+          console.error("Uber store provisioning event failed:", provisionError);
+        }
+      }
+
+      /*
+       * ORDER INTAKE: orders.notification with an inline order payload ->
+       * create the online order through the same machinery as Deliveroo.
+       * Events without an inline order (id/resource_href only) are attached
+       * to the existing order, or stored audit-only if it does not exist yet
+       * (no order is ever fabricated from a status notification).
+       */
+      if (event && event.eventKind === "order_new") {
+        const normalized = uber.normalizeIncomingOrder(payload);
+
+        if (normalized) {
+          try {
+            const storeId = await resolveUberStoreId(companyId, normalized);
+
+            intakeResult = await createUberOrder({
+              companyId,
+              normalized,
+              storeId,
+              loggedPayload,
+              signatureState,
+            });
+
+            attachedOrderId = intakeResult.orderId;
+
+            console.log(
+              `[UBER-WEBHOOK] order intake external_order_id=${normalized.externalOrderId} ` +
+                `created=${intakeResult.created} reason=${intakeResult.reason || "n/a"} ` +
+                `unmapped_items=${intakeResult.unmappedCount}`
+            );
+          } catch (intakeError) {
+            console.error("Uber order intake failed:", intakeError);
+          }
+        } else {
+          console.error("Uber orders.notification could not be normalised - no order created");
+        }
+      } else if (event && event.externalOrderId) {
+        try {
+          const orderRow = await db(
+            "SELECT id, status FROM online_orders WHERE company_id = $1 AND platform = 'uber' AND external_order_id = $2 LIMIT 1",
+            [companyId, event.externalOrderId]
+          );
+
+          if (orderRow.rows.length) {
+            await db(
+              `INSERT INTO online_order_events (order_id, event_type, from_status, to_status, message, platform_response)
+               VALUES ($1, $2, $3, $4, $5, $6)`,
+              [
+                orderRow.rows[0].id,
+                String(event.eventType || "WEBHOOK_RECEIVED").toUpperCase().replace(/[^A-Z0-9]+/g, "_").slice(0, 50),
+                orderRow.rows[0].status,
+                null,
+                `Uber webhook received (${signatureState})`,
+                JSON.stringify(loggedPayload),
+              ]
+            );
+            attachedOrderId = orderRow.rows[0].id;
+          }
+        } catch (attachError) {
+          console.error("Uber webhook event attach failed:", attachError);
+        }
+      }
+
+      /*
+       * Transport acknowledgement: HTTP 200 with an EMPTY body (Uber
+       * requirement; mirrors acknowledgeDeliverooWebhook's 200 but without a
+       * JSON body). Every exchange is written to platform_api_logs with
+       * secrets redacted by the logger.
+       */
+      await logPlatformApiCall(db, {
+        companyId,
+        platform: "uber",
+        environment: configuration.environment || null,
+        action,
+        endpoint: "/api/online/uber/webhook",
+        httpMethod: "POST",
+        requestPayload: loggedPayload,
+        requestHeaders: {
+          "x-uber-signature": signatureHeader ? "(present)" : "(absent)",
+          signature_state: signatureState,
+          verified_via: verifiedVia,
+        },
+        responseStatus: 200,
+        responseBody: {
+          order_attached: Boolean(attachedOrderId),
+          store_mapping: storeMappingResult,
+        },
+        success: true,
+        orderId: attachedOrderId,
+      });
+
+      return res.status(200).send("");
+    } catch (error) {
+      console.error("Uber webhook error:", error);
+
+      try {
+        await logPlatformApiCall(db, {
+          companyId: integrations && integrations.rows.length ? integrations.rows[0].company_id : null,
+          platform: "uber",
+          action: "WEBHOOK_ERROR",
+          endpoint: "/api/online/uber/webhook",
+          httpMethod: "POST",
+          requestPayload: loggedPayload,
+          responseStatus: 200,
+          responseBody: { acknowledged: true, processing: "error" },
+          success: true,
+          errorMessage: error.message,
+        });
+      } catch {
+        /* logging must never mask the response */
+      }
+
+      /* Still 200/empty: Uber retries a non-200 and we do not want a
+       * processing error to wedge the delivery. The full payload is in the
+       * platform audit log for reprocessing. */
+      return res.status(200).send("");
+    }
+  });
 
   /*
    * GET /api/online/deliveroo/webhook/health

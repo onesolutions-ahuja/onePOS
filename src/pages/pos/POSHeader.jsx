@@ -1,4 +1,4 @@
-import { LogOut, ShoppingBag, Monitor } from "lucide-react";
+import { LogOut, ShoppingBag, Monitor, Presentation } from "lucide-react";
 
 function POSHeader({
   loadingTill,
@@ -16,6 +16,8 @@ function POSHeader({
   syncError = false,
   online = true,
   onQueue,
+  onToggleCustomerDisplay = null,
+  customerDisplayOn = false,
 }) {
   const status = syncing
     ? "SYNCING"
@@ -118,6 +120,29 @@ function POSHeader({
             ? "Starting…"
             : "Self-Checkout"}
         </button>
+
+        {/* CUSTOMER DISPLAY (T10F-FIX) — opens the current bill in a
+            separate window for a second monitor; till keeps working normally */}
+        {onToggleCustomerDisplay && (
+          <button
+            onClick={onToggleCustomerDisplay}
+            aria-pressed={customerDisplayOn}
+            title={
+              customerDisplayOn
+                ? "Customer Display window is open — click to close it"
+                : "Open the current bill in a separate customer window"
+            }
+            className={`h-9 px-3 rounded-md text-sm font-medium transition-colors flex items-center gap-2 ${
+              customerDisplayOn
+                ? "bg-emerald-500 text-white hover:bg-emerald-600"
+                : "bg-slate-800 hover:bg-slate-700"
+            }`}
+          >
+            <Presentation size={15} />
+
+            {customerDisplayOn ? "Close Display" : "Customer Display"}
+          </button>
+        )}
 
         {/* ONLINE ORDERS */}
         <button

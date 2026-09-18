@@ -91,7 +91,7 @@ function CartPanel({
                       −
                     </button>
 
-                    <span className="w-8 text-center text-sm">
+                    <span className="w-8 text-center text-sm font-medium" data-testid="cart-qty">
                       {item.quantity}
                     </span>
 
@@ -100,22 +100,17 @@ function CartPanel({
                         onIncrease(item)
                       }
                       className="w-8 h-8 hover:bg-slate-100"
+                      title="Increase quantity"
+                      aria-label={`Increase quantity of ${item.name}`}
                     >
                       +
                     </button>
-                    <input
-                      aria-label={`Quantity for ${item.name}`}
-                      type="number"
-                      min="1"
-                      step="1"
-                      value={item.quantity}
-                      onChange={(event) => onUpdateQuantity(item.id, event.target.value)}
-                      className="w-12 h-8 border-l border-slate-200 text-center text-sm"
-                    />
+
                     <button
                       onClick={() => onRemoveItem(item.id)}
                       className="w-8 h-8 text-red-500 hover:bg-red-50"
                       title="Remove item"
+                      aria-label={`Remove ${item.name}`}
                     >
                       ×
                     </button>

@@ -1,6 +1,6 @@
 import express from "express";
 
-export default function createProductsRouter({ authenticate, authorize, db, pool, createInventoryMovement }) {
+export default function createProductsRouter({ authenticate, authorize, db, pool, createInventoryMovement, writeAudit }) {
   const router = express.Router();
 
   /*
@@ -10,7 +10,7 @@ export default function createProductsRouter({ authenticate, authorize, db, pool
    * When ?all=true is passed, returns all categories (including inactive) with product counts
    * (used by the admin Categories management page).
    */
-  router.get("/categories", authenticate, authorize("product.view"), async (req, res) => {
+  router.get("/categories", authenticate, authorize("category.view"), async (req, res) => {
     try {
       const includeAll = req.query.all === "true";
 
@@ -52,7 +52,7 @@ export default function createProductsRouter({ authenticate, authorize, db, pool
   /*
    * POST /api/categories
    */
-  router.post("/categories", authenticate, authorize("product.create"), async (req, res) => {
+  router.post("/categories", authenticate, authorize("category.create"), async (req, res) => {
     try {
       const { name, displayOrder = 0 } = req.body;
 
@@ -102,7 +102,7 @@ export default function createProductsRouter({ authenticate, authorize, db, pool
     * PUT /api/categories/:id
     * Updates category name, display_order, and active status.
     */
-   router.put("/categories/:id", authenticate, authorize("product.edit"), async (req, res) => {
+   router.put("/categories/:id", authenticate, authorize("category.edit"), async (req, res) => {
      try {
        const { name, displayOrder = 0, active = true } = req.body;
 
@@ -163,7 +163,7 @@ export default function createProductsRouter({ authenticate, authorize, db, pool
     * DELETE /api/categories/:id
     * Soft delete — sets active = false so existing products are not broken.
     */
-   router.delete("/categories/:id", authenticate, authorize("product.delete"), async (req, res) => {
+   router.delete("/categories/:id", authenticate, authorize("category.delete"), async (req, res) => {
      try {
        const result = await db(
          `
@@ -329,7 +329,8 @@ export default function createProductsRouter({ authenticate, authorize, db, pool
         vatRate = 20,
         vatApplicable = true,
         ageRestricted = false,
-        stockQuantity = 0,
+        stockQuantity = undefined,
+        openingStock = undefined,
         lowStockLevel = 0,
         trackStock = true,
         categoryId = null,
@@ -476,15 +477,15 @@ export default function createProductsRouter({ authenticate, authorize, db, pool
        * is on the audit trail; track_stock=OFF products skip it entirely —
        * no opening stock is created or used.
        */
-      const openingStock = Number(stockQuantity) || 0;
+      const openingStockQty = Number(stockQuantity ?? openingStock) || 0;
 
-      if (trackStock && openingStock >= 0) {
+      if (trackStock && openingStockQty >= 0) {
         const movement = await createInventoryMovement(client, {
           companyId: req.user.companyId,
           productId: result.rows[0].id,
           storeId: req.user.storeId,
           movementType: "OPENING",
-          quantityChange: openingStock,
+          quantityChange: openingStockQty,
           reason: "Opening stock",
           createdBy: req.user.id,
         });
@@ -493,6 +494,25 @@ export default function createProductsRouter({ authenticate, authorize, db, pool
       }
 
       await client.query("COMMIT");
+
+      // Audit log for product creation
+      writeAudit(
+        req.user.companyId,
+        req.user.id,
+        "product.created",
+        "product",
+        result.rows[0].id,
+        {
+          name: result.rows[0].name,
+          sku: result.rows[0].sku,
+          barcode: result.rows[0].barcode,
+          categoryId: result.rows[0].category_id,
+          price: result.rows[0].price,
+          vatRate: result.rows[0].vat_rate,
+          ageRestricted: result.rows[0].age_restricted,
+          active: result.rows[0].active,
+        }
+      );
 
       res.status(201).json({
         success: true,
@@ -563,6 +583,19 @@ export default function createProductsRouter({ authenticate, authorize, db, pool
           message: "Product not found",
         });
       }
+
+      // Get current product values for audit trail
+      const currentProduct = await db(
+        `
+        SELECT
+          name, sku, barcode, category_id, price, vat_rate, age_restricted, active
+        FROM products
+        WHERE id = $1 AND company_id = $2
+        `,
+        [req.params.id, req.user.companyId]
+      );
+
+      const previousValues = currentProduct.rows[0];
 
       if (sku) {
         const duplicateSku = await db(
@@ -689,6 +722,49 @@ export default function createProductsRouter({ authenticate, authorize, db, pool
         ]
       );
 
+      // Audit log for product changes
+      const updatedProduct = result.rows[0];
+      const changes = [];
+
+      if (previousValues.name !== updatedProduct.name) {
+        changes.push({ field: "name", previous: previousValues.name, new: updatedProduct.name });
+      }
+      if (previousValues.sku !== updatedProduct.sku) {
+        changes.push({ field: "sku", previous: previousValues.sku, new: updatedProduct.sku });
+      }
+      if (previousValues.barcode !== updatedProduct.barcode) {
+        changes.push({ field: "barcode", previous: previousValues.barcode, new: updatedProduct.barcode });
+      }
+      if (previousValues.category_id !== updatedProduct.category_id) {
+        changes.push({ field: "category_id", previous: previousValues.category_id, new: updatedProduct.category_id });
+      }
+      if (previousValues.price !== updatedProduct.price) {
+        changes.push({ field: "price", previous: previousValues.price, new: updatedProduct.price });
+      }
+      if (previousValues.vat_rate !== updatedProduct.vat_rate) {
+        changes.push({ field: "vat_rate", previous: previousValues.vat_rate, new: updatedProduct.vat_rate });
+      }
+      if (previousValues.age_restricted !== updatedProduct.age_restricted) {
+        changes.push({ field: "age_restricted", previous: previousValues.age_restricted, new: updatedProduct.age_restricted });
+      }
+      if (previousValues.active !== updatedProduct.active) {
+        changes.push({ field: "active", previous: previousValues.active, new: updatedProduct.active });
+      }
+
+      if (changes.length > 0) {
+        writeAudit(
+          req.user.companyId,
+          req.user.id,
+          "product.updated",
+          "product",
+          updatedProduct.id,
+          {
+            name: updatedProduct.name,
+            changes,
+          }
+        );
+      }
+
       res.json({
         success: true,
         message: "Product updated",
@@ -731,6 +807,18 @@ export default function createProductsRouter({ authenticate, authorize, db, pool
         });
       }
 
+      // Audit log for product deletion
+      writeAudit(
+        req.user.companyId,
+        req.user.id,
+        "product.deleted",
+        "product",
+        req.params.id,
+        {
+          active: false,
+        }
+      );
+
       res.json({
         success: true,
         message: "Product deleted",
@@ -741,6 +829,67 @@ export default function createProductsRouter({ authenticate, authorize, db, pool
       res.status(500).json({
         success: false,
         message: "Unable to delete product",
+      });
+    }
+  });
+
+  /*
+   * GET /api/products/:id/history
+   * Returns audit trail for a specific product
+   */
+  router.get("/products/:id/history", authenticate, authorize("product.view"), async (req, res) => {
+    try {
+      // Verify product belongs to user's company
+      const productCheck = await db(
+        `
+        SELECT id, name
+        FROM products
+        WHERE id = $1 AND company_id = $2
+        `,
+        [req.params.id, req.user.companyId]
+      );
+
+      if (!productCheck.rows.length) {
+        return res.status(404).json({
+          success: false,
+          message: "Product not found",
+        });
+      }
+
+      const result = await db(
+        `
+        SELECT
+          al.id,
+          al.action,
+          al.entity_type,
+          al.entity_id,
+          al.details,
+          al.created_at,
+          u.username,
+          u.full_name
+        FROM audit_logs al
+        LEFT JOIN users u
+          ON u.id = al.user_id
+        WHERE al.company_id = $1
+          AND al.entity_type = 'product'
+          AND al.entity_id = $2
+        ORDER BY al.created_at DESC
+        LIMIT 100
+        `,
+        [req.user.companyId, req.params.id]
+      );
+
+      res.json({
+        success: true,
+        data: result.rows,
+        productName: productCheck.rows[0].name,
+      });
+    } catch (error) {
+      console.error("Product history error:", error);
+      res.status(500).json({
+        success: false,
+        message: "Unable to load product history",
+        error: error.message,
       });
     }
   });

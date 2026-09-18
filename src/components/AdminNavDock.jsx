@@ -42,7 +42,7 @@ const GROUPS = [
   },
   {
     title: "Catalogue & Supply",
-    pages: ["Products", "Global Products", "Categories", "Purchases", "Suppliers", "Inventory"],
+    pages: ["Products", "Global Products", "Categories", "Purchases", "Suppliers", "Inventory", "Replenishment"],
   },
   {
     title: "Business",

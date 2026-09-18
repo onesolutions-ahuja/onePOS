@@ -52,6 +52,11 @@ export async function initializeDatabase(pool) {
       date_format VARCHAR(40) NOT NULL DEFAULT 'DD/MM/YYYY',
       vat_enabled BOOLEAN NOT NULL DEFAULT TRUE,
       default_vat_rate NUMERIC(5,2) NOT NULL DEFAULT 20,
+      loyalty_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+      loyalty_earning_rate NUMERIC(5,4) NOT NULL DEFAULT 0.0100,
+      scan_go_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+      online_ordering_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+      online_payment_methods JSONB NOT NULL DEFAULT '["card", "cash", "cod"]'::jsonb,
       updated_by UUID,
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
@@ -136,6 +141,21 @@ export async function initializeDatabase(pool) {
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
 
+    CREATE TABLE IF NOT EXISTS user_stores (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      store_id UUID NOT NULL REFERENCES stores(id) ON DELETE CASCADE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      active BOOLEAN NOT NULL DEFAULT TRUE,
+      UNIQUE (user_id, store_id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_user_stores_store
+    ON user_stores(store_id, active);
+
+    CREATE INDEX IF NOT EXISTS idx_user_stores_user
+    ON user_stores(user_id, active);
+
     CREATE TABLE IF NOT EXISTS categories (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
@@ -213,6 +233,25 @@ export async function initializeDatabase(pool) {
      * so pre-existing rows behave exactly as before. */
     ALTER TABLE products
       ADD COLUMN IF NOT EXISTS age_restricted BOOLEAN NOT NULL DEFAULT FALSE;
+
+    /* T10U negative-inventory billing safety: OFF by default so existing
+     * behaviour (insufficient stock rejected) is unchanged until an
+     * Administrator explicitly enables it. */
+    ALTER TABLE company_settings
+      ADD COLUMN IF NOT EXISTS allow_negative_inventory_billing BOOLEAN NOT NULL DEFAULT FALSE;
+    /* Scan & Go feature flag consumed by routes/settings.js (additive; safe
+       against databases created before the column existed). */
+    ALTER TABLE company_settings
+      ADD COLUMN IF NOT EXISTS scan_go_enabled BOOLEAN NOT NULL DEFAULT FALSE;
+    /* Online-ordering feature flags consumed by routes/settings.js. */
+    ALTER TABLE company_settings
+      ADD COLUMN IF NOT EXISTS online_ordering_enabled BOOLEAN NOT NULL DEFAULT FALSE;
+    ALTER TABLE company_settings
+      ADD COLUMN IF NOT EXISTS online_payment_methods JSONB NOT NULL DEFAULT '["card", "cash", "cod"]'::jsonb;
+    ALTER TABLE company_settings
+      ADD COLUMN IF NOT EXISTS loyalty_enabled BOOLEAN NOT NULL DEFAULT FALSE;
+    ALTER TABLE company_settings
+      ADD COLUMN IF NOT EXISTS loyalty_earning_rate NUMERIC(5,4) NOT NULL DEFAULT 0.0100;
 
     CREATE TABLE IF NOT EXISTS inventory_movements (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -587,6 +626,38 @@ export async function initializeDatabase(pool) {
     CREATE INDEX IF NOT EXISTS idx_customer_stores_customer
     ON customer_stores(customer_id, active);
 
+    CREATE TABLE IF NOT EXISTS customer_loyalty_balances (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+      customer_id UUID NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
+      balance NUMERIC(12,4) NOT NULL DEFAULT 0,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE (company_id, customer_id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_loyalty_balances_customer
+    ON customer_loyalty_balances(customer_id);
+
+    CREATE TABLE IF NOT EXISTS customer_loyalty_transactions (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+      customer_id UUID NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
+      transaction_type VARCHAR(50) NOT NULL,
+      amount NUMERIC(12,4) NOT NULL,
+      balance_after NUMERIC(12,4) NOT NULL,
+      reference_type VARCHAR(50),
+      reference_id UUID,
+      description TEXT,
+      created_by UUID REFERENCES users(id) ON DELETE SET NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_loyalty_transactions_customer
+    ON customer_loyalty_transactions(customer_id, created_at DESC);
+
+    CREATE INDEX IF NOT EXISTS idx_loyalty_transactions_reference
+    ON customer_loyalty_transactions(reference_type, reference_id);
+
     CREATE TABLE IF NOT EXISTS sales (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       company_id UUID NOT NULL REFERENCES companies(id),
@@ -819,6 +890,14 @@ export async function initializeDatabase(pool) {
     ["product.create", "Create Product"],
     ["product.edit", "Edit Product"],
     ["product.delete", "Delete Product"],
+    ["global_product.view", "View Global Products"],
+    ["global_product.create", "Create Global Product"],
+    ["global_product.edit", "Edit Global Product"],
+    ["global_product.delete", "Delete Global Product"],
+    ["category.view", "View Categories"],
+    ["category.create", "Create Category"],
+    ["category.edit", "Edit Category"],
+    ["category.delete", "Delete Category"],
     ["customer.view", "View Customers"],
     ["customer.create", "Create Customer"],
     ["customer.edit", "Edit Customer"],
@@ -827,9 +906,18 @@ export async function initializeDatabase(pool) {
     ["purchase.create", "Create Purchase"],
     ["purchase.edit", "Edit Purchase"],
     ["purchase.delete", "Delete / Cancel Purchase"],
+    ["store.view", "View Stores"],
+    ["store.create", "Create Store"],
+    ["store.edit", "Edit Store"],
+    ["store.delete", "Delete Store"],
+    ["user.view", "View Users"],
+    ["user.create", "Create User"],
+    ["user.edit", "Edit User"],
+    ["user.delete", "Delete User"],
     ["inventory.view", "View Inventory"],
     ["inventory.movements.view", "View Stock Movements"],
     ["inventory.adjust", "Adjust Inventory"],
+    ["inventory.replenishment.view", "View Replenishment Suggestions"],
     ["returns.view", "View Returns"],
     ["returns.create", "Create Returns"],
     ["returns.approve", "Approve / Process Returns"],

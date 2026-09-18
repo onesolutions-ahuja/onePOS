@@ -135,6 +135,12 @@ export default function createReportsRouter({ authenticate, authorize, db }) {
   });
 
 
+  /*
+   * T10R - same ledger, extended filters: reason (Wastage / Breakage /
+   * Other, matched against the stored reason text), productId, category
+   * (product category name), movementTypes + productIds lists. All optional
+   * and backward compatible; company/store isolation unchanged.
+   */
   router.get("/reports/inventory-movements", authenticate, authorize("reports.inventory_movements.view", "inventory.movements.view"), async (req, res) => {
     try {
       const limit = Math.max(1, Math.min(10000, Number(req.query.limit) || 500));
@@ -155,6 +161,32 @@ export default function createReportsRouter({ authenticate, authorize, db }) {
         params.push(null, null);
       }
 
+      const push = (clause, value) => {
+        params.push(value);
+        whereClauses.push(clause.replace("$$", `$${params.length}`));
+      };
+
+      const listParam = (value) => String(value || "").split(",").map((v) => v.trim()).filter(Boolean);
+
+      if (req.query.reason) {
+        const wanted = String(req.query.reason).trim().toLowerCase();
+        if (!["wastage", "breakage", "other"].includes(wanted)) {
+          return res.status(400).json({ success: false, message: "Invalid reason filter: use Wastage, Breakage or Other" });
+        }
+        if (wanted === "other") {
+          whereClauses.push("(m.reason IS NULL OR NOT (LOWER(m.reason) IN ('wastage','wasted','waste','breakage','broken','damage','damaged')))");
+        } else if (wanted === "wastage") {
+          whereClauses.push("(LOWER(m.reason) IN ('wastage','wasted','waste'))");
+        } else {
+          whereClauses.push("(LOWER(m.reason) IN ('breakage','broken','damage','damaged'))");
+        }
+      }
+
+      if (req.query.productId) push("m.product_id = $$", req.query.productId);
+      for (const id of listParam(req.query.productIds)) push("m.product_id = $$", id);
+      if (req.query.category) push("LOWER(cat.name) LIKE LOWER($$)", `%${req.query.category}%`);
+      for (const t of listParam(req.query.movementTypes)) push("m.movement_type = $$", t);
+
       const rowsSql = `
         SELECT
           m.id,
@@ -162,9 +194,12 @@ export default function createReportsRouter({ authenticate, authorize, db }) {
           p.name AS product,
           p.sku,
           p.barcode AS ean,
+          COALESCE(cat.name, '-') AS category,
+          p.cost_price,
           s.name AS store_name,
           m.movement_type,
           m.quantity_change,
+          (m.quantity_change * COALESCE(p.cost_price, 0)) AS line_value,
           m.balance_after,
           m.reference_type,
           m.reference_id,
@@ -173,6 +208,7 @@ export default function createReportsRouter({ authenticate, authorize, db }) {
         FROM inventory_movements m
         INNER JOIN products p ON p.id = m.product_id
         INNER JOIN companies c ON c.id = m.company_id
+        LEFT JOIN categories cat ON cat.id = p.category_id
         LEFT JOIN stores s ON s.id = m.store_id
         LEFT JOIN users u ON u.id = m.created_by
         WHERE ${whereClauses.join(" AND ")}
@@ -185,10 +221,13 @@ export default function createReportsRouter({ authenticate, authorize, db }) {
 
       const countParams = params.slice(0, params.length - 2);
       const countSql = `
-        SELECT COUNT(*)::int AS total
+        SELECT COUNT(*)::int AS total,
+          COALESCE(SUM(m.quantity_change), 0) AS quantity,
+          COALESCE(SUM(m.quantity_change * COALESCE(p.cost_price, 0)), 0) AS value
         FROM inventory_movements m
         INNER JOIN products p ON p.id = m.product_id
         INNER JOIN companies c ON c.id = m.company_id
+        LEFT JOIN categories cat ON cat.id = p.category_id
         WHERE ${whereClauses.join(" AND ")}
       `;
       const totalResult = await db(countSql, countParams);
@@ -202,9 +241,12 @@ export default function createReportsRouter({ authenticate, authorize, db }) {
             product: row.product,
             sku: row.sku,
             ean: row.ean,
+            category: row.category,
+            costPrice: row.cost_price !== null ? Number(row.cost_price) : null,
             storeName: row.store_name,
             movementType: row.movement_type,
             quantityChange: Number(row.quantity_change),
+            lineValue: row.line_value !== null ? Number(row.line_value) : null,
             balanceAfter: row.balance_after !== null ? Number(row.balance_after) : null,
             referenceType: row.reference_type,
             referenceId: row.reference_id,
@@ -212,6 +254,8 @@ export default function createReportsRouter({ authenticate, authorize, db }) {
             reason: row.reason,
           })),
           total: Number(totalResult.rows[0]?.total ?? 0),
+          quantity: Number(totalResult.rows[0]?.quantity ?? 0),
+          value: Number(totalResult.rows[0]?.value ?? 0),
           limit,
           offset,
         },

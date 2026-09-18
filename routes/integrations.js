@@ -27,6 +27,11 @@ import {
 } from "../services/integrationCredentials.js";
 import { buildPayload } from "../services/integrationFieldResolver.js";
 import { getIntegrationDispatchStatus } from "../services/integrationDispatcher.js";
+import {
+  normaliseSupplierFeed,
+  SUPPLIER_FEED_LIMIT,
+} from "../services/supplierFeedAdapter.js";
+import { matchSupplierFeed } from "../services/supplierFeedMatch.js";
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -926,6 +931,65 @@ export default function createIntegrationsRouter({ authenticate, authorize, db, 
       } catch (error) {
         console.error("Test endpoint error:", error);
         res.status(500).json({ success: false, message: "Unable to run endpoint test" });
+      }
+    }
+  );
+
+  /*
+   * T10Q - Supplier feed preview (read-only integration boundary).
+   *
+   * POST /api/integrations/supplier-feed/preview
+   *
+   * Accepts a generic supplier feed ({ rows: [...] }) and returns a
+   * validation + match preview. Reuses the provider-neutral
+   * services/supplierFeedAdapter.js + supplierFeedMatch.js boundary:
+   * GTIN rules come from the Global Product Master validator and matching
+   * reads the CURRENT company's products only.
+   *
+   * Writes nothing: no products, no suppliers, no purchases, no stock
+   * movements. Callers still use POST /api/products (product.create) and
+   * POST /api/purchases (purchase.create) for any follow-through.
+   */
+  router.post(
+    "/integrations/supplier-feed/preview",
+    authenticate,
+    authorize("integration.manage"),
+    async (req, res) => {
+      try {
+        const rows = req.body?.rows;
+        if (!Array.isArray(rows)) {
+          return res.status(400).json({ success: false, message: "rows must be an array" });
+        }
+        if (rows.length > SUPPLIER_FEED_LIMIT) {
+          return res.status(400).json({
+            success: false,
+            message: `Feed exceeds the ${SUPPLIER_FEED_LIMIT}-row preview limit`,
+          });
+        }
+        const { rows: canonical, errors: validationErrors } = normaliseSupplierFeed(rows);
+        const productsResult = await db(
+          `SELECT id, company_id, name, sku, barcode FROM products
+           WHERE company_id = $1 AND active = true`,
+          [req.user.companyId]
+        );
+        const { matches, errors: matchErrors } = matchSupplierFeed(canonical, {
+          products: productsResult.rows,
+          companyId: req.user.companyId,
+        });
+        const summary = {
+          total: rows.length,
+          valid: canonical.length,
+          matched: matches.filter((m) => m.status === "matched").length,
+          unmatched: matches.filter((m) => m.status === "no_match").length,
+          ambiguous: matches.filter((m) => m.status === "ambiguous").length,
+        };
+        res.json({
+          success: true,
+          data: { summary, matches, errors: [...validationErrors, ...matchErrors] },
+        });
+      } catch (error) {
+        console.error("Supplier feed preview error:", error);
+        res.status(500).json({ success: false, message: "Unable to preview supplier feed" });
       }
     }
   );

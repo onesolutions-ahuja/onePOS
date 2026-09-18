@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { BarChart3, Bell, Calculator, ChevronDown, CreditCard, Database, FileText, Grid3X3, Home, LogOut, Package, Percent, Plug, Receipt, RefreshCw, Settings, ShoppingBag, Store, Tag, UserCircle, Users, X } from "lucide-react";
 import { apiRequest } from "../../services/api.js";
+import { parseAppPath, buildAppPath } from "../../utils/adminRoutes.js";
 import BottomStatusBar from "../../components/BottomStatusBar.jsx";
 import AdminNavDock from "../../components/AdminNavDock.jsx";
 import Dashboard from "../dashboard/Dashboard.jsx";
@@ -8,6 +9,7 @@ import ProductsAdmin from "../products/ProductsAdmin.jsx";
 import GlobalProductsAdmin from "../products/GlobalProductsAdmin.jsx";
 import CategoriesAdmin from "../categories/CategoriesAdmin.jsx";
 import InventoryAdmin from "../inventory/InventoryAdmin.jsx";
+import ReplenishmentAdmin from "../inventory/ReplenishmentAdmin.jsx";
 import SettingsAdmin from "../settings/SettingsAdmin.jsx";
 import SuppliersAdmin from "../suppliers/SuppliersAdmin.jsx";
 import IntegrationsAdmin from "../integrations/IntegrationsAdmin.jsx";
@@ -22,8 +24,102 @@ import OnlineOrdersAdmin from "../online/OnlineOrdersAdmin.jsx";
 import OnlineOrdersPrep from "../online/OnlineOrdersPrep.jsx";
 import StoresAdmin from "../stores/StoresAdmin.jsx";
 
-export default function AdminLayout({ onPOS, onLogout, user = null, initialPage = "Dashboard" }) {
-  const [page, setPage] = useState(initialPage);
+/*
+ * T10V: report pages live at /app/reports/<slug>. The slug is the report
+ * key lower-cased and hyphenated ("Sales Report" -> sales-report) — stable
+ * and readable without hard-coding a second list.
+ */
+function slugifyReportKey(key) {
+  return String(key).toLowerCase().replace(/\s+/g, "-");
+}
+
+/*
+ * The URL for a page: granular reports live under /app/reports/<slug>;
+ * everything else uses the shared slug map (Settings optionally with its
+ * section tab). Single source used by initial sync and navigation.
+ */
+function pathForPage(nextPage, settingsTab = null) {
+  if (REPORT_MENU_ITEMS.some((item) => item.key === nextPage)) {
+    return `/app/reports/${slugifyReportKey(nextPage)}`;
+  }
+  return buildAppPath(nextPage, { settingsTab });
+}
+
+export default function AdminLayout({
+  onPOS,
+  onLogout,
+  user = null,
+  initialPage = "Dashboard",
+  initialSettingsTab = null,
+  initialReportKey = null,
+}) {
+  /*
+   * T10V: the page state is synchronised with the URL. The initial page is
+   * resolved from the CURRENT URL (so a refresh or a direct link reopens the
+   * exact page), every navigation pushes a history entry, and browser
+   * Back/Forward move through visited pages. Unknown/deep routes resolve
+   * through the SAME permission gates as normal navigation — nothing here
+   * grants or bypasses access.
+   */
+  const resolveRoute = () => {
+    const parsed = parseAppPath(window.location.pathname);
+    if (!parsed) return { page: initialPage, settingsTab: initialSettingsTab, reportKey: initialReportKey, valid: true };
+    if (parsed.view === "pos") return { page: "Dashboard", settingsTab: null, reportKey: null, valid: true };
+    if (parsed.view === "unknown") return { page: initialPage, settingsTab: initialSettingsTab, reportKey: initialReportKey, valid: false };
+    if (parsed.page === "REPORT") {
+      /* A granular report deep link: /app/reports/<key-slug>. */
+      const reportKey = REPORT_MENU_ITEMS.find((item) => slugifyReportKey(item.key) === parsed.reportKey)?.key;
+      if (reportKey) return { page: reportKey, settingsTab: null, reportKey: null, valid: true };
+      return { page: "Reports", settingsTab: null, reportKey: null, valid: true };
+    }
+    return { page: parsed.page, settingsTab: parsed.settingsTab || initialSettingsTab, reportKey: null, valid: true };
+  };
+
+  const [page, setPage] = useState(() => resolveRoute().page);
+  const pendingRoute = useRef(resolveRoute());
+
+  const [productCreateRequested, setProductCreateRequested] = useState(false);
+  /* Which tab the existing Settings page opens on (gear = General, profile menu = Users & Permissions). */
+  const [settingsTab, setSettingsTab] = useState("General");
+
+  /* Apply the URL's settings tab / report deep link once permissions state
+     exists, then normalise an invalid path to the resolved page's URL. */
+  useEffect(() => {
+    const route = pendingRoute.current;
+    if (route.settingsTab) setSettingsTab(route.settingsTab);
+    const expected = pathForPage(route.page, route.settingsTab);
+    if (!route.valid || window.location.pathname !== expected) {
+      window.history.replaceState({}, "", expected);
+    }
+    /* eslint-disable-next-line react-hooks/exhaustive-deps */
+  }, []);
+
+  /*
+   * The single navigation entry point: updates state AND the URL. Report
+   * pages use their own /app/reports/<slug> path; Settings carries its tab.
+   */
+  const navigate = useCallback((nextPage, options = {}) => {
+    if (options.createRequested) setProductCreateRequested(true); else setProductCreateRequested(false);
+    if (nextPage === "Settings" && options.settingsTab) setSettingsTab(options.settingsTab);
+    setPage(nextPage);
+    const target = pathForPage(nextPage, options.settingsTab || (nextPage === "Settings" ? settingsTab : null));
+    if (window.location.pathname !== target) {
+      window.history.pushState({}, "", target);
+    }
+    /* eslint-disable-next-line react-hooks/exhaustive-deps */
+  }, [settingsTab]);
+
+  /* Browser Back/Forward: re-resolve the page from the history entry. */
+  useEffect(() => {
+    const onPopState = () => {
+      const route = resolveRoute();
+      setPage(route.page);
+      if (route.page === "Settings" && route.settingsTab) setSettingsTab(route.settingsTab);
+    };
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+    /* eslint-disable-next-line react-hooks/exhaustive-deps */
+  }, []);
 
   /* Compact top-bar profile menu (T5B). Data comes from the existing session
      user prop — no extra API call. Profile opens the existing "Users &
@@ -61,9 +157,6 @@ export default function AdminLayout({ onPOS, onLogout, user = null, initialPage 
     }).catch((error) => { console.error("Online order permissions:", error); if (alive) setReportsLoaded(true); });
     return () => { alive = false; };
   }, []);
-  const [productCreateRequested, setProductCreateRequested] = useState(false);
-  /* Which tab the existing Settings page opens on (gear = General, profile menu = Users & Permissions). */
-  const [settingsTab, setSettingsTab] = useState("General");
 
   /*
    * Reports submenu visibility — reuses the EXISTING permission model from
@@ -123,7 +216,7 @@ export default function AdminLayout({ onPOS, onLogout, user = null, initialPage 
 
   const openOnlineOrders = () => {
     setOnlineOrderToast(null);
-    setPage("Online Orders");
+    navigate("Online Orders");
   };
 
   /* Surfaces a new-order toast without blocking the admin/till workflow. */
@@ -153,6 +246,11 @@ export default function AdminLayout({ onPOS, onLogout, user = null, initialPage 
     ["Purchases", Receipt],
     ["Suppliers", Users],
     ["Inventory", Grid3X3],
+    ...((onlinePermissions.isAdmin ||
+      onlinePermissions.permissions.includes("inventory.replenishment.view") ||
+      onlinePermissions.permissions.includes("inventory.view") ||
+      onlinePermissions.permissions.includes("reports.low_stock.view"))
+      ? [["Replenishment", Bell]] : []),
     ["Customers", Users],
     ["Employees", Users],
     ["Stores", Store],
@@ -177,10 +275,7 @@ export default function AdminLayout({ onPOS, onLogout, user = null, initialPage 
         items={items}
         reportItems={canViewReports ? (canViewOverview ? [{ key: "Reports", title: "Overview" }, ...visibleReportItems] : visibleReportItems) : []}
         page={page}
-        onNavigate={(nextPage) => {
-          setProductCreateRequested(false);
-          setPage(nextPage);
-        }}
+        onNavigate={navigate}
         onOpenTill={onPOS}
       />
 
@@ -230,8 +325,7 @@ export default function AdminLayout({ onPOS, onLogout, user = null, initialPage 
             <button
               onClick={() => {
                 setProductCreateRequested(false);
-                setSettingsTab("General");
-                setPage("Settings");
+                navigate("Settings", { settingsTab: "General" });
               }}
               title="Settings"
               aria-label="Settings"
@@ -300,9 +394,7 @@ export default function AdminLayout({ onPOS, onLogout, user = null, initialPage 
                         role="menuitem"
                         onClick={() => {
                           setProfileOpen(false);
-                          setProductCreateRequested(false);
-                          setSettingsTab("Users & Permissions");
-                          setPage("Settings");
+                          navigate("Settings", { settingsTab: "Users & Permissions" });
                         }}
                         className="w-full text-left px-3 py-2 text-sm text-slate-700 hover:bg-slate-50 flex items-center gap-2"
                       >
@@ -312,9 +404,7 @@ export default function AdminLayout({ onPOS, onLogout, user = null, initialPage 
                         role="menuitem"
                         onClick={() => {
                           setProfileOpen(false);
-                          setProductCreateRequested(false);
-                          setSettingsTab("General");
-                          setPage("Settings");
+                          navigate("Settings", { settingsTab: "General" });
                         }}
                         className="w-full text-left px-3 py-2 text-sm text-slate-700 hover:bg-slate-50 flex items-center gap-2"
                       >
@@ -374,13 +464,9 @@ export default function AdminLayout({ onPOS, onLogout, user = null, initialPage 
           "Dashboard" ? (
             <Dashboard
               canViewReports={canViewReports}
-              onNavigate={(nextPage) => {
-                setProductCreateRequested(false);
-                setPage(nextPage);
-              }}
+              onNavigate={navigate}
               onAddProduct={() => {
-                setProductCreateRequested(true);
-                setPage("Products");
+                navigate("Products", { createRequested: true });
               }}
             />
           ) : page ===
@@ -404,6 +490,11 @@ export default function AdminLayout({ onPOS, onLogout, user = null, initialPage 
           ) : page ===
             "Inventory" ? (
             <InventoryAdmin />
+          ) : page ===
+            "Replenishment" ? (
+            <ReplenishmentAdmin
+              canCreatePurchase={onlinePermissions.isAdmin || onlinePermissions.permissions.includes("purchase.create")}
+            />
           ) : page ===
             "Purchases" ? (
             <PurchasesAdmin />

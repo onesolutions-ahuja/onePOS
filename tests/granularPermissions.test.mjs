@@ -377,7 +377,10 @@ describe("T10B RolePermissionsManager UI structure", () => {
 
   const GROUPS_REQUIRED = [
     "Sales", "Customers", "Products", "Purchases", "Inventory",
-    "Sales Returns", "Reports", "Cash Management", "Till", "Administration",
+    "Sales Returns", "Reports", "Administration",
+    /* T10J merged the former "Cash Management" + "Till" groups into one
+       "Cash/Till" group (codes unchanged — same cash.* and till.* codes). */
+    "Cash/Till",
   ];
 
   test(`all ${GROUPS_REQUIRED.length} groups are present (Sales/.../Reports etc.)`, () => {

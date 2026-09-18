@@ -279,7 +279,7 @@ function GlobalProductsAdmin() {
           title="No global products matched"
             hint={
               meta.total === 0
-                ? "The global product catalogue is empty. No global product catalogue is empty."
+                ? "The global product catalogue is empty."
                 : "Try adjusting your filters."
             }
           >
@@ -295,6 +295,7 @@ function GlobalProductsAdmin() {
                     <th>EAN / Barcode</th>
                     <th>Brand</th>
                     <th>Category</th>
+                    <th>Status</th>
                     <th className="text-right">Action</th>
                   </tr>
                 </thead>
@@ -342,11 +343,17 @@ function GlobalProductsAdmin() {
                       </td>
                       <td className="text-right whitespace-nowrap">
                         {row.existsInMaster ? (
-                          <Badge tone="neutral">Already in master</Badge>
+                          <Badge tone="success">Already in Master</Badge>
                         ) : (
+                          <Badge tone="neutral">Not in Master</Badge>
+                        )}
+                      </td>
+                      <td className="text-right whitespace-nowrap">
+                        {row.existsInMaster ? null : (
                           <Button
                             variant="primary"
                             size="sm"
+                            title={`Import ${row.name} to Product Master`}
                             onClick={() => {
                               setSaveError("");
                               setPresetGlobal({
@@ -361,7 +368,7 @@ function GlobalProductsAdmin() {
                               });
                             }}
                           >
-                            <Plus size={14}/>
+                            <Plus size={14} />
                             Add
                           </Button>
                         )}

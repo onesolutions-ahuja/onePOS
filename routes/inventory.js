@@ -1,5 +1,6 @@
 import express from "express";
 import { lowStockRow } from "../services/inventory.js";
+import { resolveAdjustmentReason } from "../services/adjustmentReasons.js";
 
 export default function createInventoryRouter({
   authenticate,
@@ -13,6 +14,11 @@ export default function createInventoryRouter({
 
   /*
    * GET /api/inventory/movements
+   *
+   * T10R filters (all optional, backward compatible): reason (Wastage /
+   * Breakage / Other, matched case-insensitively against the stored reason
+   * text), dateFrom / dateTo (YYYY-MM-DD), productId already supported.
+   * Same ledger, same company scoping, same 500-row cap.
    */
   router.get(
     "/inventory/movements",
@@ -22,6 +28,11 @@ export default function createInventoryRouter({
       try {
         const params = [req.user.companyId];
         const filters = ["m.company_id = $1"];
+
+        if (req.query.storeId) {
+          params.push(req.query.storeId);
+          filters.push(`m.store_id = $${params.length}`);
+        }
 
         if (req.query.productId) {
           params.push(req.query.productId);
@@ -38,6 +49,33 @@ export default function createInventoryRouter({
 
           params.push(req.query.movementType);
           filters.push(`m.movement_type = $${params.length}`);
+        }
+
+        if (req.query.reason) {
+          const wanted = String(req.query.reason).trim().toLowerCase();
+          if (!["wastage", "breakage", "other"].includes(wanted)) {
+            return res.status(400).json({
+              success: false,
+              message: "Invalid reason filter: use Wastage, Breakage or Other",
+            });
+          }
+          if (wanted === "other") {
+            filters.push(`(m.reason IS NULL OR NOT (LOWER(m.reason) IN ('wastage','wasted','waste','breakage','broken','damage','damaged')))`);
+          } else if (wanted === "wastage") {
+            filters.push(`(LOWER(m.reason) IN ('wastage','wasted','waste'))`);
+          } else {
+            filters.push(`(LOWER(m.reason) IN ('breakage','broken','damage','damaged'))`);
+          }
+        }
+
+        if (req.query.dateFrom) {
+          params.push(req.query.dateFrom);
+          filters.push(`(m.created_at)::date >= $${params.length}::date`);
+        }
+
+        if (req.query.dateTo) {
+          params.push(req.query.dateTo);
+          filters.push(`(m.created_at)::date <= $${params.length}::date`);
         }
 
         const result = await db(
@@ -58,9 +96,13 @@ export default function createInventoryRouter({
             m.notes,
             m.created_by,
             u.username AS created_by_username,
-            m.created_at
+            m.created_at,
+            p.cost_price,
+            p.category_id,
+            cat.name AS category_name
           FROM inventory_movements m
           INNER JOIN products p ON p.id = m.product_id
+          LEFT JOIN categories cat ON cat.id = p.category_id
           LEFT JOIN stores s ON s.id = m.store_id
           LEFT JOIN users u ON u.id = m.created_by
           WHERE ${filters.join(" AND ")}
@@ -72,7 +114,14 @@ export default function createInventoryRouter({
 
         res.json({
           success: true,
-          data: result.rows,
+          data: result.rows.map((row) => ({
+            ...row,
+            quantity: row.quantity_change !== null ? Number(row.quantity_change) : null,
+            value:
+              row.quantity_change !== null && row.cost_price !== null
+                ? Number(row.quantity_change) * Number(row.cost_price)
+                : null,
+          })),
         });
       } catch (error) {
         console.error("Load inventory movements error:", error);
@@ -104,6 +153,28 @@ export default function createInventoryRouter({
         });
       }
 
+      /*
+       * T10R - decreases require a canonical reason (Wastage / Breakage /
+       * Other). Increases keep the existing free-text/optional behaviour.
+       * The SAME movement row is written below; only the stored reason label
+       * is canonicalised for decreases, with any free-text detail preserved
+       * in notes (appended, never overwriting the caller's notes).
+       */
+      let storedReason = reason;
+      let storedNotes = notes;
+      if (quantity < 0) {
+        const resolved = resolveAdjustmentReason(quantity, reason);
+        if (resolved && resolved.error) {
+          return res.status(400).json({ success: false, message: resolved.error });
+        }
+        storedReason = resolved && resolved.reason ? resolved.reason : reason;
+        if (resolved && resolved.detail) {
+          storedNotes = storedNotes && String(storedNotes).trim()
+            ? `${String(storedNotes).trim()} (${resolved.detail})`
+            : resolved.detail;
+        }
+      }
+
       if (!pool) {
         return res.status(500).json({
           success: false,
@@ -124,8 +195,8 @@ export default function createInventoryRouter({
           storeId: req.user.storeId,
           movementType: quantity > 0 ? "ADJUSTMENT_IN" : "ADJUSTMENT_OUT",
           quantityChange: quantity,
-          reason,
-          notes,
+          reason: storedReason,
+          notes: storedNotes,
           createdBy: req.user.id,
         });
 

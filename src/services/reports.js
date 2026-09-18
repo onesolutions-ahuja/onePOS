@@ -41,20 +41,26 @@ export function getInventoryMovements({
   dateTo = null,
   productIds = [],
   movementTypes = [],
+  reason = "",
+  productId = "",
+  category = "",
   limit = 500,
   offset = 0,
 } = {}) {
-  const params = [
-    companyId,
-    storeId,
-    dateFrom || null,
-    dateTo || null,
-    Math.max(1, Math.min(10000, Number(limit) || 500)),
-    Math.max(0, Number(offset) || 0),
-    ...(Array.isArray(productIds) && productIds.length ? productIds : []),
-    ...(Array.isArray(movementTypes) && movementTypes.length ? movementTypes : []),
-  ];
-  return apiRequest(`/api/reports/inventory-movements?companyId=${encodeURIComponent(companyId)}&storeId=${encodeURIComponent(storeId)}&dateFrom=${dateFrom || ""}&dateTo=${dateTo || ""}&limit=${params[4]}&offset=${params[5]}&productIds=${productIds.map((id) => encodeURIComponent(String(id))).join(",")}&movementTypes=${movementTypes.map((t) => encodeURIComponent(String(t))).join(",")}`);
+  const qs = new URLSearchParams({
+    companyId: companyId ?? "",
+    storeId: storeId ?? "",
+    dateFrom: dateFrom || "",
+    dateTo: dateTo || "",
+    limit: String(Math.max(1, Math.min(10000, Number(limit) || 500))),
+    offset: String(Math.max(0, Number(offset) || 0)),
+    productIds: (Array.isArray(productIds) && productIds.length ? productIds : []).map((id) => String(id)).join(","),
+    movementTypes: (Array.isArray(movementTypes) && movementTypes.length ? movementTypes : []).map((t) => String(t)).join(","),
+    ...(reason ? { reason: String(reason) } : {}),
+    ...(productId ? { productId: String(productId) } : {}),
+    ...(category ? { category: String(category) } : {}),
+  });
+  return apiRequest(`/api/reports/inventory-movements?${qs.toString()}`);
 }
 
 export function getProfit(from, to) {

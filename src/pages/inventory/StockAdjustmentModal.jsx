@@ -4,7 +4,9 @@ import { X } from "lucide-react";
 export default function StockAdjustmentModal({ product, onClose, onSave }) {
   const [direction, setDirection] = useState("increase");
   const [quantity, setQuantity] = useState("");
-  const [reason, setReason] = useState("");
+  /* T10R: decreases require a canonical reason; increases stay optional. */
+  const [reasonCategory, setReasonCategory] = useState("Wastage");
+  const [reasonDetail, setReasonDetail] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
@@ -12,8 +14,14 @@ export default function StockAdjustmentModal({ product, onClose, onSave }) {
     event.preventDefault();
     const amount = Number(quantity);
     if (!Number.isFinite(amount) || amount <= 0) { setError("Enter an adjustment quantity greater than zero."); return; }
+    if (direction === "decrease" && !reasonCategory) { setError("Select a reason: Wastage, Breakage or Other."); return; }
     try {
       setSaving(true); setError("");
+      const detail = reasonDetail.trim();
+      const reason =
+        direction === "decrease"
+          ? (detail ? `${reasonCategory} - ${detail}` : reasonCategory)
+          : (reasonDetail.trim() || null);
       await onSave(product, direction === "increase" ? amount : -amount, reason);
     } catch (err) { setError(err.message || "Unable to adjust stock"); } finally { setSaving(false); }
   };
@@ -33,7 +41,14 @@ export default function StockAdjustmentModal({ product, onClose, onSave }) {
             ))}
           </div>
           <label className="block text-sm text-slate-600 mb-4"><span className="block mb-1 font-medium">Adjustment quantity</span><input autoFocus required type="number" min="0.01" step="0.01" value={quantity} onChange={(event) => setQuantity(event.target.value)} className="w-full h-10 px-3 border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-blue-500" /></label>
-          <label className="block text-sm text-slate-600"><span className="block mb-1 font-medium">Reason (optional)</span><textarea rows="3" value={reason} onChange={(event) => setReason(event.target.value)} className="w-full px-3 py-2 border border-slate-200 rounded-lg outline-none resize-none focus:ring-2 focus:ring-blue-500" placeholder="For example: delivery received or stock count" /></label>
+          {direction === "decrease" ? (
+            <>
+              <label className="block text-sm text-slate-600 mb-3"><span className="block mb-1 font-medium">Reason (required)</span><select required value={reasonCategory} onChange={(event) => setReasonCategory(event.target.value)} className="w-full h-10 px-3 border border-slate-200 rounded-lg outline-none bg-white focus:ring-2 focus:ring-blue-500">{["Wastage", "Breakage", "Other"].map((option) => (<option key={option} value={option}>{option}</option>))}</select></label>
+              <label className="block text-sm text-slate-600"><span className="block mb-1 font-medium">Detail (optional)</span><textarea rows="2" value={reasonDetail} onChange={(event) => setReasonDetail(event.target.value)} className="w-full px-3 py-2 border border-slate-200 rounded-lg outline-none resize-none focus:ring-2 focus:ring-blue-500" placeholder="For example: expired milk" /></label>
+            </>
+          ) : (
+            <label className="block text-sm text-slate-600"><span className="block mb-1 font-medium">Reason (optional)</span><textarea rows="3" value={reasonDetail} onChange={(event) => setReasonDetail(event.target.value)} className="w-full px-3 py-2 border border-slate-200 rounded-lg outline-none resize-none focus:ring-2 focus:ring-blue-500" placeholder="For example: delivery received or stock count" /></label>
+          )}
           <div className="flex justify-end gap-2 mt-6 pt-4 border-t border-slate-200">
             <button type="button" onClick={onClose} disabled={saving} className="h-10 px-4 border border-slate-200 rounded-lg text-sm hover:bg-slate-50">Cancel</button>
             <button type="submit" disabled={saving} className="h-10 px-5 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700">{saving ? "Saving..." : "Save adjustment"}</button>

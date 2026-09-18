@@ -16,7 +16,7 @@ const JWT_SECRET = process.env.JWT_SECRET || "development-secret-change-this";
 const SESSION_TTL = process.env.SESSION_TTL || "12h";
 
 /** Mint the session token for a verified user row. */
-export function createSessionToken(user) {
+export function createSessionToken(user, userStores = []) {
   return jwt.sign(
     {
       id: user.id,
@@ -24,6 +24,7 @@ export function createSessionToken(user) {
       storeId: user.store_id,
       roleId: user.role_id,
       username: user.username,
+      assignedStoreIds: userStores.map(us => us.store_id),
     },
     JWT_SECRET,
     { expiresIn: SESSION_TTL }

@@ -26,6 +26,7 @@ export default function createReturnsRouter({
   db,
   pool,
   createInventoryMovement,
+  writeAudit = null,
 }) {
   const router = express.Router();
 
@@ -509,6 +510,75 @@ export default function createReturnsRouter({
         if (reason) refundReasons.add(reason);
 
         await client.query("COMMIT");
+
+        /*
+         * T10R: Customer loyalty reversal on refunds - fire-and-forget after return commit
+         * Loyalty failures must never block a completed return.
+         */
+        if (loaded.sale.customer_id && refundAmount > 0) {
+          Promise.resolve(
+            (async () => {
+              try {
+                // Check if loyalty is enabled for this company
+                const settings = await db(
+                  `SELECT loyalty_enabled, loyalty_earning_rate FROM company_settings WHERE company_id = $1`,
+                  [req.user.companyId]
+                );
+                if (!settings.rows.length || !settings.rows[0].loyalty_enabled) return;
+
+                const earningRate = Number(settings.rows[0].loyalty_earning_rate) || 0.01;
+                const loyaltyToReverse = Number(refundAmount) * earningRate;
+
+                if (loyaltyToReverse <= 0) return;
+
+                // Get current balance
+                const balanceResult = await db(
+                  `SELECT balance FROM customer_loyalty_balances WHERE company_id = $1 AND customer_id = $2`,
+                  [req.user.companyId, loaded.sale.customer_id]
+                );
+
+                if (!balanceResult.rows.length) return;
+
+                const currentBalance = Number(balanceResult.rows[0].balance);
+                const reverseAmount = Math.min(loyaltyToReverse, currentBalance);
+
+                if (reverseAmount <= 0) return;
+
+                // Update balance
+                const newBalance = currentBalance - reverseAmount;
+                await db(
+                  `UPDATE customer_loyalty_balances SET balance = $1, updated_at = NOW() WHERE company_id = $2 AND customer_id = $3`,
+                  [newBalance, req.user.companyId, loaded.sale.customer_id]
+                );
+
+                // Record reversal transaction
+                await db(
+                  `
+                  INSERT INTO customer_loyalty_transactions 
+                    (company_id, customer_id, transaction_type, amount, balance_after, reference_type, reference_id, description, created_by)
+                  VALUES ($1, $2, 'REVERSE', $3, $4, 'return', $5, 'Refund processed', $6)
+                  `,
+                  [req.user.companyId, loaded.sale.customer_id, -reverseAmount, newBalance, returnId, req.user.id]
+                );
+
+                // Audit log for loyalty reversal
+                if (typeof writeAudit === "function") {
+                  writeAudit(
+                    req.user.companyId,
+                    req.user.id,
+                    "loyalty.reversed",
+                    "customer",
+                    loaded.sale.customer_id,
+                    { returnId, amount: reverseAmount, balanceAfter: newBalance }
+                  ).catch((auditError) => console.error("Loyalty audit write error:", auditError));
+                }
+              } catch (loyaltyError) {
+                console.error("Loyalty reversal error:", loyaltyError);
+                // Do not throw - loyalty failures must not block returns
+              }
+            })()
+          ).catch(() => {});
+        }
 
         /* T9G: fire-and-forget integration dispatch (never blocks/throws). */
         dispatchIntegrationEvent({

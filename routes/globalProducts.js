@@ -26,7 +26,7 @@ export default function createGlobalProductsRouter({ authenticate, authorize, db
   router.get(
     "/global-products",
     authenticate,
-    authorize("product.view"),
+    authorize("global_product.view"),
     async (req, res) => {
       try {
         const search = String(req.query.search || "").trim();
@@ -137,7 +137,7 @@ export default function createGlobalProductsRouter({ authenticate, authorize, db
   router.get(
     "/global-products/brands",
     authenticate,
-    authorize("product.view"),
+    authorize("global_product.view"),
     async (req, res) => {
       try {
         const result = await db(`
@@ -168,7 +168,7 @@ export default function createGlobalProductsRouter({ authenticate, authorize, db
   router.get(
     "/global-products/categories",
     authenticate,
-    authorize("product.view"),
+    authorize("global_product.view"),
     async (req, res) => {
       try {
         const result = await db(`

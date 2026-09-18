@@ -253,6 +253,25 @@ export default function createSalesRouter({
          * Make sure all products belong to this company.
          */
         let basketHasAgeRestricted = false; // T10C
+        /*
+         * T10U: negative-inventory billing safety. The stock check below is
+         * THE existing validation mechanism — it is not replaced. When the
+         * company has explicitly enabled negative-inventory billing, an
+         * insufficient-stock line is recorded (with authoritative stock
+         * levels) and the sale is allowed to proceed into the normal
+         * checkout/inventory path instead of being rejected; the resulting
+         * negative balance flows through the existing inventory ledger and
+         * is audited fire-and-forget after commit. When the setting is OFF
+         * (the default) behaviour is exactly as before.
+         */
+        const negativeBillingAllowed =
+          req.body.allowNegativeStockSale === true
+            ? await client.query(
+                "SELECT allow_negative_inventory_billing FROM company_settings WHERE company_id = $1",
+                [req.user.companyId]
+              ).then((r) => r.rows.length > 0 && r.rows[0].allow_negative_inventory_billing === true)
+            : false;
+        const insufficientStockLines = [];
         for (const item of items) {
           if (!Number.isFinite(Number(item.quantity)) || Number(item.quantity) <= 0) {
             throw new Error("Sale quantities must be greater than zero");
@@ -290,7 +309,16 @@ export default function createSalesRouter({
             p.track_stock &&
             Number(p.stock_quantity) < Number(item.quantity)
           ) {
-            throw new Error(`Insufficient stock for ${p.name}`);
+            if (!negativeBillingAllowed) {
+              throw new Error(`Insufficient stock for ${p.name}`);
+            }
+            /* Authoritative numbers only — the client's claim is never trusted. */
+            insufficientStockLines.push({
+              productId: p.id,
+              productName: p.name,
+              recordedStock: Number(p.stock_quantity) || 0,
+              requestedQuantity: Number(item.quantity),
+            });
           }
         }
 
@@ -481,6 +509,68 @@ export default function createSalesRouter({
         await client.query("COMMIT");
 
         /*
+         * T10R: Customer loyalty earning - fire-and-forget after sale commit
+         * Loyalty failures must never block a completed sale.
+         */
+        if (customerId && typeof writeAudit === "function") {
+          Promise.resolve(
+            (async () => {
+              try {
+                // Check if loyalty is enabled for this company
+                const settings = await db(
+                  `SELECT loyalty_enabled, loyalty_earning_rate FROM company_settings WHERE company_id = $1`,
+                  [req.user.companyId]
+                );
+                if (!settings.rows.length || !settings.rows[0].loyalty_enabled) return;
+
+                const earningRate = Number(settings.rows[0].loyalty_earning_rate) || 0.01;
+                const loyaltyEarned = Number(total) * earningRate;
+
+                if (loyaltyEarned <= 0) return;
+
+                // Insert/update loyalty balance (upsert) and get new balance
+                const balanceResult = await db(
+                  `
+                  INSERT INTO customer_loyalty_balances (company_id, customer_id, balance)
+                  VALUES ($1, $2, $3)
+                  ON CONFLICT (company_id, customer_id) 
+                  DO UPDATE SET balance = customer_loyalty_balances.balance + EXCLUDED.balance,
+                                 updated_at = NOW()
+                  RETURNING balance
+                  `,
+                  [req.user.companyId, customerId, loyaltyEarned]
+                );
+
+                const balanceAfter = Number(balanceResult.rows[0].balance);
+
+                // Record transaction
+                await db(
+                  `
+                  INSERT INTO customer_loyalty_transactions 
+                    (company_id, customer_id, transaction_type, amount, balance_after, reference_type, reference_id, description, created_by)
+                  VALUES ($1, $2, 'EARN', $3, $4, 'sale', $5, 'Sale completed', $6)
+                  `,
+                  [req.user.companyId, customerId, loyaltyEarned, balanceAfter, saleId, req.user.id]
+                );
+
+                // Audit log for loyalty earning
+                writeAudit(
+                  req.user.companyId,
+                  req.user.id,
+                  "loyalty.earned",
+                  "customer",
+                  customerId,
+                  { saleId, amount: loyaltyEarned, balanceAfter }
+                ).catch((auditError) => console.error("Loyalty audit write error:", auditError));
+              } catch (loyaltyError) {
+                console.error("Loyalty earning error:", loyaltyError);
+                // Do not throw - loyalty failures must not block sales
+              }
+            })()
+          ).catch(() => {});
+        }
+
+        /*
          * T10C audit trail: one minimal verification event per restricted
          * sale (sale ID, store, operator, timestamp, confirmed — no personal
          * data). Fire-and-forget through the SHARED audit writer after the
@@ -498,6 +588,50 @@ export default function createSalesRouter({
               { verified: true, storeId: req.user.storeId ?? null }
             )
           ).catch((auditError) => console.error("Age-verification audit write error:", auditError));
+        }
+
+        /*
+         * T10U audit trail: one event per sale completed despite insufficient
+         * stock. Captures product, requested quantity, recorded stock before
+         * the sale, resulting stock after the existing SALE ledger movement,
+         * operator, store and the sale reference. Fire-and-forget through the
+         * shared audit writer — an audit failure can never fail the sale.
+         */
+        if (insufficientStockLines.length && typeof writeAudit === "function") {
+          Promise.resolve(
+            (async () => {
+              const resulting = new Map();
+              for (const line of insufficientStockLines) {
+                try {
+                  const bal = await db(
+                    `SELECT stock_quantity FROM products WHERE id = $1 AND company_id = $2`,
+                    [line.productId, req.user.companyId]
+                  );
+                  resulting.set(String(line.productId), bal.rows.length ? Number(bal.rows[0].stock_quantity) : null);
+                } catch {
+                  resulting.set(String(line.productId), null);
+                }
+              }
+              return writeAudit(
+                req.user.companyId,
+                req.user.id,
+                "SALE_NEGATIVE_STOCK",
+                "sale",
+                saleId,
+                {
+                  receiptNumber: receiptNumber,
+                  storeId: req.user.storeId ?? null,
+                  lines: insufficientStockLines.map((line) => ({
+                    productId: line.productId,
+                    productName: line.productName,
+                    requestedQuantity: line.requestedQuantity,
+                    recordedStock: line.recordedStock,
+                    resultingStock: resulting.get(String(line.productId)),
+                  })),
+                }
+              );
+            })()
+          ).catch((auditError) => console.error("Negative-stock audit write error:", auditError));
         }
 
         /*
