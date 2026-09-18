@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { BarChart3, Bell, Calculator, ChevronDown, ChevronUp, CreditCard, FileText, Grid3X3, Home, LogOut, Package, Percent, Plug, Receipt, RefreshCw, Settings, ShoppingBag, Store, Tag, UserCircle, Users, X } from "lucide-react";
+import { BarChart3, Bell, Calculator, ChevronDown, CreditCard, Database, FileText, Grid3X3, Home, LogOut, Package, Percent, Plug, Receipt, RefreshCw, Settings, ShoppingBag, Store, Tag, UserCircle, Users, X } from "lucide-react";
 import { apiRequest } from "../../services/api.js";
 import BottomStatusBar from "../../components/BottomStatusBar.jsx";
-import Dashboard from "../dashboard/Dashboard.jsx";
-import ProductsAdmin from "../products/ProductsAdmin.jsx";
+import AdminNavDock from "../../components/AdminNavDock.jsx";
+import Dashboard from "../dashboard/Dashboard.jsx";import ProductsAdmin from "../products/ProductsAdmin.jsx";
+import GlobalProductsAdmin from "../products/GlobalProductsAdmin.jsx";
 import CategoriesAdmin from "../categories/CategoriesAdmin.jsx";
 import InventoryAdmin from "../inventory/InventoryAdmin.jsx";
 import SettingsAdmin from "../settings/SettingsAdmin.jsx";
@@ -18,6 +19,7 @@ import ReturnsAdmin, { SupplierReturnsAdmin } from "../returns/ReturnsAdmin.jsx"
 import CustomersAdmin from "../customers/CustomersAdmin.jsx";
 import OnlineOrdersAdmin from "../online/OnlineOrdersAdmin.jsx";
 import OnlineOrdersPrep from "../online/OnlineOrdersPrep.jsx";
+import StoresAdmin from "../stores/StoresAdmin.jsx";
 
 export default function AdminLayout({ onPOS, onLogout, user = null, initialPage = "Dashboard" }) {
   const [page, setPage] = useState(initialPage);
@@ -45,13 +47,20 @@ export default function AdminLayout({ onPOS, onLogout, user = null, initialPage 
   }, [profileOpen]);
 
   const [onlinePermissions, setOnlinePermissions] = useState({ isAdmin: false, permissions: [] });
+  const [reportsLoaded, setReportsLoaded] = useState(false);
   useEffect(() => {
+    let alive = true;
     apiRequest("/api/auth/me/permissions").then((data) => {
-      if (data.success) setOnlinePermissions(data.data);
-    }).catch((error) => console.error("Online order permissions:", error));
+      if (alive && data.success) {
+        setOnlinePermissions(data.data);
+        setReportsLoaded(true);
+      } else {
+        if (alive) setReportsLoaded(true);
+      }
+    }).catch((error) => { console.error("Online order permissions:", error); if (alive) setReportsLoaded(true); });
+    return () => { alive = false; };
   }, []);
   const [productCreateRequested, setProductCreateRequested] = useState(false);
-  const [reportsOpen, setReportsOpen] = useState(initialPage === "Reports");
   /* Which tab the existing Settings page opens on (gear = General, profile menu = Users & Permissions). */
   const [settingsTab, setSettingsTab] = useState("General");
 
@@ -71,9 +80,19 @@ export default function AdminLayout({ onPOS, onLogout, user = null, initialPage 
   }, [onlinePermissions]);
 
   const visibleReportItems = REPORT_MENU_ITEMS.filter((item) => canViewReport(item.permission));
-  /* Overview renders the full sales summary, so it requires report.view too. */
-  const canViewOverview = canViewReport("report.view");
-  const canViewReports = canViewOverview || visibleReportItems.length > 0;
+  /* Overview / Summary cards page requires reports.summary.view per T10B granular catalogue. */
+  const canViewOverview = canViewReport("reports.summary.view");
+  /* Users with ANY of the 13 granular reports.*.view codes can discover Reports.
+     Admin/Owner bypass: if isAdmin we unconditionally show Reports.
+     Also: if permissions are still loading (reportsLoaded=false) we KEEP the
+     entry rendered (it is always present in the items array) so a flash of
+     "missing sidebar entry" cannot happen on first paint for an Admin user. */
+  const canViewReports =
+    !reportsLoaded ||
+    canViewOverview ||
+    visibleReportItems.length > 0 ||
+    onlinePermissions.isAdmin ||
+    onlinePermissions.permissions.some((code) => code.startsWith("reports."));
 
   /* Non-blocking online-order notifications (Uber Eats / Deliveroo). */
   const [onlineOrderCount, setOnlineOrderCount] = useState(0);
@@ -128,6 +147,7 @@ export default function AdminLayout({ onPOS, onLogout, user = null, initialPage 
       onlinePermissions.permissions.includes("returns.create")
       ? [["Supplier Returns", RefreshCw]] : []),
     ["Products", Package],
+    ["Global Products", Database],
     ["Categories", Tag],
     ["Purchases", Receipt],
     ["Suppliers", Users],
@@ -149,99 +169,19 @@ export default function AdminLayout({ onPOS, onLogout, user = null, initialPage 
 
   return (
     <div className="h-screen bg-slate-100 flex relative">
-      {/* SIDEBAR */}
-      <aside className="w-60 bg-slate-950 text-white shrink-0" style={{ background: "linear-gradient(180deg, #103f3c 0%, #0d3431 100%)" }}>
-        <div className="h-16 flex items-center px-5 border-b border-slate-800">
-          <Calculator
-            size={22}
-            className="text-blue-400"
-          />
-
-          <span className="font-bold text-lg ml-3">
-            onePOS
-          </span>
-        </div>
-
-        <div className="p-3 overflow-y-auto" style={{ height: "calc(100vh - 64px)" }}>
-          {items.map(([name, Icon]) => {
-            if (name === "Reports") {
-              /* Hide the whole Reports section when nothing is accessible. */
-              if (!canViewReports) return null;
-              return (
-                <div key={name}>
-                  <button
-                    onClick={() => {
-                      setProductCreateRequested(false);
-                      setReportsOpen((open) => !open);
-                    }}
-                    className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-md mb-1 text-sm ${
-                      reportsOpen
-                        ? "bg-white/15 text-white"
-                        : "text-slate-200 hover:bg-white/10"
-                    }`}
-                  >
-                    <Icon size={17} />
-                    <span className="flex-1 text-left">Reports</span>
-                    {reportsOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
-                  </button>
-                  {reportsOpen && (
-                    <div className="ml-6 border-l border-white/15 pl-2 mb-1">
-                      {canViewOverview && (
-                      <button
-                        onClick={() => {
-                          setProductCreateRequested(false);
-                          setPage("Reports");
-                        }}
-                        className={`w-full text-left px-3 py-2 rounded-md mb-1 text-sm ${
-                          page === "Reports"
-                            ? "bg-blue-600 text-white"
-                            : "text-slate-200 hover:bg-white/10"
-                        }`}
-                      >
-                        Overview
-                      </button>
-                      )}
-                      {visibleReportItems.map((item) => (
-                        <button
-                          key={item.key}
-                          onClick={() => {
-                            setProductCreateRequested(false);
-                            setPage(item.key);
-                          }}
-                          className={`w-full text-left px-3 py-2 rounded-md mb-1 text-sm ${
-                            page === item.key
-                              ? "bg-blue-600 text-white"
-                              : "text-slate-200 hover:bg-white/10"
-                          }`}
-                        >
-                          {item.title}
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              );
-            }
-            return (
-              <button
-                key={name}
-                onClick={() => {
-                  setProductCreateRequested(false);
-                  setPage(name);
-                }}
-                className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-md mb-1 text-sm ${
-                  page === name
-                    ? "bg-blue-600 text-white"
-                    : "text-slate-200 hover:bg-white/10"
-                }`}
-              >
-                <Icon size={17} />
-                {name}
-              </button>
-            );
-          })}
-        </div>
-      </aside>
+      {/* NAVIGATION — floating dock, bottom-centre of the status bar.
+         Consumes the SAME permission-filtered items list the sidebar used,
+         so visibility per user/role is identical. */}
+      <AdminNavDock
+        items={items}
+        reportItems={canViewReports ? (canViewOverview ? [{ key: "Reports", title: "Overview" }, ...visibleReportItems] : visibleReportItems) : []}
+        page={page}
+        onNavigate={(nextPage) => {
+          setProductCreateRequested(false);
+          setPage(nextPage);
+        }}
+        onOpenTill={onPOS}
+      />
 
       {/* MAIN */}
       <main className="flex-1 min-w-0 flex flex-col">
@@ -428,7 +368,7 @@ export default function AdminLayout({ onPOS, onLogout, user = null, initialPage 
           </button>
         )}
 
-        <div className="p-6 flex-1 overflow-y-auto pb-14">
+        <div className="p-6 flex-1 overflow-y-auto" style={{ paddingBottom: "84px" }}>
           {page ===
           "Dashboard" ? (
             <Dashboard
@@ -455,6 +395,9 @@ export default function AdminLayout({ onPOS, onLogout, user = null, initialPage 
             "Products" ? (
             <ProductsAdmin openCreate={productCreateRequested} />
           ) : page ===
+            "Global Products" ? (
+            <GlobalProductsAdmin />
+          ) : page ===
             "Categories" ? (
             <CategoriesAdmin />
           ) : page ===
@@ -469,6 +412,9 @@ export default function AdminLayout({ onPOS, onLogout, user = null, initialPage 
           ) : page ===
             "Customers" ? (
             <CustomersAdmin />
+          ) : page ===
+            "Stores" ? (
+            <StoresAdmin />
           ) : page ===
             "Integrations" ? (
             <IntegrationsAdmin />

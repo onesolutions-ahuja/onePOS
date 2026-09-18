@@ -135,7 +135,10 @@ export function getTenantFromToken() {
 
 export function saveProductCache(tenant, products) {
   if (!tenant || !Array.isArray(products)) return false;
-  return writeJson(PRODUCT_CACHE_KEY, sealRecord(tenant, products));
+  const fields = ["id", "name", "sku", "barcode", "price", "vatRate", "vatApplicable", "ageRestricted", "category", "categoryId", "stock", "trackStock", "active", "lowStockLevel"];
+  return writeJson(PRODUCT_CACHE_KEY, sealRecord(tenant, products.map((product) =>
+    Object.fromEntries(fields.filter((field) => product[field] !== undefined).map((field) => [field, product[field]]))
+  )));
 }
 
 /* Returns the normalised product array for this tenant, or null. */
@@ -148,7 +151,11 @@ export function loadProductCache(tenant) {
 
 export function saveSettingsCache(tenant, settings) {
   if (!tenant || !settings || typeof settings !== "object") return false;
-  return writeJson(SETTINGS_CACHE_KEY, sealRecord(tenant, settings));
+  return writeJson(SETTINGS_CACHE_KEY, sealRecord(tenant, {
+    tax: { vatEnabled: settings.tax?.vatEnabled, defaultVatRate: settings.tax?.defaultVatRate },
+    store: { name: settings.store?.name },
+    till: { terminalNumber: settings.till?.terminalNumber },
+  }));
 }
 
 /* Returns the cached settings object (company/tax/store/till), or null. */
@@ -225,3 +232,37 @@ export function writeOfflineQueue(tenant, sales) {
   if (!tenant || !Array.isArray(sales)) return false;
   return writeJson(OFFLINE_QUEUE_KEY, sealRecord(tenant, sales));
 }
+
+// Server-verified till identity and sale permissions only. No duplicate bearer token.
+const SESSION_KEY = "onepos_offline_session";
+async function sessionFingerprint(token) {
+  const bytes = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(token));
+  return Array.from(new Uint8Array(bytes), (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+export async function saveOfflineSession(user, permissions) {
+  try {
+    const token = localStorage.getItem("onepos_token");
+    const payload = decodeTokenPayload(token);
+    if (!payload?.exp || !user || !permissions) return false;
+    const fingerprint = await sessionFingerprint(token);
+    if (localStorage.getItem("onepos_token") !== token) return false;
+    return writeJson(SESSION_KEY, {
+      fingerprint, expiresAt: payload.exp * 1000,
+      user: { id: user.id, companyId: user.companyId, storeId: user.storeId },
+      permissions: { isAdmin: permissions.isAdmin === true, permissions: (permissions.permissions || []).filter((code) => typeof code === "string" && code.startsWith("sale.")) },
+    });
+  } catch { return false; }
+}
+export async function loadOfflineSession() {
+  try {
+    const record = readJson(SESSION_KEY);
+    const token = localStorage.getItem("onepos_token");
+    if (!record || !token || record.expiresAt <= Date.now() || !Number.isFinite(record.expiresAt)) return null;
+    if (record.fingerprint !== await sessionFingerprint(token)) return null;
+    const tenant = getTenantFromToken();
+    if (!tenant || record.user.id !== tenant.userId || record.user.companyId !== tenant.companyId || record.user.storeId !== tenant.storeId) return null;
+    return record;
+  } catch { return null; }
+}
+export function clearOfflineSession() { removeJson(SESSION_KEY); }
+

@@ -1,4 +1,5 @@
 import express from "express";
+import { lowStockRow } from "../services/inventory.js";
 
 export default function createInventoryRouter({
   authenticate,
@@ -16,7 +17,7 @@ export default function createInventoryRouter({
   router.get(
     "/inventory/movements",
     authenticate,
-    authorize("inventory.view"),
+    authorize("inventory.movements.view", "inventory.view"),
     async (req, res) => {
       try {
         const params = [req.user.companyId];
@@ -163,7 +164,7 @@ export default function createInventoryRouter({
   router.get(
     "/inventory/reconciliation",
     authenticate,
-    authorize("inventory.view"),
+    authorize("reports.inventory.view", "inventory.view"),
     async (req, res) => {
       try {
         const result = await db(
@@ -200,5 +201,57 @@ export default function createInventoryRouter({
     }
   );
 
+  /*
+   * GET /api/inventory/low-stock
+   *
+   * Live low-stock list derived from the SAME product columns the rest of the
+   * app already uses (stock_quantity + low_stock_level + track_stock). Products
+   * whose track_stock is OFF are never flagged by this endpoint.
+   */
+  router.get(
+    "/inventory/low-stock",
+    authenticate,
+    authorize("reports.low_stock.view", "inventory.view"),
+    async (req, res) => {
+      try {
+        const result = await db(
+          `
+          SELECT
+            p.id,
+            p.name,
+            p.sku,
+            p.barcode,
+            p.stock_quantity,
+            p.low_stock_level,
+            p.track_stock,
+            p.category_id,
+            c.name AS category_name
+          FROM products p
+          LEFT JOIN categories c ON c.id = p.category_id
+          WHERE p.company_id = $1
+            AND p.active = true
+          `,
+          [req.user.companyId]
+        );
+
+        const data = result.rows
+          .map((row) => lowStockRow({ ...row, category: row.category_name }))
+          .filter((row) => row.isLow);
+
+        res.json({
+          success: true,
+          data,
+        });
+      } catch (error) {
+        console.error("Load low-stock list error:", error);
+
+        res.status(500).json({
+          success: false,
+          message: "Unable to load low-stock list",
+        });
+      }
+    }
+  );
   return router;
 }
+

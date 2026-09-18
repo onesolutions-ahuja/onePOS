@@ -18,7 +18,7 @@ function round2(value) {
 }
 
 const RETURN_PERMISSIONS_CREATE = ["returns.create", "sale.refund"];
-const RETURN_PERMISSIONS_VIEW = ["returns.view", "sale.refund"];
+const RETURN_PERMISSIONS_VIEW = ["returns.view", "reports.returns.view", "sale.refund"];
 
 export default function createReturnsRouter({
   authenticate,

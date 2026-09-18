@@ -23,14 +23,15 @@ import { toLocalDateString } from "./shared/quickDateRanges.js";
  * permission checks via the isAdmin flag from /api/auth/me/permissions.
  */
 export const REPORT_MENU_ITEMS = [
-  { key: "Sales Report", title: "Sales by Day", subtitle: "Daily sales totals for the selected range.", permission: "report.view" },
-  { key: "Payments Report", title: "Payments", subtitle: "Payments broken down by method.", permission: "payment.manage" },
-  { key: "Top Products Report", title: "Top Products", subtitle: "Best-selling products for the selected range.", permission: "report.view" },
-  { key: "Customers Report", title: "Customers", subtitle: "Customer spend and returns.", permission: "customer.view" },
-  { key: "Inventory Report", title: "Inventory Movements", subtitle: "Recent stock movements.", permission: "inventory.view" },
-  { key: "Profit Report", title: "Profit & Margin", subtitle: "Profit and margin for the selected range.", permission: "report.view" },
-  { key: "Till Report", title: "Till & Cash", subtitle: "Till sessions and cash movements.", permission: ["till.open", "till.close"] },
-  { key: "VAT Report", title: "VAT Summary", subtitle: "VAT collected and reclaimed.", permission: "report.view" },
+  { key: "Sales Report", title: "Sales by Day", subtitle: "Daily sales totals for the selected range.", permission: "reports.sales.view" },
+  { key: "Payments Report", title: "Payments", subtitle: "Payments broken down by method.", permission: "reports.payments.view" },
+  { key: "Top Products Report", title: "Top Products", subtitle: "Best-selling products for the selected range.", permission: "reports.products.view" },
+  { key: "Customers Report", title: "Customers", subtitle: "Customer spend and returns.", permission: "reports.customers.view" },
+  { key: "Inventory Report", title: "Inventory Overview", subtitle: "Current stock, cost and low-stock status.", permission: "reports.inventory.view" },
+  { key: "Inventory Movements", title: "Stock Movements", subtitle: "Inventory ledger for the selected range.", permission: ["reports.inventory_movements.view", "inventory.movements.view"] },
+  { key: "Profit Report", title: "Profit & Margin", subtitle: "Profit and margin for the selected range.", permission: "reports.profit.view" },
+  { key: "Till Report", title: "Till & Cash", subtitle: "Till sessions and cash movements.", permission: "reports.till.view" },
+  { key: "VAT Report", title: "VAT Summary", subtitle: "VAT collected and reclaimed.", permission: "reports.vat.view" },
 ];
 
 /* Reports whose data is fetched here and passed as props (same endpoints the
@@ -99,6 +100,7 @@ export default function ReportPage({ reportKey }) {
     case "Top Products Report": content = <ProductsReport products={data || []} />; break;
     case "Customers Report": content = <CustomersReport from={from} to={to} />; break;
     case "Inventory Report": content = <InventoryReport />; break;
+    case "Inventory Movements": content = <StockMovementLedger />; break;
     case "Profit Report": content = <ProfitReport from={from} to={to} />; break;
     case "Till Report": content = <TillReport from={from} to={to} />; break;
     case "VAT Report": content = <VATReport from={from} to={to} />; break;

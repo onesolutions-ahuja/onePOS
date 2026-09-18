@@ -57,6 +57,7 @@ export default function ReportsAdmin() {
         <ProductsReport products={data.products} />
         <CustomersReport from={from} to={to} />
         <InventoryReport />
+        <StockMovementLedger />
         <ProfitReport from={from} to={to} />
         <TillReport from={from} to={to} />
         <VATReport from={from} to={to} />

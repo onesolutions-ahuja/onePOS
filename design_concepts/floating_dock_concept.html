@@ -1,0 +1,369 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>onePOS — Floating Dock Concept (design mockup)</title>
+<style>
+  :root{
+    --teal:#176F6A; --teal-dark:#104744; --teal-deep:#0d3431;
+    --bg:#eef2f4; --card:#ffffff; --ink:#0f172a; --mut:#64748b;
+    --dock-bg:rgba(13,52,49,.80); --dock-br:rgba(255,255,255,.16);
+    --dock-icn:#d7e8e5; --dock-icn-dim:#9dbcb7; --dock-act:#ffffff;
+    --tip-bg:rgba(10,35,33,.95); --tip-fg:#eafffb;
+    --pop-bg:rgba(13,52,49,.88); --pop-sec:#8fb8b2; --pop-item:#e7f3f1;
+  }
+  *{margin:0;padding:0;box-sizing:border-box;font-family:"Segoe UI",system-ui,-apple-system,sans-serif}
+  body{height:100vh;overflow:hidden;background:var(--bg);color:var(--ink)}
+
+  /* ================= APP SIMULATION (background) ================= */
+  .app{display:flex;flex-direction:column;height:100%}
+  .topbar{height:58px;background:#fff;border-bottom:1px solid #e2e8f0;display:flex;align-items:center;justify-content:space-between;padding:0 20px;flex-shrink:0;z-index:5}
+  .tb-left .t1{font-weight:700;font-size:16px}
+  .tb-left .t2{font-size:11px;color:var(--mut)}
+  .tb-right{display:flex;align-items:center;gap:10px}
+  .btn{display:inline-flex;align-items:center;gap:8px;border-radius:8px;font-size:13px;padding:8px 14px;cursor:pointer;border:1px solid #e2e8f0;background:#f8fafc;color:#334155}
+  .btn:hover{background:#eef2f6}
+  .btn.teal{background:var(--teal);border-color:var(--teal);color:#fff}
+  .btn.teal:hover{background:#115b57}
+  .icbtn{width:36px;height:36px;display:grid;place-items:center;border-radius:8px;border:1px solid #e2e8f0;background:#f8fafc;color:#475569;cursor:pointer}
+  .avatar{display:flex;align-items:center;gap:8px;padding:5px 10px 5px 5px;border:1px solid #e2e8f0;border-radius:999px;background:#fff;font-size:12.5px}
+  .avatar .dot{width:26px;height:26px;border-radius:50%;background:linear-gradient(135deg,var(--teal),#0d5a56);color:#fff;display:grid;place-items:center;font-weight:700;font-size:12px}
+  .avatar small{display:block;color:var(--mut);font-size:10px;margin-top:-2px}
+
+  .content{flex:1;overflow-y:auto;padding:22px 24px 150px}
+  .ph-title{font-size:22px;font-weight:800}
+  .ph-sub{font-size:13px;color:var(--mut);margin:2px 0 16px}
+  .cards{display:grid;grid-template-columns:repeat(4,1fr);gap:14px}
+  .card{background:var(--card);border:1px solid #e6eaee;border-radius:14px;padding:16px 18px}
+  .card .lbl{font-size:12px;color:var(--mut)}
+  .card .val{font-size:24px;font-weight:800;margin-top:6px}
+  .row2{display:grid;grid-template-columns:2.2fr 1fr;gap:14px;margin-top:14px}
+  .panel{background:var(--card);border:1px solid #e6eaee;border-radius:14px;padding:18px}
+  .panel h3{font-size:14px;font-weight:700;margin-bottom:14px}
+  .chart{display:flex;align-items:flex-end;gap:18px;height:190px;padding:0 6px;border-bottom:1px solid #edf1f4}
+  .bar{flex:1;background:var(--teal);border-radius:6px 6px 0 0;opacity:.92}
+  .xlab{display:flex;gap:18px;padding:6px 6px 0;font-size:10.5px;color:#94a3b8}
+  .xlab span{flex:1;text-align:center}
+  .qa{display:flex;flex-direction:column;gap:12px}
+  .qa .q{display:flex;align-items:center;gap:12px;border:1px solid #e6eaee;border-radius:12px;padding:14px 16px;cursor:pointer;background:#fff}
+  .qa .q:hover{border-color:var(--teal);background:#f4faf9}
+  .qa .q b{font-size:13.5px}
+  .qa .q small{display:block;color:var(--mut);font-size:11px}
+  .qa .ic{width:34px;height:34px;border-radius:9px;background:#e6f2f0;color:var(--teal);display:grid;place-items:center}
+
+  .statusbar{height:30px;flex-shrink:0;background:linear-gradient(90deg,var(--teal-deep),var(--teal-dark));color:#cfe6e2;display:flex;align-items:center;justify-content:space-between;padding:0 16px;font-size:11px;z-index:5}
+
+  /* ================= THE FLOATING DOCK ================= */
+  .dock{
+    position:fixed;left:50%;bottom:46px;transform:translateX(-50%);
+    display:flex;align-items:center;gap:6px;
+    padding:10px 14px;border-radius:24px;z-index:60;
+    background:var(--dock-bg);
+    border:1px solid var(--dock-br);
+    backdrop-filter:blur(18px) saturate(160%);
+    -webkit-backdrop-filter:blur(18px) saturate(160%);
+    box-shadow:0 18px 50px rgba(4,26,24,.45), 0 4px 14px rgba(4,26,24,.28), inset 0 1px 0 rgba(255,255,255,.09);
+    transition:background .25s;
+  }
+  .ditem{position:relative;width:46px;height:46px;border-radius:14px;display:grid;place-items:center;color:var(--dock-icn);cursor:pointer;border:none;background:transparent;transition:transform .18s cubic-bezier(.34,1.56,.64,1), background .18s, color .18s}
+  .ditem:hover{transform:translateY(-7px) scale(1.14);background:rgba(255,255,255,.10);color:var(--dock-act)}
+  .ditem:active{transform:translateY(-2px) scale(1.04)}
+  .ditem.active{color:var(--dock-act);background:rgba(255,255,255,.14)}
+  .ditem.active::before{content:"";position:absolute;bottom:-7px;left:50%;transform:translateX(-50%);width:16px;height:3px;border-radius:2px;background:#3fd0c4}
+  .ditem.accent{background:linear-gradient(135deg,var(--teal),#0e5f5a);color:#fff;box-shadow:0 6px 16px rgba(23,111,106,.5)}
+  .ditem.accent:hover{background:linear-gradient(135deg,#1a817b,#115b57)}
+  .ditem svg{width:21px;height:21px}
+  .dsep{width:1px;height:30px;background:var(--dock-br);margin:0 6px}
+
+  /* macOS-style tooltip */
+  .ditem::after{
+    content:attr(data-tip);position:absolute;bottom:calc(100% + 14px);left:50%;transform:translateX(-50%) translateY(4px);
+    background:var(--tip-bg);color:var(--tip-fg);font-size:11.5px;font-weight:600;letter-spacing:.2px;
+    padding:6px 10px;border-radius:8px;white-space:nowrap;opacity:0;pointer-events:none;transition:opacity .15s, transform .15s;
+    box-shadow:0 6px 18px rgba(0,0,0,.35);
+  }
+  .ditem::before{content:"";position:absolute;bottom:calc(100% + 8px);left:50%;transform:translateX(-50%);border:5px solid transparent;border-top-color:var(--tip-bg);opacity:0;transition:opacity .15s}
+  .ditem:hover::after{opacity:1;transform:translateX(-50%) translateY(0)}
+  .ditem:hover::before{opacity:1}
+
+  /* the launcher */
+  .launcher{width:54px;height:54px;border-radius:50%;border:none;cursor:pointer;display:grid;place-items:center;color:#fff;position:relative;
+    background:linear-gradient(135deg,#1a817b 0%,var(--teal) 55%,#0e5f5a 100%);
+    box-shadow:0 8px 22px rgba(23,111,106,.55), inset 0 1px 0 rgba(255,255,255,.25);
+    transition:transform .2s cubic-bezier(.34,1.56,.64,1), box-shadow .2s;margin:0 8px}
+  .launcher:hover{transform:translateY(-6px) scale(1.08)}
+  .launcher.open{transform:rotate(90deg)}
+  .launcher svg{width:24px;height:24px}
+  @keyframes pulse{0%{box-shadow:0 8px 22px rgba(23,111,106,.55),0 0 0 0 rgba(63,208,196,.5)}70%{box-shadow:0 8px 22px rgba(23,111,106,.55),0 0 0 14px rgba(63,208,196,0)}100%{box-shadow:0 8px 22px rgba(23,111,106,.55),0 0 0 0 rgba(63,208,196,0)}}
+  .launcher.pulse{animation:pulse 1.6s ease-out 2}
+
+  /* ================= LAUNCHER POPUP ================= */
+  .pop{
+    position:fixed;left:50%;bottom:118px;transform:translateX(-50%) translateY(14px) scale(.97);
+    width:600px;max-width:94vw;border-radius:22px;z-index:70;overflow:hidden;
+    background:var(--pop-bg);border:1px solid var(--dock-br);
+    backdrop-filter:blur(22px) saturate(160%);-webkit-backdrop-filter:blur(22px) saturate(160%);
+    box-shadow:0 30px 80px rgba(3,22,20,.55), inset 0 1px 0 rgba(255,255,255,.10);
+    opacity:0;pointer-events:none;transition:opacity .18s, transform .22s cubic-bezier(.34,1.4,.64,1);
+  }
+  .pop.open{opacity:1;pointer-events:auto;transform:translateX(-50%) translateY(0) scale(1)}
+  .pop::after{content:"";position:absolute;bottom:-9px;left:50%;transform:translateX(-50%) rotate(45deg);width:16px;height:16px;background:var(--pop-bg);border-right:1px solid var(--dock-br);border-bottom:1px solid var(--dock-br)}
+  .pop-head{display:flex;align-items:center;gap:10px;padding:14px 16px;border-bottom:1px solid rgba(255,255,255,.09)}
+  .pop-head svg{width:15px;height:15px;color:#7fb5ae}
+  .pop-head input{flex:1;background:transparent;border:none;outline:none;color:var(--pop-item);font-size:13.5px}
+  .pop-head input::placeholder{color:#7ea9a3}
+  .pop-body{padding:14px 16px 18px;max-height:56vh;overflow-y:auto}
+  .grp{font-size:10px;font-weight:800;letter-spacing:1.4px;text-transform:uppercase;color:var(--pop-sec);margin:12px 2px 8px}
+  .grp:first-child{margin-top:0}
+  .grid{display:grid;grid-template-columns:repeat(4,1fr);gap:6px}
+  .app-item{display:flex;align-items:center;gap:10px;padding:9px 10px;border-radius:12px;color:var(--pop-item);cursor:pointer;border:none;background:transparent;text-align:left;width:100%}
+  .app-item:hover{background:rgba(255,255,255,.10)}
+  .app-item .ic{width:32px;height:32px;border-radius:9px;display:grid;place-items:center;background:rgba(255,255,255,.08);color:#bfe3de;flex-shrink:0}
+  .app-item b{font-size:12.5px;font-weight:600;display:block}
+  .app-item small{font-size:10px;color:#8fb8b2;display:block;margin-top:1px}
+  .badge{margin-left:auto;font-size:9.5px;font-weight:800;background:rgba(63,208,196,.18);color:#4fe0d3;border:1px solid rgba(63,208,196,.35);border-radius:999px;padding:2px 7px}
+
+  /* concept chrome */
+  .rib{position:fixed;top:14px;left:16px;z-index:80;background:#0d3431;color:#9fd8d0;font-size:11px;font-weight:700;letter-spacing:.4px;padding:7px 12px;border-radius:999px;border:1px solid rgba(255,255,255,.14);display:flex;gap:8px;align-items:center}
+  .rib .live{width:7px;height:7px;border-radius:50%;background:#3fd0c4;box-shadow:0 0 8px #3fd0c4}
+  .variants{position:fixed;right:16px;top:14px;z-index:90;display:flex;gap:6px;background:rgba(13,52,49,.85);border:1px solid rgba(255,255,255,.14);border-radius:999px;padding:5px;backdrop-filter:blur(10px)}
+  .variants button{border:none;background:transparent;color:#9fc3be;font-size:11px;font-weight:700;padding:6px 12px;border-radius:999px;cursor:pointer}
+  .variants button.on{background:var(--teal);color:#fff}
+  body.light{--dock-bg:rgba(255,255,255,.78);--dock-br:rgba(15,23,42,.10);--dock-icn:#475569;--dock-icn-dim:#94a3b8;--dock-act:#0f172a;--tip-bg:rgba(15,23,42,.94);--tip-fg:#f8fafc;--pop-bg:rgba(255,255,255,.9);--pop-sec:#64748b;--pop-item:#1e293b}
+  body.light .app-item .ic{background:rgba(15,23,42,.06);color:var(--teal)}
+  body.light .app-item:hover{background:rgba(15,23,42,.06)}
+  body.light .pop-head{border-bottom-color:rgba(15,23,42,.08)}
+  body.light .pop-head svg{color:#94a3b8}
+  body.light .pop-head input{color:#1e293b}
+  body.light .pop-head input::placeholder{color:#94a3b8}
+  body.light .dsep{background:rgba(15,23,42,.12)}
+  body.light .app-item small{color:#64748b}
+
+  .placeholder{max-width:640px;margin-top:8px}
+</style>
+</head>
+<body>
+
+<!-- svg icon set (lucide-style strokes) -->
+<svg width="0" height="0" style="position:absolute">
+  <defs>
+    <symbol id="i-home" viewBox="0 0 24 24"><path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.7V21h14V9.7"/><path d="M9.5 21v-6h5v6"/></symbol>
+    <symbol id="i-sales" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M15.5 13h-7M15.5 17h-7"/></symbol>
+    <symbol id="i-pack" viewBox="0 0 24 24"><path d="M21 8l-9-5-9 5v8l9 5 9-5z"/><path d="M3.3 8.3 12 13l8.7-4.7"/><path d="M12 13v9"/></symbol>
+    <symbol id="i-grid" viewBox="0 0 24 24"><rect x="3" y="3" width="7.5" height="7.5" rx="1.5"/><rect x="13.5" y="3" width="7.5" height="7.5" rx="1.5"/><rect x="3" y="13.5" width="7.5" height="7.5" rx="1.5"/><rect x="13.5" y="13.5" width="7.5" height="7.5" rx="1.5"/></symbol>
+    <symbol id="i-users" viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.4"/><path d="M3.4 20c.4-3.2 2.8-5 5.6-5s5.2 1.8 5.6 5"/><path d="M15.6 4.8a3.4 3.4 0 0 1 0 6.6M17.3 15.3c2 .8 3.3 2.4 3.6 4.7"/></symbol>
+    <symbol id="i-store" viewBox="0 0 24 24"><path d="M4.5 10.5V20h15v-9.5"/><path d="M2.5 10 4.6 4h14.8L21.5 10z"/><path d="M2.5 10h19"/><path d="M10 20v-5.5h4V20"/></symbol>
+    <symbol id="i-chart" viewBox="0 0 24 24"><path d="M3.5 3.5v17h17"/><path d="M8.5 16.5v-5M13.5 16.5V7M18.5 16.5v-3"/></symbol>
+    <symbol id="i-bag" viewBox="0 0 24 24"><path d="M6.2 7.5h11.6l1 12.5H5.2z"/><path d="M9 7.5a3 3 0 0 1 6 0"/></symbol>
+    <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20.5 12a8.5 8.5 0 0 1-14.7 5.8L3.5 15.5"/><path d="M3.5 21v-5.5H9"/><path d="M3.5 12a8.5 8.5 0 0 1 14.7-5.8l2.3 2.3"/><path d="M20.5 3v5.5H15"/></symbol>
+    <symbol id="i-truck" viewBox="0 0 24 24"><path d="M1.5 7h13v9.5h-13z"/><path d="M14.5 10.5h4l3 3v3h-7"/><circle cx="6" cy="18.5" r="1.8"/><circle cx="17.5" cy="18.5" r="1.8"/></symbol>
+    <symbol id="i-tag" viewBox="0 0 24 24"><path d="M12 2.5H2.5V12l9.2 9.2a1.4 1.4 0 0 0 2 0l7.5-7.5a1.4 1.4 0 0 0 0-2z"/><circle cx="7.3" cy="7.3" r="1.4"/></symbol>
+    <symbol id="i-db" viewBox="0 0 24 24"><ellipse cx="12" cy="5.2" rx="8" ry="3"/><path d="M4 5.2v13.6c0 1.7 3.6 3 8 3s8-1.3 8-3V5.2"/><path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/></symbol>
+    <symbol id="i-plug" viewBox="0 0 24 24"><path d="M9 7V3M15 7V3"/><path d="M6.5 7h11v4.2a5.5 5.5 0 0 1-11 0z"/><path d="M12 16.7V21"/></symbol>
+    <symbol id="i-calc" viewBox="0 0 24 24"><rect x="5" y="2.5" width="14" height="19" rx="2.2"/><path d="M8.6 6.5h6.8"/><path d="M8.6 11h.01M12 11h.01M15.4 11h.01M8.6 14.4h.01M12 14.4h.01M15.4 14.4h.01M8.6 17.8h.01M12 17.8h.01M15.4 17.8h.01"/></symbol>
+    <symbol id="i-card" viewBox="0 0 24 24"><rect x="2" y="5" width="20" height="14" rx="2.2"/><path d="M2 10h20"/></symbol>
+    <symbol id="i-case" viewBox="0 0 24 24"><rect x="3" y="7.2" width="18" height="13" rx="2"/><path d="M8.5 7V5.2A2.2 2.2 0 0 1 10.7 3h2.6a2.2 2.2 0 0 1 2.2 2.2V7"/><path d="M3 12.5h18"/></symbol>
+    <symbol id="i-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.1"/><path d="M12 2.8v2.6M12 18.6v2.6M2.8 12h2.6M18.6 12h2.6M5.5 5.5l1.9 1.9M16.6 16.6l1.9 1.9M18.5 5.5l-1.9 1.9M7.4 16.6l-1.9 1.9"/></symbol>
+    <symbol id="i-out" viewBox="0 0 24 24"><path d="M9.5 21H5.6a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9"/><path d="M16 17l5-5-5-5M21 12H9.5"/></symbol>
+    <symbol id="i-dots" viewBox="0 0 24 24"><g fill="currentColor" stroke="none"><circle cx="6" cy="6" r="1.9"/><circle cx="12" cy="6" r="1.9"/><circle cx="18" cy="6" r="1.9"/><circle cx="6" cy="12" r="1.9"/><circle cx="12" cy="12" r="1.9"/><circle cx="18" cy="12" r="1.9"/><circle cx="6" cy="18" r="1.9"/><circle cx="12" cy="18" r="1.9"/><circle cx="18" cy="18" r="1.9"/></g></symbol>
+    <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></symbol>
+    <symbol id="i-cart" viewBox="0 0 24 24"><circle cx="9" cy="20.5" r="1.4"/><circle cx="18" cy="20.5" r="1.4"/><path d="M2.5 3h2.6l2.5 12.4a1.8 1.8 0 0 0 1.8 1.4h7.9a1.8 1.8 0 0 0 1.8-1.4L20.8 7H6"/></symbol>
+  </defs>
+</svg>
+
+<div class="rib"><span class="live"></span> DESIGN CONCEPT — floating dock · nothing in the app was changed</div>
+<div class="variants">
+  <button id="vDark" class="on">Dark glass</button>
+  <button id="vLight">Light glass</button>
+</div>
+
+<!-- ============ APP SIMULATION ============ -->
+<div class="app">
+  <div class="topbar">
+    <div class="tb-left">
+      <div class="t1" id="hTitle">Dashboard</div>
+      <div class="t2" id="hSub">London Store</div>
+    </div>
+    <div class="tb-right">
+      <button class="btn"><svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8"><use href="#i-bag"/></svg> Online Orders</button>
+      <button class="btn teal"><svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8"><use href="#i-store"/></svg> Open Till</button>
+      <button class="icbtn"><svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8"><use href="#i-gear"/></svg></button>
+      <button class="icbtn"><svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8"><use href="#i-out"/></svg></button>
+      <div class="avatar"><span class="dot">A</span><span><b>Administrator</b><small>Administrator</small></span></div>
+    </div>
+  </div>
+
+  <div class="content" id="content">
+    <div id="pageDash">
+      <div class="ph-title">Dashboard</div>
+      <div class="ph-sub">Today's activity for the current store.</div>
+      <div class="cards">
+        <div class="card"><div class="lbl">Today's Sales</div><div class="val">£60.00</div></div>
+        <div class="card"><div class="lbl">Transactions</div><div class="val">1</div></div>
+        <div class="card"><div class="lbl">Average Sale</div><div class="val">£60.00</div></div>
+        <div class="card"><div class="lbl">Low Stock</div><div class="val">0</div></div>
+      </div>
+      <div class="row2">
+        <div class="panel">
+          <h3>Sales Overview · Last 7 days</h3>
+          <div class="chart">
+            <div class="bar" style="height:6%"></div><div class="bar" style="height:5%"></div>
+            <div class="bar" style="height:26%"></div><div class="bar" style="height:95%"></div>
+            <div class="bar" style="height:38%"></div><div class="bar" style="height:92%"></div>
+            <div class="bar" style="height:90%"></div>
+          </div>
+          <div class="xlab"><span>09-12</span><span>09-13</span><span>09-14</span><span>09-15</span><span>09-16</span><span>09-17</span><span>09-18</span></div>
+        </div>
+        <div class="panel">
+          <h3>Quick Actions</h3>
+          <div class="qa">
+            <div class="q"><span class="ic"><svg width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8"><use href="#i-pack"/></svg></span><span><b>Add Product</b><small>Create a new product for this store</small></span></div>
+            <div class="q"><span class="ic"><svg width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8"><use href="#i-users"/></svg></span><span><b>Add Customer</b><small>Register a customer for delivery &amp; invoices</small></span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div id="pageOther" class="placeholder" style="display:none"></div>
+  </div>
+
+  <div class="statusbar"><span>Fri 18 Sept 2026 · 03:41 am</span><span>Store: London Store</span></div>
+</div>
+
+<!-- ============ LAUNCHER POPUP (all secondary pages) ============ -->
+<div class="pop" id="pop">
+  <div class="pop-head">
+    <svg fill="none" stroke="currentColor" stroke-width="1.8"><use href="#i-search"/></svg>
+    <input id="popSearch" type="text" placeholder="Search pages…  (Esc to close)" />
+  </div>
+  <div class="pop-body" id="popBody">
+    <div class="grp">Operations</div>
+    <div class="grid">
+      <button class="app-item" data-page="Returns"><span class="ic"><svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8"><use href="#i-refresh"/></svg></span><span><b>Returns</b><small>Customer returns &amp; refunds</small></span></button>
+      <button class="app-item" data-page="Supplier Returns"><span class="ic"><svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8"><use href="#i-refresh"/></svg></span><span><b>Supplier Returns</b><small>Return stock to suppliers</small></span></button>
+      <button class="app-item" data-page="Order Prep"><span class="ic"><svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8"><use href="#i-bag"/></svg></span><span><b>Order Prep</b><small>Uber Eats · Deliveroo</small></span></button>
+      <button class="app-item" data-page="Payments"><span class="ic"><svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8"><use href="#i-card"/></svg></span><span><b>Payments</b><small>Terminals &amp; methods</small></span></button>
+    </div>
+    <div class="grp">Catalogue &amp; Supply</div>
+    <div class="grid">
+      <button class="app-item" data-page="Categories"><span class="ic"><svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8"><use href="#i-tag"/></svg></span><span><b>Categories</b><small>Product groupings</small></span></button>
+      <button class="app-item" data-page="Global Products"><span class="ic"><svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8"><use href="#i-db"/></svg></span><span><b>Global Products</b><small>EAN product master</small></span></button>
+      <button class="app-item" data-page="Purchases"><span class="ic"><svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8"><use href="#i-sales"/></svg></span><span><b>Purchases</b><small>POs &amp; receiving</small></span></button>
+      <button class="app-item" data-page="Suppliers"><span class="ic"><svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8"><use href="#i-users"/></svg></span><span><b>Suppliers</b><small>Supplier directory</small></span></button>
+    </div>
+    <div class="grp">Business</div>
+    <div class="grid">
+      <button class="app-item" data-page="Stores"><span class="ic"><svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8"><use href="#i-store"/></svg></span><span><b>Stores</b><small>Locations &amp; tills</small></span></button>
+      <button class="app-item" data-page="Employees"><span class="ic"><svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8"><use href="#i-case"/></svg></span><span><b>Employees</b><small>Staff &amp; roles</small></span></button>
+      <button class="app-item" data-page="Reports"><span class="ic"><svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8"><use href="#i-chart"/></svg></span><span><b>Reports</b><small>Sales · VAT · Profit…</small></span><span class="badge">9</span></button>
+    </div>
+    <div class="grp">Admin</div>
+    <div class="grid">
+      <button class="app-item" data-page="Integrations"><span class="ic"><svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8"><use href="#i-plug"/></svg></span><span><b>Integrations</b><small>Connected services</small></span></button>
+      <button class="app-item" data-page="Accounting"><span class="ic"><svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8"><use href="#i-calc"/></svg></span><span><b>Accounting</b><small>Export &amp; sync</small></span></button>
+      <button class="app-item" data-page="Settings"><span class="ic"><svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8"><use href="#i-gear"/></svg></span><span><b>Settings</b><small>Store configuration</small></span></button>
+    </div>
+  </div>
+</div>
+
+<!-- ============ THE DOCK ============ -->
+<nav class="dock" id="dock">
+  <button class="ditem active" data-tip="Dashboard" data-page="Dashboard"><svg fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><use href="#i-home"/></svg></button>
+  <button class="ditem" data-tip="Sales" data-page="Sales"><svg fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><use href="#i-sales"/></svg></button>
+  <button class="ditem" data-tip="Products" data-page="Products"><svg fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><use href="#i-pack"/></svg></button>
+  <button class="ditem" data-tip="Inventory" data-page="Inventory"><svg fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><use href="#i-grid"/></svg></button>
+
+  <button class="launcher pulse" id="launcher" data-tip="All pages" aria-label="Open all pages"><svg fill="none" stroke="currentColor"><use href="#i-dots"/></svg></button>
+
+  <button class="ditem" data-tip="Customers" data-page="Customers"><svg fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><use href="#i-users"/></svg></button>
+  <button class="ditem" data-tip="Reports" data-page="Reports"><svg fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><use href="#i-chart"/></svg></button>
+  <button class="ditem accent" data-tip="Open Till (POS)" data-page="POS"><svg fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><use href="#i-store"/></svg></button>
+</nav>
+
+<script>
+  const pop = document.getElementById("pop");
+  const launcher = document.getElementById("launcher");
+  const search = document.getElementById("popSearch");
+
+  launcher.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const open = pop.classList.toggle("open");
+    launcher.classList.toggle("open", open);
+    launcher.classList.remove("pulse");
+    if (open) setTimeout(() => search.focus(), 120);
+  });
+  document.addEventListener("click", (e) => {
+    if (!pop.contains(e.target) && e.target !== launcher) closePop();
+  });
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape") closePop(); });
+  function closePop(){ pop.classList.remove("open"); launcher.classList.remove("open"); }
+
+  search.addEventListener("input", () => {
+    const q = search.value.toLowerCase();
+    document.querySelectorAll(".app-item").forEach((it) => {
+      it.style.display = it.textContent.toLowerCase().includes(q) ? "" : "none";
+    });
+    document.querySelectorAll(".grp").forEach((g) => {
+      let s = g.nextElementSibling, any = false, items = s.querySelectorAll(".app-item");
+      items.forEach((i) => { if (i.style.display !== "none") any = true; });
+      g.style.display = any ? "" : "none";
+      s.style.display = any ? "" : "none";
+    });
+  });
+
+  /* page switching (mock): dock + popup items update header + placeholder */
+  const TITLES = {
+    Dashboard:["Dashboard","London Store"],
+    Sales:["Sales","All sales in the current store"],
+    Products:["Products","Manage products for your store"],
+    Inventory:["Inventory","Current stock and movements"],
+    Customers:["Customers","Customer directory & history"],
+    Reports:["Reports","Sales · Payments · VAT · Profit and more"],
+    POS:["Point of Sale","Till is ready — scan a product to begin"],
+    Returns:["Returns","Customer returns & refunds"],
+    "Supplier Returns":["Supplier Returns","Return stock to suppliers"],
+    "Order Prep":["Order Prep","Uber Eats · Deliveroo incoming orders"],
+    Payments:["Payments","Terminals & payment methods"],
+    Categories:["Categories","Product categories"],
+    "Global Products":["Global Products","EAN product master"],
+    Purchases:["Purchases","Purchase orders & receiving"],
+    Suppliers:["Suppliers","Supplier directory"],
+    Stores:["Stores","Locations & tills"],
+    Employees:["Employees","Staff & roles"],
+    Integrations:["Integrations","Connected services"],
+    Accounting:["Accounting","Accounting export & sync"],
+    Settings:["Settings","Store configuration"],
+  };
+  const ICONS = { Returns:"i-refresh","Supplier Returns":"i-refresh","Order Prep":"i-bag",Payments:"i-card",Categories:"i-tag","Global Products":"i-db",Purchases:"i-sales",Suppliers:"i-users",Stores:"i-store",Employees:"i-case",Integrations:"i-plug",Accounting:"i-calc",Settings:"i-gear",Reports:"i-chart" };
+
+  function goPage(page){
+    document.querySelectorAll(".ditem").forEach((d) => d.classList.toggle("active", d.dataset.page === page));
+    const [t, s] = TITLES[page] || [page, "London Store"];
+    document.getElementById("hTitle").textContent = t;
+    document.getElementById("hSub").textContent = s;
+    const dash = page === "Dashboard";
+    document.getElementById("pageDash").style.display = dash ? "" : "none";
+    const other = document.getElementById("pageOther");
+    other.style.display = dash ? "none" : "";
+    if (!dash) {
+      const ic = ICONS[page] || "i-home";
+      other.innerHTML = `<div class="panel placeholder" style="display:flex;gap:16px;align-items:center">
+        <span class="ic" style="width:46px;height:46px;border-radius:13px;background:#e6f2f0;color:#176F6A;display:grid;place-items:center">
+          <svg width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8"><use href="#${ic}"/></svg></span>
+        <span><b style="font-size:15px">${t} page</b>
+        <small style="display:block;color:#64748b;margin-top:3px">The existing page renders here unchanged — the dock only replaces the left sidebar navigation.</small></span>
+      </div>`;
+    }
+    closePop();
+  }
+  document.querySelectorAll(".ditem, .app-item").forEach((el) => {
+    el.addEventListener("click", () => goPage(el.dataset.page));
+  });
+
+  /* glass variant switcher */
+  const vD = document.getElementById("vDark"), vL = document.getElementById("vLight");
+  vD.onclick = () => { document.body.classList.remove("light"); vD.classList.add("on"); vL.classList.remove("on"); };
+  vL.onclick = () => { document.body.classList.add("light"); vL.classList.add("on"); vD.classList.remove("on"); };
+</script>
+</body>
+</html>

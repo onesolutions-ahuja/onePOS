@@ -4,9 +4,30 @@ import { apiRequest } from "../../services/api.js";
 import WhatsAppSettings from "./whatsapp/WhatsAppSettings.jsx";
 import InvoiceDeliverySettings from "./invoiceDeliverySettings.jsx";
 import { Toggle } from "../../components/ui.jsx";
+/*
+ * Settings navigation - compact grouped tabs.
+ *
+ * Thirteen sections in one flat row overflow a 15-inch screen, so they are
+ * grouped into six short groups; the active group's sections render as a
+ * compact second row. Every section keeps its exact name and content -
+ * grouping is navigation only.
+ */
+const SETTING_GROUPS = [
+  { label: "General", sections: ["General", "Company", "Store & Till"] },
+  { label: "Sales & Tax", sections: ["Tax / VAT", "Receipts", "Payment Terminals"] },
+  { label: "Hardware", sections: ["Hardware"] },
+  { label: "Users", sections: ["Users & Permissions"] },
+  { label: "Integrations", sections: ["Integrations", "Online Platforms", "WhatsApp"] },
+  { label: "Delivery", sections: ["SMS Delivery", "Email Delivery"] },
+];
+
 function SettingsAdmin({ initialTab = "General" }) {
-  const tabs = ["General", "Company", "Store & Till", "Tax / VAT", "Payment Terminals", "Hardware", "Receipts", "Users & Permissions", "Integrations", "Online Platforms", "WhatsApp", "SMS Delivery", "Email Delivery"];
-  const [tab, setTab] = useState(initialTab);
+  const tabs = SETTING_GROUPS.flatMap((group) => group.sections);
+  const [tab, setTab] = useState(
+    tabs.includes(initialTab) ? initialTab : "General"
+  );
+  const activeGroup =
+    SETTING_GROUPS.find((group) => group.sections.includes(tab)) || SETTING_GROUPS[0];
   const [settings, setSettings] = useState(null);
   const [terminals, setTerminals] = useState([]);
   const [hardware, setHardware] = useState([]);
@@ -86,7 +107,7 @@ setForm({
 
   if (!settings || !form) return <div className="bg-white border border-slate-200 rounded-xl p-8 max-w-2xl"><h2 className="font-semibold text-red-700">Settings are unavailable</h2><p className="text-sm text-slate-600 mt-2">No settings data was returned by the server.</p><button onClick={load} className="mt-5 h-10 px-4 bg-blue-600 text-white rounded-lg text-sm font-medium flex items-center gap-2"><RefreshCw size={16} /> Retry</button></div>;
 
-  return <div><div className="mb-5"><h1 className="text-2xl font-bold">Settings</h1><p className="text-sm text-slate-500 mt-1">Company, till, tax, hardware and integration configuration.</p></div><div className="flex gap-1 border-b border-slate-200 mb-5 overflow-x-auto">{tabs.map((item) => <button key={item} onClick={() => { setTab(item); setMessage(""); setError(""); }} className={`px-3 py-2 text-sm whitespace-nowrap border-b-2 ${tab === item ? "border-blue-600 text-blue-700 font-medium" : "border-transparent text-slate-500 hover:text-slate-800"}`}>{item}</button>)}</div>{message && <div className="mb-4 px-4 py-3 bg-emerald-50 border border-emerald-200 text-emerald-700 rounded-lg text-sm">{message}</div>}{error && <div className="mb-4 px-4 py-3 bg-red-50 border border-red-200 text-red-700 rounded-lg text-sm">{error}</div>}{["General", "Company", "Tax / VAT"].includes(tab) && <SettingsForm tab={tab} form={form} setForm={setForm} onSave={saveSettings} />}{tab === "Store & Till" && <StoreTillSettings settings={settings} onMessage={setMessage} onError={setError} />}{tab === "Payment Terminals" && <PaymentTerminalSettings terminals={terminals} onSaved={load} onMessage={setMessage} onError={setError} />}{tab === "Hardware" && <HardwareSettings hardware={hardware} onSave={saveHardware} onTest={testHardware} />}{tab === "Integrations" && <IntegrationHealth health={health} />}{tab === "Online Platforms" && <OnlinePlatformSettings onMessage={setMessage} onError={setError} />}{tab === "WhatsApp" && <WhatsAppSettings onMessage={setMessage} onError={setError} />}{tab === "SMS Delivery" && <InvoiceDeliverySettings channel="sms" onMessage={setMessage} onError={setError} />}{tab === "Email Delivery" && <InvoiceDeliverySettings channel="email" onMessage={setMessage} onError={setError} />}{tab === "Users & Permissions" && <UsersPermissionsSettings onMessage={setMessage} onError={setError} />}{tab === "Receipts" && <ReceiptSettings settings={settings} form={form} setForm={setForm} onSave={saveSettings} />}</div>;
+  return <div><div className="mb-5"><h1 className="text-2xl font-bold">Settings</h1><p className="text-sm text-slate-500 mt-1">Company, till, tax, hardware and integration configuration.</p></div><div className="mb-3"><div className="flex gap-1 overflow-x-auto">{SETTING_GROUPS.map((group) => { const groupActive = group === activeGroup; return <button key={group.label} onClick={() => { setTab(group.sections[0]); setMessage(""); setError(""); }} className={`px-3 h-8 text-sm whitespace-nowrap rounded-md transition-colors ${groupActive ? "bg-blue-600 text-white font-medium" : "text-slate-600 hover:bg-slate-100"}`}>{group.label}</button>; })}</div><div className="flex gap-1 border-b border-slate-200 overflow-x-auto">{activeGroup.sections.map((item) => <button key={item} onClick={() => { setTab(item); setMessage(""); setError(""); }} className={`px-3 py-2 text-sm whitespace-nowrap border-b-2 -mb-px ${tab === item ? "border-blue-600 text-blue-700 font-medium" : "border-transparent text-slate-500 hover:text-slate-800"}`}>{item}</button>)}</div></div>{message && <div className="mb-4 px-4 py-3 bg-emerald-50 border border-emerald-200 text-emerald-700 rounded-lg text-sm">{message}</div>}{error && <div className="mb-4 px-4 py-3 bg-red-50 border border-red-200 text-red-700 rounded-lg text-sm">{error}</div>}{["General", "Company", "Tax / VAT"].includes(tab) && <SettingsForm tab={tab} form={form} setForm={setForm} onSave={saveSettings} />}{tab === "Store & Till" && <StoreTillSettings settings={settings} onMessage={setMessage} onError={setError} />}{tab === "Payment Terminals" && <PaymentTerminalSettings terminals={terminals} onSaved={load} onMessage={setMessage} onError={setError} />}{tab === "Hardware" && <HardwareSettings hardware={hardware} onSave={saveHardware} onTest={testHardware} />}{tab === "Integrations" && <IntegrationHealth health={health} />}{tab === "Online Platforms" && <OnlinePlatformSettings onMessage={setMessage} onError={setError} />}{tab === "WhatsApp" && <WhatsAppSettings onMessage={setMessage} onError={setError} />}{tab === "SMS Delivery" && <InvoiceDeliverySettings channel="sms" onMessage={setMessage} onError={setError} />}{tab === "Email Delivery" && <InvoiceDeliverySettings channel="email" onMessage={setMessage} onError={setError} />}{tab === "Users & Permissions" && <UsersPermissionsSettings onMessage={setMessage} onError={setError} />}{tab === "Receipts" && <ReceiptSettings settings={settings} form={form} setForm={setForm} onSave={saveSettings} />}</div>;
 }
 
 function UsersPermissionsSettings({ onMessage, onError }) {
@@ -144,14 +165,92 @@ function UserFormModal({ form: initial, roles, stores, onClose, onSave }) {
 }
 
 const PERMISSION_GROUPS = [
-  { label: "Sales", codes: ["sale.create","sale.discount","sale.void_item","sale.void","sale.refund","sale.price_change","sale.hold"] },
-  { label: "Cash Management", codes: ["cash.open_drawer","cash.payout","cash.adjustment"] },
-  { label: "Till", codes: ["till.open","till.close"] },
-  { label: "Products", codes: ["product.view","product.create","product.edit","product.delete"] },
-  { label: "Inventory", codes: ["inventory.view","inventory.adjust"] },
-  { label: "Customers", codes: ["customer.view","customer.create","customer.edit"] },
-  { label: "Reports", codes: ["report.view","report.export"] },
-  { label: "Administration", codes: ["user.manage","role.manage","payment.manage","integration.manage","settings.manage"] },
+  {
+    label: "Sales",
+    codes: [
+      "sale.view",
+      "sale.create",
+      "sale.edit",
+      "sale.delete",
+      "sale.invoice.view",
+      "sale.invoice.reprint",
+      "sale.discount",
+      "sale.void_item",
+      "sale.void",
+      "sale.refund",
+      "sale.refund_without_receipt",
+      "sale.price_change",
+      "sale.hold",
+    ],
+  },
+  { label: "Cash Management", codes: ["cash.open_drawer", "cash.payout", "cash.adjustment"] },
+  { label: "Till", codes: ["till.open", "till.close"] },
+  {
+    label: "Customers",
+    codes: [
+      "customer.view",
+      "customer.create",
+      "customer.edit",
+      "customer.delete",
+    ],
+  },
+  {
+    label: "Products",
+    codes: [
+      "product.view",
+      "product.create",
+      "product.edit",
+      "product.delete",
+    ],
+  },
+  {
+    label: "Purchases",
+    codes: [
+      "purchase.view",
+      "purchase.create",
+      "purchase.edit",
+      "purchase.delete",
+    ],
+  },
+  {
+    label: "Inventory",
+    codes: [
+      "inventory.view",
+      "inventory.movements.view",
+      "inventory.adjust",
+    ],
+  },
+  {
+    label: "Sales Returns",
+    codes: [
+      "returns.view",
+      "returns.create",
+      "returns.approve",
+    ],
+  },
+  {
+    label: "Reports",
+    codes: [
+      "reports.summary.view",
+      "reports.sales.view",
+      "reports.products.view",
+      "reports.customers.view",
+      "reports.inventory.view",
+      "reports.inventory_movements.view",
+      "reports.low_stock.view",
+      "reports.payments.view",
+      "reports.purchases.view",
+      "reports.returns.view",
+      "reports.profit.view",
+      "reports.till.view",
+      "reports.vat.view",
+      "report.export",
+    ],
+  },
+  {
+    label: "Administration",
+    codes: ["user.manage", "role.manage", "payment.manage", "integration.manage", "settings.manage"],
+  },
 ];
 
 function RolePermissionsManager({ roles, onMessage, onError }) {
@@ -188,6 +287,13 @@ function RolePermissionsManager({ roles, onMessage, onError }) {
       if (!data.success) throw new Error(data.message);
       setRolePermissions(data.data);
       onMessage("Permissions saved.");
+      /* Reload permissions from the server so the saved state is confirmed and
+         any codes filtered out server-side (e.g. invalid / missing permission
+         rows) are reflected back in the UI before the user reopens the panel.
+         This prevents the "Saved → reopen → unchecked" phantom from showing
+         even though the DB row was in fact persisted. */
+      const verifyResp = await apiRequest(`/api/admin/roles/${selectedRoleId}/permissions`);
+      if (verifyResp.success) setRolePermissions(verifyResp.data || []);
     } catch (err) {
       onError(err.message || "Unable to save permissions");
     } finally {
@@ -200,8 +306,42 @@ function RolePermissionsManager({ roles, onMessage, onError }) {
     else setRolePermissions([...rolePermissions, code]);
   };
 
+  /* If the permission code doesn't exist yet in allPermissions (the catalogue
+     returned by /api/admin/permissions), show it with a neutral "Not synced
+     to permission catalogue" hint so the user knows the checkbox is present
+     but the seed rows may not have been run. */
   const permLabels = {};
   allPermissions.forEach((p) => { permLabels[p.code] = p.name; });
+  const permTooltip = (code) => {
+    const match = allPermissions.find((p) => p.code === code);
+    if (!match) return `${code} — permission not registered in catalogue; seed DB to persist.`;
+    return match.description ? `${match.name} — ${match.description}` : match.name;
+  };
+
+  /* When the user changes role, re-run loadRolePermissions AFTER the state
+     setter applies so the load reads the newly-selected option and, critically,
+     overwrites any leftover state from the PREVIOUS role. This prevents "role
+     A's checkboxes" from flashing on role B when B was opened earlier. */
+  const handleRoleChange = async (roleId) => {
+    if (!roleId) {
+      setSelectedRoleId("");
+      setRolePermissions([]);
+      setAllPermissions([]);
+      return;
+    }
+    try {
+      setLoading(true);
+      const permResp = await apiRequest("/api/admin/permissions");
+      if (permResp.success) setAllPermissions(permResp.data || []);
+      const roleResp = await apiRequest(`/api/admin/roles/${roleId}/permissions`);
+      if (roleResp.success) setRolePermissions(roleResp.data || []);
+      setSelectedRoleId(roleId);
+    } catch (err) {
+      onError(err.message || "Unable to load permissions");
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const selectedRoleName = roles.find((r) => r.id === selectedRoleId)?.name || "";
 
@@ -215,7 +355,7 @@ function RolePermissionsManager({ roles, onMessage, onError }) {
         <label className="block text-sm font-medium text-slate-600 mb-1">Select role</label>
         <select
           value={selectedRoleId}
-          onChange={(e) => loadRolePermissions(e.target.value)}
+          onChange={(e) => handleRoleChange(e.target.value)}
           className="w-full max-w-xs h-9 px-3 border border-slate-200 rounded-lg bg-white text-sm"
         >
           <option value="">Choose a role…</option>
@@ -241,14 +381,16 @@ function RolePermissionsManager({ roles, onMessage, onError }) {
                   <div className="bg-slate-50 border-b px-4 py-2 font-medium text-sm text-slate-700">{group.label}</div>
                   <div className="p-3 grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2">
                     {group.codes.map((code) => (
-                      <label key={code} className="inline-flex items-center gap-2 text-sm text-slate-700 cursor-pointer">
+                      <label key={code} className="inline-flex items-center gap-2 text-sm text-slate-700 cursor-pointer" title={permTooltip(code)}>
                         <input
                           type="checkbox"
                           checked={rolePermissions.includes(code)}
                           onChange={() => toggle(code)}
                           className="accent-blue-600"
                         />
-                        {permLabels[code] || code}
+                        <span className={allPermissions.some((p) => p.code === code) ? "" : "text-orange-600"}>
+                          {permLabels[code] || code}
+                        </span>
                       </label>
                     ))}
                   </div>

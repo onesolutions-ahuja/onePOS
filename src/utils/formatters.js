@@ -8,6 +8,8 @@ export function normaliseProduct(product) {
     price: Number(product.price ?? product.selling_price ?? product.unit_price ?? 0),
     cost: Number(product.cost ?? product.cost_price ?? 0),
     vatRate: Number(product.vat_rate ?? product.vatRate ?? 20),
+    vatApplicable: product.vat_applicable !== undefined ? product.vat_applicable !== false : product.vatApplicable !== false,
+    ageRestricted: product.age_restricted === true || product.ageRestricted === true,
     lowStockLevel: Number(product.low_stock_level ?? product.lowStockLevel ?? 0),
     trackStock: product.track_stock !== false && product.trackStock !== false,
     availableOnUber: product.available_on_uber === true || product.availableOnUber === true,

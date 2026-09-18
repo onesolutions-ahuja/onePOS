@@ -1,0 +1,9 @@
+﻿13: router.get("/categories", authenticate, authorize("product.view"), async (req, res) => {
+55: router.post("/categories", authenticate, authorize("product.create"), async (req, res) => {
+105: router.put("/categories/:id", authenticate, authorize("product.edit"), async (req, res) => {
+166: router.delete("/categories/:id", authenticate, authorize("product.delete"), async (req, res) => {
+204: router.get("/products", authenticate, authorize("product.view"), async (req, res) => {
+258: router.get("/products/:id", authenticate, authorize("product.view"), async (req, res) => {
+310: router.post("/products", authenticate, authorize("product.create"), async (req, res) => {
+522: router.put("/products/:id", authenticate, authorize("product.edit"), async (req, res) => {
+712: router.delete("/products/:id", authenticate, authorize("product.delete"), async (req, res) => {

@@ -10,6 +10,8 @@ export default function createSalesRouter({
   pool,
   createInventoryMovement,
   associateCustomerWithStore,
+  writeAudit = null,
+  selfCheckoutMode = null,
 }) {
   const router = express.Router();
 
@@ -36,7 +38,7 @@ export default function createSalesRouter({
   router.get(
     "/sales",
     authenticate,
-    authorize("sale.create", "sale.refund"),
+    authorize("sale.view", "sale.create", "sale.refund"),
     async (req, res) => {
       try {
         const params = [req.user.companyId, req.user.storeId];
@@ -93,7 +95,7 @@ export default function createSalesRouter({
   router.get(
     "/sales/:id",
     authenticate,
-    authorize("sale.create", "sale.refund"),
+    authorize("sale.view", "sale.invoice.view", "sale.create", "sale.refund"),
     async (req, res) => {
       try {
         const sale = await db(
@@ -211,7 +213,22 @@ export default function createSalesRouter({
           discount = 0,
           total = 0,
           paymentMethod = "cash",
+          ageVerified, // T10C: operator confirmation flag, verified against the DB below
         } = req.body;
+
+        /*
+         * T10D: a Self-Checkout session may only pay by card. The payment
+         * contract, sale engine and inventory path are the same as the
+         * staff till — only the cash option is removed, and it is removed
+         * SERVER-SIDE, not just hidden in the UI.
+         */
+        if (paymentMethod === "cash" && typeof selfCheckoutMode === "function" && selfCheckoutMode(req)) {
+          await client.query("ROLLBACK");
+          return res.status(403).json({
+            success: false,
+            message: "Cash is not accepted at Self-Checkout. Please pay by card.",
+          });
+        }
 
         if (!Array.isArray(items) || !items.length) {
           await client.query("ROLLBACK");
@@ -235,6 +252,7 @@ export default function createSalesRouter({
         /*
          * Make sure all products belong to this company.
          */
+        let basketHasAgeRestricted = false; // T10C
         for (const item of items) {
           if (!Number.isFinite(Number(item.quantity)) || Number(item.quantity) <= 0) {
             throw new Error("Sale quantities must be greater than zero");
@@ -247,7 +265,8 @@ export default function createSalesRouter({
             name,
             price,
             stock_quantity,
-            track_stock
+            track_stock,
+            age_restricted
           FROM products
           WHERE id = $1
             AND company_id = $2
@@ -263,12 +282,30 @@ export default function createSalesRouter({
 
           const p = product.rows[0];
 
+          if (p.age_restricted === true) {
+            basketHasAgeRestricted = true;
+          }
+
           if (
             p.track_stock &&
             Number(p.stock_quantity) < Number(item.quantity)
           ) {
             throw new Error(`Insufficient stock for ${p.name}`);
           }
+        }
+
+        /*
+         * T10C: server-side age-verification gate. The POS modal alone is
+         * NOT trusted — a direct API call containing age-restricted products
+         * without a confirmed verification is rejected here, before any
+         * sale/payment/inventory write.
+         */
+        if (basketHasAgeRestricted && ageVerified !== true) {
+          await client.query("ROLLBACK");
+          return res.status(403).json({
+            success: false,
+            message: "Age verification required for age-restricted products",
+          });
         }
 
         /*
@@ -442,6 +479,26 @@ export default function createSalesRouter({
         );
 
         await client.query("COMMIT");
+
+        /*
+         * T10C audit trail: one minimal verification event per restricted
+         * sale (sale ID, store, operator, timestamp, confirmed — no personal
+         * data). Fire-and-forget through the SHARED audit writer after the
+         * sale has committed, so an audit failure can never block or fail a
+         * legitimate verified sale (same policy as every other audit write).
+         */
+        if (basketHasAgeRestricted && typeof writeAudit === "function") {
+          Promise.resolve(
+            writeAudit(
+              req.user.companyId,
+              req.user.id,
+              "SALE_AGE_VERIFIED",
+              "sale",
+              saleId,
+              { verified: true, storeId: req.user.storeId ?? null }
+            )
+          ).catch((auditError) => console.error("Age-verification audit write error:", auditError));
+        }
 
         /*
          * T9G: fire-and-forget integration dispatch (never blocks/throws -

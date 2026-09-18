@@ -214,6 +214,8 @@ export default function createProductsRouter({ authenticate, authorize, db, pool
           p.price,
           p.cost_price,
           p.vat_rate,
+          p.vat_applicable,
+          p.age_restricted,
           p.stock_quantity,
           p.low_stock_level,
           p.track_stock,
@@ -325,6 +327,8 @@ export default function createProductsRouter({ authenticate, authorize, db, pool
         price = 0,
         costPrice = 0,
         vatRate = 20,
+        vatApplicable = true,
+        ageRestricted = false,
         stockQuantity = 0,
         lowStockLevel = 0,
         trackStock = true,
@@ -399,6 +403,7 @@ export default function createProductsRouter({ authenticate, authorize, db, pool
           price,
           cost_price,
           vat_rate,
+          vat_applicable,
           stock_quantity,
           low_stock_level,
           track_stock,
@@ -406,10 +411,11 @@ export default function createProductsRouter({ authenticate, authorize, db, pool
           available_on_uber,
           available_on_deliveroo,
           uber_item_id,
-          deliveroo_item_id
+          deliveroo_item_id,
+          age_restricted
         )
         VALUES (
-          $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,true,$13,$14,$15,$16
+          $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,0,$11,$12,true,$13,$14,$15,$16
         )
         RETURNING
           id,
@@ -420,6 +426,8 @@ export default function createProductsRouter({ authenticate, authorize, db, pool
           price,
           cost_price,
           vat_rate,
+          vat_applicable,
+          age_restricted,
           stock_quantity,
           low_stock_level,
           track_stock,
@@ -442,25 +450,41 @@ export default function createProductsRouter({ authenticate, authorize, db, pool
           Number(price) || 0,
           Number(costPrice) || 0,
           Number(vatRate) || 0,
-          0,
+          vatApplicable !== false,
           Number(lowStockLevel) || 0,
           Boolean(trackStock),
           Boolean(availableOnUber),
           Boolean(availableOnDeliveroo),
           uberItemId || null,
           deliverooItemId || null,
+          /* T10C: age_restricted is the LAST insert column/param so the
+           * pre-existing parameter layout (positions 1-16) is unchanged. */
+          Boolean(ageRestricted),
         ]
       );
 
-      const initialStock = Number(stockQuantity) || 0;
+      /*
+       * Opening stock (store-specific, create-only).
+       *
+       * The products.stock_quantity column is the store's running balance for
+       * this product (all movements are written against the operator's
+       * store). The OPENING movement type exists in the inventory ledger, so
+       * the initial quantity is established through the EXISTING mechanism:
+       * traceable (inventory_movements row, reason "Opening stock"), never
+       * duplicated, and never touched again by product edits. A zero opening
+       * quantity still writes an explicit OPENING row so the starting balance
+       * is on the audit trail; track_stock=OFF products skip it entirely —
+       * no opening stock is created or used.
+       */
+      const openingStock = Number(stockQuantity) || 0;
 
-      if (initialStock >= 0) {
+      if (trackStock && openingStock >= 0) {
         const movement = await createInventoryMovement(client, {
           companyId: req.user.companyId,
           productId: result.rows[0].id,
           storeId: req.user.storeId,
           movementType: "OPENING",
-          quantityChange: initialStock,
+          quantityChange: openingStock,
           reason: "Opening stock",
           createdBy: req.user.id,
         });
@@ -505,6 +529,8 @@ export default function createProductsRouter({ authenticate, authorize, db, pool
         price = 0,
         costPrice = 0,
         vatRate = 20,
+        vatApplicable, // undefined = keep current (edits never flip VAT silently)
+        ageRestricted, // undefined = keep current (edits never flip age restriction silently)
         lowStockLevel = 0,
         trackStock = true,
         categoryId = null,
@@ -602,15 +628,17 @@ export default function createProductsRouter({ authenticate, authorize, db, pool
           price = $6,
           cost_price = $7,
           vat_rate = $8,
-          low_stock_level = $9,
-          track_stock = $10,
-          available_on_uber = $11,
-          available_on_deliveroo = $12,
-          uber_item_id = $13,
-          deliveroo_item_id = $14,
+          vat_applicable = COALESCE($9, vat_applicable),
+          age_restricted = COALESCE($10, age_restricted),
+          low_stock_level = $11,
+          track_stock = $12,
+          available_on_uber = $13,
+          available_on_deliveroo = $14,
+          uber_item_id = $15,
+          deliveroo_item_id = $16,
           updated_at = NOW()
-        WHERE id = $15
-          AND company_id = $16
+        WHERE id = $17
+          AND company_id = $18
         RETURNING
           id,
           name,
@@ -620,6 +648,8 @@ export default function createProductsRouter({ authenticate, authorize, db, pool
           price,
           cost_price,
           vat_rate,
+          vat_applicable,
+          age_restricted,
           stock_quantity,
           low_stock_level,
           track_stock,
@@ -641,6 +671,13 @@ export default function createProductsRouter({ authenticate, authorize, db, pool
           Number(price) || 0,
           Number(costPrice) || 0,
           Number(vatRate) || 0,
+          /* Edit-safety guarantees:
+           *  - vatApplicable undefined -> COALESCE keeps the stored value.
+           *  - stock_quantity is NOT in the UPDATE set: editing a product
+           *    can never reset current stock to an opening value. Opening
+           *    stock is written once, at creation, via the OPENING movement. */
+          vatApplicable === undefined ? null : vatApplicable === true,
+          ageRestricted === undefined ? null : ageRestricted === true,
           Number(lowStockLevel) || 0,
           Boolean(trackStock),
           Boolean(availableOnUber),

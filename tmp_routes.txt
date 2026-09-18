@@ -1,0 +1,146 @@
+﻿admin.js|16|router.get("/admin/users", authenticate, authorize("user.manage"), async (req, res) => {
+admin.js|28|router.get("/admin/roles", authenticate, authorize("role.manage"), async (req, res) => {
+admin.js|40|router.get("/admin/permissions", authenticate, authorize("role.manage"), async (req, res) => {
+admin.js|54|router.get("/admin/roles/:roleId/permissions", authenticate, authorize("role.manage"), async (req, res) => {
+admin.js|70|router.put("/admin/roles/:roleId/permissions", authenticate, authorize("role.manage"), async (req, res) => {
+admin.js|101|router.get("/admin/stores", authenticate, async (req, res) => {
+admin.js|109|router.put("/admin/stores/:id", authenticate, async (req, res) => {
+admin.js|117|router.put("/admin/tills/:id", authenticate, async (req, res) => {
+admin.js|125|router.post("/admin/users", authenticate, authorize("user.manage"), async (req, res) => {
+admin.js|148|router.put("/admin/users/:id", authenticate, authorize("user.manage"), async (req, res) => {
+admin.js|176|router.post("/admin/users/:id/reset-password", authenticate, authorize("user.manage"), async (req, res) => {
+admin.js|195|router.post('/admin/stores', authenticate, async (req, res) => {
+admin.js|215|router.get('/admin/stores/:id/stats', authenticate, async (req, res) => {
+auth.js|16|router.post("/setup", async (req, res) => {
+auth.js|193|router.post("/login", async (req, res) => {
+auth.js|313|router.get("/me", async (req, res) => {
+auth.js|400|router.get("/me/permissions", async (req, res) => {
+auth.js|496|router.post("/change-password", async (req, res) => {
+customers.js|16|router.get("/customers", authenticate, authorize("customer.view"), async (req, res) => {
+customers.js|77|router.get("/customer-lookup", authenticate, authorize("customer.view"), async (req, res) => {
+customers.js|110|router.get("/customers/:id", authenticate, authorize("customer.view"), async (req, res) => {
+customers.js|174|router.post("/customers", authenticate, authorize("customer.create"), async (req, res) => {
+customers.js|265|router.post("/customers/:id/associate", authenticate, authorize("customer.edit"), async (req, res) => {
+customers.js|306|router.put("/customers/:id", authenticate, authorize("customer.edit"), async (req, res) => {
+dashboard.js|6|router.get("/dashboard/summary", authenticate, async (req, res) => {
+eanLookup.js|7|router.get("/ean-lookup/:ean", authenticate, async (req, res) => {
+globalProducts.js|26|router.get(
+globalProducts.js|137|router.get(
+globalProducts.js|168|router.get(
+integrations.js|120|router.get(
+integrations.js|150|router.get(
+integrations.js|170|router.get(
+integrations.js|189|router.post(
+integrations.js|272|router.put(
+integrations.js|389|router.delete(
+integrations.js|416|router.get(
+integrations.js|440|router.post(
+integrations.js|479|router.put(
+integrations.js|544|router.get(
+integrations.js|568|router.put(
+integrations.js|670|router.get(
+integrations.js|853|router.post(
+integrations.js|889|router.post(
+inventory.js|17|router.get(
+inventory.js|91|router.post(
+inventory.js|164|router.get(
+inventory.js|211|router.get(
+invoiceDelivery.js|114|router.get(
+invoiceDelivery.js|136|router.put(
+invoiceDelivery.js|222|router.post(
+invoiceDelivery.js|291|router.post(
+invoiceDelivery.js|362|router.post(
+online.js|236|router.get("/online/platforms", authenticate, authorize("online_orders.view"), async (req, res) => {
+online.js|273|router.get("/online/products", authenticate, authorize("online_orders.view"), async (req, res) => {
+online.js|304|router.put("/online/products/:productId", authenticate, authorize("online_orders.configure"), async (req, res) => {
+online.js|476|router.get("/online/deliveroo/mappings", authenticate, authorize("online_orders.view"), async (req, res) => {
+online.js|503|router.get("/online/deliveroo/products", authenticate, authorize("online_orders.view"), async (req, res) => {
+online.js|553|router.put("/online/deliveroo/mappings", authenticate, authorize("online_orders.manage"), async (req, res) => {
+online.js|632|router.get("/online/orders", authenticate, authorize("online_orders.view"), async (req, res) => {
+online.js|669|router.get("/online/orders/:id", authenticate, authorize("online_orders.view"), async (req, res) => {
+online.js|711|router.post("/online/orders/:orderId/items/:itemId/map", authenticate, authorize("online_orders.manage"), async (req, re
+online.js|860|router.get("/online/api-logs", authenticate, authorize("online_orders.configure"), async (req, res) => {
+online.js|936|router.get("/online/uber/test-connection", authenticate, authorize("online_orders.configure"), async (req, res) => {
+online.js|1018|router.post("/online/orders", authenticate, authorize("online_orders.manage"), async (req, res) => {
+online.js|1643|router.post("/online/orders/:id/accept", authenticate, authorize("online_orders.manage"), async (req, res) => {
+online.js|1665|router.post("/online/orders/:id/reject", authenticate, authorize("online_orders.manage"), async (req, res) => {
+online.js|1679|router.post("/online/orders/:id/preparing", authenticate, authorize("online_orders.manage"), async (req, res) => {
+online.js|1689|router.post("/online/orders/:id/ready", authenticate, authorize("online_orders.manage"), async (req, res) => {
+online.js|1699|router.post("/online/orders/:id/cancel", authenticate, authorize("online_orders.manage"), async (req, res) => {
+online.js|1725|router.post("/online/orders/:id/complete", authenticate, authorize("online_orders.manage"), async (req, res) => {
+online.js|2153|router.get("/online/deliveroo/webhook/health", (req, res) => {
+online.js|2172|router.post("/online/deliveroo/webhook", async (req, res) => {
+products.HEAD.bak.js|13|router.get("/categories", authenticate, authorize("product.view"), async (req, res) => {
+products.HEAD.bak.js|55|router.post("/categories", authenticate, authorize("product.create"), async (req, res) => {
+products.HEAD.bak.js|105|router.put("/categories/:id", authenticate, authorize("product.edit"), async (req, res) => {
+products.HEAD.bak.js|166|router.delete("/categories/:id", authenticate, authorize("product.delete"), async (req, res) => {
+products.HEAD.bak.js|204|router.get("/products", authenticate, authorize("product.view"), async (req, res) => {
+products.HEAD.bak.js|256|router.get("/products/:id", authenticate, authorize("product.view"), async (req, res) => {
+products.HEAD.bak.js|308|router.post("/products", authenticate, authorize("product.create"), async (req, res) => {
+products.HEAD.bak.js|498|router.put("/products/:id", authenticate, authorize("product.edit"), async (req, res) => {
+products.HEAD.bak.js|675|router.delete("/products/:id", authenticate, authorize("product.delete"), async (req, res) => {
+products.js|13|router.get("/categories", authenticate, authorize("product.view"), async (req, res) => {
+products.js|55|router.post("/categories", authenticate, authorize("product.create"), async (req, res) => {
+products.js|105|router.put("/categories/:id", authenticate, authorize("product.edit"), async (req, res) => {
+products.js|166|router.delete("/categories/:id", authenticate, authorize("product.delete"), async (req, res) => {
+products.js|204|router.get("/products", authenticate, authorize("product.view"), async (req, res) => {
+products.js|258|router.get("/products/:id", authenticate, authorize("product.view"), async (req, res) => {
+products.js|310|router.post("/products", authenticate, authorize("product.create"), async (req, res) => {
+products.js|522|router.put("/products/:id", authenticate, authorize("product.edit"), async (req, res) => {
+products.js|712|router.delete("/products/:id", authenticate, authorize("product.delete"), async (req, res) => {
+purchases.js|139|router.get(
+purchases.js|182|router.get(
+purchases.js|245|router.post(
+purchases.js|412|router.post(
+reports.js|10|router.get("/reports/summary", authenticate, authorize("reports.summary.view"), async (req, res) => {
+reports.js|40|router.get("/reports/sales", authenticate, authorize("reports.sales.view"), async (req, res) => {
+reports.js|55|router.get("/reports/products", authenticate, authorize("reports.products.view"), async (req, res) => {
+reports.js|71|router.get("/reports/payments", authenticate, authorize("reports.payments.view"), async (req, res) => {
+reports.js|78|router.get("/reports/customers", authenticate, authorize("reports.customers.view"), async (req, res) => {
+reports.js|86|router.get("/reports/inventory-movements", authenticate, authorize("reports.inventory_movements.view", "inventory.moveme
+reports.js|173|router.get("/reports/profit", authenticate, authorize("reports.profit.view"), async (req, res) => {
+reports.js|216|router.get("/reports/till", authenticate, authorize("reports.till.view"), async (req, res) => {
+reports.js|290|router.get("/reports/vat", authenticate, authorize("reports.vat.view"), async (req, res) => {
+returns.js|143|router.get(
+returns.js|213|router.get(
+returns.js|279|router.get(
+returns.js|329|router.post(
+returns.js|548|router.post(
+returns.js|667|router.get(
+sales.js|38|router.get(
+sales.js|95|router.get(
+sales.js|146|router.post(
+secureInvoice.js|156|router.get("/i/:token", async (req, res) => {
+secureInvoice.js|204|router.post(
+secureInvoice.js|244|router.delete(
+selfCheckout.js|57|router.post(
+selfCheckout.js|106|router.delete(
+settings.js|18|router.get("/settings", authenticate, async (req, res) => {
+settings.js|80|router.put("/settings", authenticate, async (req, res) => {
+settings.js|137|router.get("/payment-terminals", authenticate, async (req, res) => {
+settings.js|157|router.post("/payment-terminals", authenticate, async (req, res) => {
+settings.js|173|router.put("/payment-terminals/:id", authenticate, async (req, res) => {
+settings.js|191|router.post("/payment-terminals/:id/test", authenticate, async (req, res) => {
+settings.js|204|router.get("/hardware", authenticate, async (req, res) => {
+settings.js|217|router.put("/hardware", authenticate, async (req, res) => {
+settings.js|233|router.post("/hardware/:type/test", authenticate, async (req, res) => {
+settings.js|247|router.get("/health/integrations", authenticate, async (req, res) => {
+settings.js|265|router.get("/settings/online-platforms", authenticate, async (req, res) => {
+settings.js|288|router.put("/settings/online-platforms/:platform", authenticate, async (req, res) => {
+suppliers.js|9|router.get(
+suppliers.js|53|router.get(
+suppliers.js|108|router.post(
+suppliers.js|155|router.put(
+till.js|15|router.get(
+till.js|68|router.get(
+till.js|106|router.post(
+till.js|159|router.post(
+till.js|239|router.get(
+till.js|277|router.post(
+whatsapp.js|182|router.get("/whatsapp/settings", authenticate, async (req, res) => {
+whatsapp.js|196|router.put("/whatsapp/settings", authenticate, authorize("settings.manage"), async (req, res) => {
+whatsapp.js|305|router.post("/whatsapp/test-connection", authenticate, authorize("settings.manage"), async (req, res) => {
+whatsapp.js|435|router.post("/whatsapp/test-invoice", authenticate, authorize("settings.manage"), async (req, res) => {
+whatsapp.js|511|router.post("/whatsapp/test-send", authenticate, authorize("settings.manage"), async (req, res) => {
+whatsapp.js|590|router.get("/whatsapp/delivery-history", authenticate, authorize("settings.manage"), async (req, res) => {
+whatsapp.js|648|router.post("/whatsapp/resend-invoice", authenticate, authorize("settings.manage"), async (req, res) => {

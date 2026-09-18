@@ -8,6 +8,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import { initializeDatabase } from "./database/init.js";
 import { createAuditWriter } from "./services/auditLog.js";
+import { createSessionToken, createAuthenticate } from "./services/session.js";
 import createTillRouter from "./routes/till.js";
 import createCustomersRouter from "./routes/customers.js";
 import createProductsRouter from "./routes/products.js";
@@ -16,6 +17,7 @@ import createSuppliersRouter from "./routes/suppliers.js";
 import createPurchasesRouter from "./routes/purchases.js";
 import createInventoryRouter from "./routes/inventory.js";
 import createSalesRouter from "./routes/sales.js";
+import createSelfCheckoutRouter, { createSelfCheckoutModeGate } from "./routes/selfCheckout.js";
 import createReturnsRouter from "./routes/returns.js";
 import createReportsRouter from "./routes/reports.js";
 import createSecureInvoiceRouter from "./routes/secureInvoice.js";
@@ -25,6 +27,7 @@ import createInvoiceDeliveryRouter from "./routes/invoiceDelivery.js";
 import createAdminRouter from "./routes/admin.js";
 import createIntegrationsRouter from "./routes/integrations.js";
 import createDashboardRouter from "./routes/dashboard.js";
+import createGlobalProductsRouter from "./routes/globalProducts.js";
 import createOnlineRouter from "./routes/online.js";
 
 const { Pool } = pg;
@@ -52,6 +55,11 @@ app.use(cors());
 app.use("/api/online/deliveroo/webhook", express.raw({ type: "*/*", limit: "1mb" }));
 
 app.use(express.json({ limit: "10mb" }));
+
+/* T10D: Self-Checkout mode gate — ahead of EVERY API router so a
+ * self-checkout mode token is refused for privileged operations
+ * server-side (never merely hidden in the UI). */
+app.use(createSelfCheckoutModeGate());
 app.use(express.urlencoded({ limit: "10mb", extended: true }));
 
 /*
@@ -144,57 +152,12 @@ const writeAudit = createAuditWriter({ db });
 
 /*
 |--------------------------------------------------------------------------
-| JWT
+| JWT / Authentication (session layer - services/session.js)
 |--------------------------------------------------------------------------
 */
 
-const JWT_SECRET =
-  process.env.JWT_SECRET || "development-secret-change-this";
-
-function createToken(user) {
-  return jwt.sign(
-    {
-      id: user.id,
-      companyId: user.company_id,
-      storeId: user.store_id,
-      roleId: user.role_id,
-      username: user.username,
-    },
-    JWT_SECRET,
-    {
-      expiresIn: "12h",
-    }
-  );
-}
-
-/*
-|--------------------------------------------------------------------------
-| Authentication
-|--------------------------------------------------------------------------
-*/
-
-function authenticate(req, res, next) {
-  const header = req.headers.authorization;
-
-  if (!header || !header.startsWith("Bearer ")) {
-    return res.status(401).json({
-      success: false,
-      message: "Authentication required",
-    });
-  }
-
-  const token = header.substring(7);
-
-  try {
-    req.user = jwt.verify(token, JWT_SECRET);
-    next();
-  } catch {
-    return res.status(401).json({
-      success: false,
-      message: "Invalid or expired token",
-    });
-  }
-}
+const createToken = createSessionToken;
+const authenticate = createAuthenticate();
 
 /*
 |--------------------------------------------------------------------------
@@ -629,6 +592,48 @@ app.get("/api/auth/me", authenticate, async (req, res) => {
 
 /*
 |--------------------------------------------------------------------------
+| CURRENT SESSION PERMISSIONS (sidebar/UI gating)
+|--------------------------------------------------------------------------
+|
+| GET /api/auth/me/permissions
+|
+| Read-only convenience for UI gating — reports the SAME permission model
+| the server-side `authorize()` helper enforces: Administrator/Admin/Owner
+| roles bypass permission checks (reported via `isAdmin`), every other role
+| reports the codes granted through role_permissions. It never grants
+| anything on its own; every endpoint keeps enforcing its own checks.
+| (T10B-SMALL: the frontend AdminLayout calls this to show/hide gated
+| sidebar entries such as Reports, Returns, Order Prep and Integrations.)
+*/
+
+app.get("/api/auth/me/permissions", authenticate, async (req, res) => {
+  try {
+    const isAdmin = await canViewCompanyCustomers(req.user);
+
+    let permissions = [];
+    if (!isAdmin && req.user.roleId) {
+      permissions = await getRolePermissionCodes(req.user.roleId);
+    }
+
+    res.json({
+      success: true,
+      data: {
+        isAdmin,
+        permissions,
+      },
+    });
+  } catch (error) {
+    console.error("Current user permissions error:", error);
+
+    res.status(500).json({
+      success: false,
+      message: "Unable to retrieve permissions",
+    });
+  }
+});
+
+/*
+|--------------------------------------------------------------------------
 | CHANGE PASSWORD
 |--------------------------------------------------------------------------
 */
@@ -736,6 +741,14 @@ app.use(
 */
 
 app.use("/api", createEanLookupRouter({ authenticate, db }));
+
+/* T10D: Self-Checkout session routes (enter/exit the restricted mode). */
+app.use("/api", createSelfCheckoutRouter({ authenticate, authorize, db, writeAudit }));
+
+app.use(
+  "/api",
+  createGlobalProductsRouter({ authenticate, authorize, db })
+);
 
 app.use("/api", createDashboardRouter({ authenticate, db }));
 
@@ -852,13 +865,13 @@ app.use(
   })
 );
 
-app.use("/api", createSalesRouter({ authenticate, authorize, db, pool, createInventoryMovement, associateCustomerWithStore }));
+app.use("/api", createSalesRouter({ authenticate, authorize, db, pool, createInventoryMovement, associateCustomerWithStore, writeAudit, selfCheckoutMode: (req) => req.user?.mode === "self_checkout" }));
 
 app.use("/api", createReturnsRouter({ authenticate, authorize, db, pool, createInventoryMovement }));
 
 app.use("/api", createAdminRouter({ authenticate, authorize, db, pool, canViewCompanyCustomers, bcrypt }));
 
-app.use("/api", createReportsRouter({ authenticate, db }));
+app.use("/api", createReportsRouter({ authenticate, authorize, db }));
 
 /*
 |--------------------------------------------------------------------------
@@ -1237,11 +1250,17 @@ app.get("/api/setup/database", async (req, res) => {
     `);
 
     const permissions = [
+      ["sale.view", "View Sales"],
       ["sale.create", "Create Sale"],
+      ["sale.edit", "Edit Sale"],
+      ["sale.delete", "Delete / Void Sale"],
+      ["sale.invoice.view", "View Invoices"],
+      ["sale.invoice.reprint", "Reprint Invoice"],
       ["sale.discount", "Apply Discount"],
       ["sale.void_item", "Void Item"],
       ["sale.void", "Void Sale"],
       ["sale.refund", "Refund Sale"],
+      ["sale.refund_without_receipt", "Refund Without Receipt"],
       ["sale.price_change", "Change Price"],
       ["sale.hold", "Hold Sale"],
       ["cash.open_drawer", "Open Cash Drawer"],
@@ -1253,12 +1272,33 @@ app.get("/api/setup/database", async (req, res) => {
       ["product.create", "Create Product"],
       ["product.edit", "Edit Product"],
       ["product.delete", "Delete Product"],
-      ["inventory.view", "View Inventory"],
-      ["inventory.adjust", "Adjust Inventory"],
       ["customer.view", "View Customers"],
       ["customer.create", "Create Customer"],
       ["customer.edit", "Edit Customer"],
-      ["report.view", "View Reports"],
+      ["customer.delete", "Delete Customer"],
+      ["purchase.view", "View Purchases"],
+      ["purchase.create", "Create Purchase"],
+      ["purchase.edit", "Edit Purchase"],
+      ["purchase.delete", "Delete / Cancel Purchase"],
+      ["inventory.view", "View Inventory"],
+      ["inventory.movements.view", "View Stock Movements"],
+      ["inventory.adjust", "Adjust Inventory"],
+      ["returns.view", "View Returns"],
+      ["returns.create", "Create Returns"],
+      ["returns.approve", "Approve / Process Returns"],
+      ["reports.sales.view", "Sales Report"],
+      ["reports.products.view", "Product Sales Report"],
+      ["reports.customers.view", "Customer Report"],
+      ["reports.inventory.view", "Inventory Overview"],
+      ["reports.inventory_movements.view", "Stock Movement Ledger"],
+      ["reports.low_stock.view", "Low Stock Report"],
+      ["reports.payments.view", "Payments Report"],
+      ["reports.purchases.view", "Purchase Report"],
+      ["reports.returns.view", "Sales Returns Report"],
+      ["reports.profit.view", "Profit Report"],
+      ["reports.till.view", "Till Report"],
+      ["reports.vat.view", "Tax / VAT Report"],
+      ["reports.summary.view", "Reports Summary"],
       ["report.export", "Export Reports"],
       ["user.manage", "Manage Users"],
       ["role.manage", "Manage Roles"],

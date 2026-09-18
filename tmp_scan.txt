@@ -1,0 +1,2 @@
+﻿dashboard.js:47: COALESCE((SELECT COUNT(*) FROM products WHERE company_id = $1 AND active = true AND low_stock_level > 0 AND stock_quantity <= low_stock_level), 0) AS 
+inventory.js:171: "SELECT p.id, p.name, p.stock_quantity current_stock, COALESCE(SUM(m.quantity_change),0) ledger_balance FROM products p LEFT JOIN inventory_movements 

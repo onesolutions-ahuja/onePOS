@@ -4,6 +4,7 @@ import {
   getQueueEntries,
   getQueueSnapshot,
   getSyncStats,
+  syncOfflineQueue,
   retryFailedEntry,
   retryAllFailed,
   subscribeQueue,
@@ -49,6 +50,7 @@ function QueueDetailsModal({ onClose }) {
         </div>
         <QueueStats stats={stats} pending={pending} failed={failed} />
         <QueueList entries={entries} busy={busy} />
+        <div className="px-4 py-2"><button disabled={busy} onClick={() => syncOfflineQueue()} className="text-sm text-blue-700 disabled:opacity-50">{busy ? "Syncing…" : "Sync / retry pending"}</button></div>
         {stats.lastError && <p role="status" className="px-4 text-sm text-red-700">{stats.lastError}</p>}
         {failed > 0 && (
           <div className="p-4 border-t flex justify-end">

@@ -13,17 +13,15 @@ function PaymentModal({
   const change = Math.max(0, Number(cashReceived || 0) - total);
 
   const payCash = async () => {
-    if (Number(cashReceived) < total) return;
+    if (processing || !Number.isFinite(Number(cashReceived)) || Number(cashReceived) < total) return;
     setProcessing(true);
-    await onComplete("cash");
-    setProcessing(false);
+    try { await onComplete("cash"); } finally { setProcessing(false); }
   };
 
   const payCard = async () => {
     if (offline || processing) return;
     setProcessing(true);
-    await onCard("card");
-    setProcessing(false);
+    try { await onCard("card"); } finally { setProcessing(false); }
   };
 
   return (

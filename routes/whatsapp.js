@@ -55,6 +55,75 @@ const PHONE_NUMBER_ID_RE = /^\d{6,20}$/;
 const FINGERPRINT_PREFIX = "sha256:";
 
 /*
+ * Sale reference resolver for the manual test endpoints.
+ *
+ * Admins type the human-readable receipt (e.g. "Sale 01-20260917-0001" or
+ * "T01-20260917-0001"), not the internal UUID. A receipt-like string must
+ * NEVER reach a PostgreSQL uuid comparison (it 22P02s the whole query), so:
+ *   - strictly UUID-shaped input resolves by sale id (byte-equal, cast-safe);
+ *   - anything else is resolved by receipt_number ILIKE, tenant-scoped.
+ * Both branches are company + store scoped and collapse to the same generic
+ * "not found" so foreign tenants cannot be probed.
+ */
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function extractReceiptNumber(rawInput) {
+  const raw = String(rawInput || "").trim();
+  // Tolerate copy/paste variants: "Sale 01-20260917-0001" (display prefix
+  // with spaces) and "Sale01-..." - the receipt system stores T01-/T- forms.
+  const stripped = raw.replace(/^sale\s*/i, "");
+  const match = stripped.match(/([A-Za-z0-9]{1,8}-\d{8}-\d{1,8})/);
+  return match ? match[1] : null;
+}
+
+async function resolveSaleReference(db, { rawReference, user }) {
+  const raw = String(rawReference || "").trim();
+  if (!raw) return { saleId: null };
+
+  // 1. Strict UUID: resolve by id. Never cast non-UUID text.
+  if (UUID_RE.test(raw)) {
+    const result = user.storeId
+      ? await db(
+          `SELECT id, receipt_number FROM sales
+           WHERE id = $1 AND company_id = $2 AND store_id = $3 LIMIT 1`,
+          [raw, user.companyId, user.storeId]
+        )
+      : await db(
+          `SELECT id, receipt_number FROM sales
+           WHERE id = $1 AND company_id = $2 LIMIT 1`,
+          [raw, user.companyId]
+        );
+    if (result.rows.length) return { saleId: result.rows[0].id, receiptNumber: result.rows[0].receipt_number };
+    return { saleId: null };
+  }
+
+  // 2. Receipt-shaped text: exact receipt_number match first, then the
+  //    pasted display form ("Sale 01-..." etc.). ILIKE runs on a text
+  //    column only - no uuid cast can ever see this value.
+  const receiptNumber = extractReceiptNumber(raw);
+  if (receiptNumber) {
+    const result = user.storeId
+      ? await db(
+          `SELECT id, receipt_number FROM sales
+           WHERE company_id = $1 AND store_id = $2
+             AND (receipt_number = $3 OR receipt_number ILIKE $4)
+           LIMIT 1`,
+          [user.companyId, user.storeId, receiptNumber, `%${receiptNumber}%`]
+        )
+      : await db(
+          `SELECT id, receipt_number FROM sales
+           WHERE company_id = $1
+             AND (receipt_number = $2 OR receipt_number ILIKE $3)
+           LIMIT 1`,
+          [user.companyId, receiptNumber, `%${receiptNumber}%`]
+        );
+    if (result.rows.length) return { saleId: result.rows[0].id, receiptNumber: result.rows[0].receipt_number };
+  }
+
+  return { saleId: null };
+}
+
+/*
  * Fingerprint of the tested secret MATERIAL. Covers BOTH the access token
  * and the phone number ID: swapping the phone number ID while keeping the
  * same token must invalidate the previous test, otherwise activation could
@@ -383,22 +452,18 @@ export default function createWhatsAppSettingsRouter({ db, pool, authenticate, a
         });
       }
 
-      // Real contract test against an ADMIN-CHOSEN sale, strictly tenant
-      // scoped (company + store when the user has one), short expiry.
-      const saleCheck = await db(
-        `SELECT id, receipt_number FROM sales
-         WHERE id = $1 AND company_id = $2
-         ${req.user.storeId ? "AND store_id = $3" : ""}
-         LIMIT 1`,
-        req.user.storeId ? [saleId, req.user.companyId, req.user.storeId] : [saleId, req.user.companyId]
-      );
-      if (!saleCheck.rows.length) {
+      // Real contract test against an ADMIN-CHOSEN sale. The reference may
+      // be a sale UUID or a human-readable receipt number; either way it is
+      // strictly tenant scoped (company + store when the user has one).
+      const resolved = await resolveSaleReference(db, { rawReference: saleId, user: req.user });
+      if (!resolved.saleId) {
         return res.status(404).json({ success: false, message: "Sale not found in your company" });
       }
+      const resolvedSaleId = resolved.saleId;
 
       const link = await createInvoiceDeliveryLink({
         db,
-        saleId,
+        saleId: resolvedSaleId,
         companyId: req.user.companyId,
         storeId: req.user.storeId ?? null,
         createdBy: req.user.id ?? null,
@@ -410,11 +475,11 @@ export default function createWhatsAppSettingsRouter({ db, pool, authenticate, a
 
       const message = `[WhatsApp TEST - not sent]\n${buildInvoiceDeliveryMessage({
         url: link.url,
-        invoiceNumber: saleCheck.rows[0].receipt_number || undefined,
+        invoiceNumber: resolved.receiptNumber || undefined,
         expiresAt: link.expiresAt,
       })}`;
 
-      await writeAudit(req.user.companyId, req.user.id, "whatsapp_test_invoice_previewed", "sale", saleId, {
+      await writeAudit(req.user.companyId, req.user.id, "whatsapp_test_invoice_previewed", "sale", resolvedSaleId, {
         mode: "real-contract",
         sent: false,
       });
@@ -459,24 +524,19 @@ export default function createWhatsAppSettingsRouter({ db, pool, authenticate, a
         });
       }
 
-      // Tenant scope check before anything leaves the building.
-      const saleCheck = await db(
-        `SELECT id FROM sales
-         WHERE id = $1 AND company_id = $2
-         ${req.user.storeId ? "AND store_id = $3" : ""}
-         LIMIT 1`,
-        req.user.storeId ? [saleId, req.user.companyId, req.user.storeId] : [saleId, req.user.companyId]
-      );
-      if (!saleCheck.rows.length) {
+      // Tenant-scoped resolution: UUID or human-readable receipt number.
+      const resolved = await resolveSaleReference(db, { rawReference: saleId, user: req.user });
+      if (!resolved.saleId) {
         return res.status(404).json({ success: false, message: "Sale not found in your company" });
       }
+      const resolvedSaleId = resolved.saleId;
 
       const result = await sendWhatsAppTestInvoice({
         db,
         companyId: req.user.companyId,
         storeId: req.user.storeId ?? null,
         userId: req.user.id ?? null,
-        saleId,
+        saleId: resolvedSaleId,
         recipientPhone,
         deliveryMode: deliveryMode === "pdf" || deliveryMode === "link" ? deliveryMode : null,
       });
@@ -486,7 +546,7 @@ export default function createWhatsAppSettingsRouter({ db, pool, authenticate, a
         req.user.id,
         result.ok ? "whatsapp_test_sent" : "whatsapp_test_send_failed",
         "sale",
-        saleId,
+        resolvedSaleId,
         { mode: result.deliveryMode ?? deliveryMode ?? null, outcome: result.outcome ?? null }
       );
 

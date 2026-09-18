@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Calculator } from "lucide-react";
 import { apiRequest } from "../../services/api.js";
 
-export default function Login({ onLogin }) {
+export default function Login({ onLogin, sessionMessage = "" }) {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
@@ -54,6 +54,14 @@ export default function Login({ onLogin }) {
           </div>
 
           <div className="p-7">
+            {sessionMessage ? (
+              <div
+                role="alert"
+                className="mb-4 px-3 py-2 bg-amber-50 border border-amber-200 text-amber-800 rounded-lg text-sm text-center"
+              >
+                {sessionMessage}
+              </div>
+            ) : null}
             <div className="text-center mb-5">
               <div className="font-semibold text-lg">
                 Sign in

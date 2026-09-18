@@ -13,6 +13,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import express from "express";
 import { encryptSecret } from "../services/onlineOrders/platformConfig.js";
+process.env.INVOICE_PUBLIC_BASE_URL = "https://pos.example.com";
+
 
 const COMPANY_A = "a0000000-0000-4000-8000-000000000001";
 const COMPANY_B = "b0000000-0000-4000-8000-000000000002";

@@ -436,8 +436,25 @@ export default function createAuthRouter(pool) {
         });
       }
 
-      const roleName = (result.rows[0].role_name || "").toLowerCase();
-      const isAdmin = ["administrator", "admin", "owner"].includes(roleName);
+      const { role_id: roleId, role_name: rawRoleName, company_id: userCompanyId } = result.rows[0];
+      const roleName = (rawRoleName || "").toLowerCase();
+
+      /* Company-scoped isAdmin check — mirrors canViewCompanyCustomers() in
+         server.js.  The raw JWT roleId/companyId is user-controlled and could
+         be stale, so we use the DB row just fetched (company_id joined from
+         roles via users.company_id implicit match) to confirm that the role
+         is (a) an Admin/Owner-level name AND (b) actually belongs to the
+         same company as the user. */
+      const companyMatch = await pool.query(
+        `SELECT 1 AS ok
+         FROM roles r
+         WHERE r.id = $1
+           AND r.company_id = $2
+           AND LOWER(r.name) IN ('administrator', 'admin', 'owner')
+         LIMIT 1`,
+        [roleId, decoded.companyId]
+      );
+      const isAdmin = companyMatch.rows.length > 0;
 
       let permissions = [];
 

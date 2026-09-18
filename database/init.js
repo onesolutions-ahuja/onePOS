@@ -161,6 +161,9 @@ export async function initializeDatabase(pool) {
     CREATE UNIQUE INDEX IF NOT EXISTS ux_ean_product_master_ean
     ON ean_product_master(ean);
 
+    ALTER TABLE ean_product_master ADD COLUMN IF NOT EXISTS image_url TEXT NULL;
+    ALTER TABLE ean_product_master ADD COLUMN IF NOT EXISTS source TEXT NULL;
+
     -- EAN lookup audit only; no limits, pricing or customer product changes.
     CREATE TABLE IF NOT EXISTS ean_lookup_usage (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -199,6 +202,17 @@ export async function initializeDatabase(pool) {
       ADD COLUMN IF NOT EXISTS available_on_deliveroo BOOLEAN NOT NULL DEFAULT FALSE,
       ADD COLUMN IF NOT EXISTS uber_item_id VARCHAR(255),
       ADD COLUMN IF NOT EXISTS deliveroo_item_id VARCHAR(255);
+
+    /* Per-product VAT applicability: existing products keep their current
+     * behaviour (column defaults to TRUE, so every pre-existing row is
+     * standard-applicable and nothing changes until a user edits it). */
+    ALTER TABLE products
+      ADD COLUMN IF NOT EXISTS vat_applicable BOOLEAN NOT NULL DEFAULT TRUE;
+
+    /* T10C age verification: existing products default to NOT age restricted,
+     * so pre-existing rows behave exactly as before. */
+    ALTER TABLE products
+      ADD COLUMN IF NOT EXISTS age_restricted BOOLEAN NOT NULL DEFAULT FALSE;
 
     CREATE TABLE IF NOT EXISTS inventory_movements (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -783,13 +797,17 @@ export async function initializeDatabase(pool) {
   `);
 
   const permissions = [
+    ["sale.view", "View Sales"],
     ["sale.create", "Create Sale"],
+    ["sale.edit", "Edit Sale"],
+    ["sale.delete", "Delete / Void Sale"],
+    ["sale.invoice.view", "View Invoices"],
+    ["sale.invoice.reprint", "Reprint Invoice"],
     ["sale.discount", "Apply Discount"],
     ["sale.void_item", "Void Item"],
     ["sale.void", "Void Sale"],
     ["sale.refund", "Refund Sale"],
-    ["returns.create", "Create Returns"],
-    ["returns.view", "View Returns"],
+    ["sale.refund_without_receipt", "Refund Without Receipt"],
     ["sale.price_change", "Change Price"],
     ["sale.hold", "Hold Sale"],
     ["cash.open_drawer", "Open Cash Drawer"],
@@ -801,12 +819,33 @@ export async function initializeDatabase(pool) {
     ["product.create", "Create Product"],
     ["product.edit", "Edit Product"],
     ["product.delete", "Delete Product"],
-    ["inventory.view", "View Inventory"],
-    ["inventory.adjust", "Adjust Inventory"],
     ["customer.view", "View Customers"],
     ["customer.create", "Create Customer"],
     ["customer.edit", "Edit Customer"],
-    ["report.view", "View Reports"],
+    ["customer.delete", "Delete Customer"],
+    ["purchase.view", "View Purchases"],
+    ["purchase.create", "Create Purchase"],
+    ["purchase.edit", "Edit Purchase"],
+    ["purchase.delete", "Delete / Cancel Purchase"],
+    ["inventory.view", "View Inventory"],
+    ["inventory.movements.view", "View Stock Movements"],
+    ["inventory.adjust", "Adjust Inventory"],
+    ["returns.view", "View Returns"],
+    ["returns.create", "Create Returns"],
+    ["returns.approve", "Approve / Process Returns"],
+    ["reports.sales.view", "Sales Report"],
+    ["reports.products.view", "Product Sales Report"],
+    ["reports.customers.view", "Customer Report"],
+    ["reports.inventory.view", "Inventory Overview"],
+    ["reports.inventory_movements.view", "Stock Movement Ledger"],
+    ["reports.low_stock.view", "Low Stock Report"],
+    ["reports.payments.view", "Payments Report"],
+    ["reports.purchases.view", "Purchase Report"],
+    ["reports.returns.view", "Sales Returns Report"],
+    ["reports.profit.view", "Profit Report"],
+    ["reports.till.view", "Till Report"],
+    ["reports.vat.view", "Tax / VAT Report"],
+    ["reports.summary.view", "Reports Summary"],
     ["report.export", "Export Reports"],
     ["user.manage", "Manage Users"],
     ["role.manage", "Manage Roles"],

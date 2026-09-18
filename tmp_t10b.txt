@@ -1,0 +1,59 @@
+﻿ÔûÂ T10B Permission Catalogue (all 3 insert paths)
+  Ô£ö database/schema.sql: every NEW granular code is inserted (2.2279ms)
+  Ô£ö database/schema.sql: every OLD compatible code is still present (0.6927ms)
+  Ô£ö database/init.js: every NEW granular code is inserted (1.2845ms)
+  Ô£ö database/init.js: every OLD compatible code is still present (1.914ms)
+  Ô£ö server.js (setup endpoint): every NEW granular code is inserted (0.8843ms)
+  Ô£ö server.js (setup endpoint): every OLD compatible code is still present (1.1522ms)
+  Ô£ö broad report.view is NOT in the new catalogue (reports are split) (1.1341ms)
+Ô£ö T10B Permission Catalogue (all 3 insert paths) (15.7557ms)
+ÔûÂ T10B authorize middleware behaviour
+  Ô£ö administrator role bypasses any required permission (#10) (1.0881ms)
+  Ô£ö user WITH product.view can view products (#1) (0.4421ms)
+  Ô£ö user WITHOUT product.view receives 403 (#2) (0.7209ms)
+  Ô£ö user WITH product.create can create products (#3) (0.3939ms)
+  Ô£ö user WITHOUT product.create receives 403 (#4) (0.2478ms)
+  Ô£ö OR logic: purchase.view works even when old inventory.view is absent (0.276ms)
+  Ô£ö backward compat: old inventory.view still lets user in via OR (0.1906ms)
+Ô£ö T10B authorize middleware behaviour (4.2822ms)
+ÔûÂ T10B Individual Report Permission Isolation (#6ÔÇô#9)
+  Ô£ö user with only reports.sales.view can access Sales Report (#6) (0.2611ms)
+  Ô£ö user without reports.sales.view CANNOT access Sales Report (#7) (0.1678ms)
+  Ô£ö reports.sales.view does NOT grant reports.inventory.view (#8) (0.231ms)
+  Ô£ö nine distinct report codes are fully isolated pairwise (spot check) (6.6183ms)
+Ô£ö T10B Individual Report Permission Isolation (#6ÔÇô#9) (7.5526ms)
+ÔûÂ T10B Reports route enforcements (server-side security check)
+  Ô£ö createReportsRouter factory accepts `authorize` parameter (0.4864ms)
+  Ô£ö /reports/summary enforces authorize("reports.summary.view") (0.2923ms)
+  Ô£ö /reports/sales enforces authorize("reports.sales.view") (0.1627ms)
+  Ô£ö /reports/products enforces authorize("reports.products.view") (0.1557ms)
+  Ô£ö /reports/payments enforces authorize("reports.payments.view") (0.1566ms)
+  Ô£ö /reports/customers enforces authorize("reports.customers.view") (0.1631ms)
+  Ô£ö /reports/inventory-movements enforces authorize("reports.inventory_movements.view") (0.1941ms)
+  Ô£ö /reports/profit enforces authorize("reports.profit.view") (0.2426ms)
+  Ô£ö /reports/till enforces authorize("reports.till.view") (0.1597ms)
+  Ô£ö /reports/vat enforces authorize("reports.vat.view") (0.1824ms)
+  Ô£ö server.js passes authorize to createReportsRouter (wiring check) (0.7621ms)
+Ô£ö T10B Reports route enforcements (server-side security check) (3.6996ms)
+ÔûÂ T10B sales route permission fixes
+  Ô£ö GET /sales uses sale.view (backward compat with sale.create/refund) (0.285ms)
+  Ô£ö GET /sales/:id includes sale.invoice.view (T10B invoice permission) (0.186ms)
+Ô£ö T10B sales route permission fixes (0.6806ms)
+ÔûÂ T10B RolePermissionsManager UI structure
+  Ô£ö all 10 groups are present (Sales/.../Reports etc.) (0.6746ms)
+  Ô£ö Reports group lists individual 13 reports.X.view + report.export (no broad report.view) (0.3819ms)
+  Ô£ö No single 'Disable Reports' toggle or override in SettingsAdmin (0.5849ms)
+  Ô£ö Sales Returns group includes returns.approve (1.3549ms)
+Ô£ö T10B RolePermissionsManager UI structure (3.3146ms)
+ÔûÂ T10B tenant isolation is untouched (preserve req.user scoping)
+  Ô£ö routes/reports.js still scopes every query to req.user.companyId + storeId (0.6535ms)
+  Ô£ö reports summary query still uses the scoped params (no global SQL) (0.4928ms)
+Ô£ö T10B tenant isolation is untouched (preserve req.user scoping) (1.3193ms)
+Ôä╣ tests 37
+Ôä╣ suites 7
+Ôä╣ pass 37
+Ôä╣ fail 0
+Ôä╣ cancelled 0
+Ôä╣ skipped 0
+Ôä╣ todo 0
+Ôä╣ duration_ms 300.7015

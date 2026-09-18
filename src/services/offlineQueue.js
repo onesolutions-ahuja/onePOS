@@ -431,13 +431,25 @@ let autoSyncStop = null;
 
 export function startAutoSync({ pollMs = 30000 } = {}) {
   if (autoSyncStop) return autoSyncStop;
+  const attempt = async () => {
+    // Probe even with an empty/blocked queue: navigator.onLine alone does not
+    // detect a recovered backend. Never cache this authenticated response.
+    try {
+      const token = localStorage.getItem("onepos_token");
+      const response = await fetch("/api/auth/me", { headers: { Authorization: `Bearer ${token || ""}` }, signal: AbortSignal.timeout(10000), cache: "no-store" });
+      reportConnection(response.status < 500);
+    } catch { reportConnection(false); }
+    await syncOfflineQueue();
+  };
   const removeNetworkListener = onNetworkChange((online) => {
     if (online) syncOfflineQueue();
   });
-  syncOfflineQueue();
-  const timer =
-    pollMs > 0 ? setInterval(() => syncOfflineQueue(), pollMs) : null;
+  const onStorage = () => notify();
+  window.addEventListener("storage", onStorage);
+  attempt();
+  const timer = pollMs > 0 ? setInterval(attempt, pollMs) : null;
   autoSyncStop = () => {
+    window.removeEventListener("storage", onStorage);
     removeNetworkListener();
     if (timer) clearInterval(timer);
     autoSyncStop = null;
@@ -481,6 +493,27 @@ export function enqueueOfflineSale({ sale, terminalNumber = null, paymentUnverif
 
   notify();
   return { ok: true, entry };
+}
+
+export function failQueuedSale(clientRequestId, status) {
+  const tenant = getTenantFromToken();
+  if (!tenant) return;
+  const queue = currentQueue(tenant).map((entry) => entry.clientRequestId === clientRequestId
+    ? { ...entry, status: "failed", lastError: `Sale rejected (HTTP ${Number(status) || 400}). Check stock, permissions and till session before retrying.` } : entry);
+  writeQueue(tenant, queue);
+  notify();
+}
+
+export function acknowledgeQueuedSale(clientRequestId, sale, tenant = getTenantFromToken()) {
+  if (!tenant || !sale?.id) return false;
+  const queue = currentQueue(tenant);
+  const entry = queue.find((item) => item.clientRequestId === clientRequestId);
+  if (!entry) return true; // another response/tab already acknowledged it
+  if (!writeQueue(tenant, queue.filter((item) => item.id !== entry.id))) return false;
+  recordSyncedReceipt(tenant, { clientRequestId, provisionalReceipt: entry.provisionalReceipt, receiptNumber: sale.receipt_number, saleId: sale.id });
+  bumpSyncedStats(tenant);
+  notify();
+  return true;
 }
 
 /* ------------------------------ sync engine ----------------------------- */
@@ -568,19 +601,10 @@ export async function syncOfflineQueue() {
           break;
         }
 
-        recordSyncedReceipt(tenant, {
-          clientRequestId: entry.clientRequestId,
-          provisionalReceipt: entry.provisionalReceipt,
-          receiptNumber: body?.sale?.receipt_number || null,
-          saleId: body?.sale?.id || null,
-        });
-        queue = currentQueue(tenant).filter((item) => item.id !== entry.id);
-        if (!writeQueue(tenant, queue)) {
+        if (!acknowledgeQueuedSale(entry.clientRequestId, body.sale, tenant)) {
           noteSyncError(tenant, "Unable to update local storage. Sale retained; retry uses the same reference.");
           break;
         }
-        bumpSyncedStats(tenant);
-        notify();
         synced += 1;
       } catch (error) {
         if (isNetworkError(error)) {

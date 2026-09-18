@@ -139,7 +139,7 @@ export default function createPurchasesRouter({
   router.get(
     "/purchases",
     authenticate,
-    authorize("inventory.view"),
+    authorize("purchase.view", "reports.purchases.view", "inventory.view"),
     async (req, res) => {
       try {
         const result = await db(
@@ -182,7 +182,7 @@ export default function createPurchasesRouter({
   router.get(
     "/purchases/:id",
     authenticate,
-    authorize("inventory.view"),
+    authorize("purchase.view", "inventory.view"),
     async (req, res) => {
       try {
         const purchase = await db(
@@ -245,7 +245,7 @@ export default function createPurchasesRouter({
   router.post(
     "/purchases",
     authenticate,
-    authorize("inventory.adjust"),
+    authorize("purchase.create", "inventory.adjust"),
     async (req, res) => {
       if (!pool) {
         return res
@@ -412,7 +412,7 @@ export default function createPurchasesRouter({
   router.post(
     "/purchases/:id/receive",
     authenticate,
-    authorize("inventory.adjust"),
+    authorize("purchase.edit", "inventory.adjust"),
     async (req, res) => {
       if (!pool) {
         return res

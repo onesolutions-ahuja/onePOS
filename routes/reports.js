@@ -1,13 +1,13 @@
 import express from "express";
 
-export default function createReportsRouter({ authenticate, db }) {
+export default function createReportsRouter({ authenticate, authorize, db }) {
   const router = express.Router();
 
   function scopedReportParams(req) {
     return [req.user.companyId, req.user.storeId, req.query.dateFrom || null, req.query.dateTo || null];
   }
 
-  router.get("/reports/summary", authenticate, async (req, res) => {
+  router.get("/reports/summary", authenticate, authorize("reports.summary.view"), async (req, res) => {
     try {
       const result = await db(
         `
@@ -37,7 +37,7 @@ export default function createReportsRouter({ authenticate, db }) {
     } catch (error) { console.error("Reports summary error:", error); res.status(500).json({ success: false, message: "Unable to load report summary" }); }
   });
 
-  router.get("/reports/sales", authenticate, async (req, res) => {
+  router.get("/reports/sales", authenticate, authorize("reports.sales.view"), async (req, res) => {
     try {
       const result = await db(
         `
@@ -52,7 +52,7 @@ export default function createReportsRouter({ authenticate, db }) {
     } catch (error) { console.error("Sales report error:", error); res.status(500).json({ success: false, message: "Unable to load sales report" }); }
   });
 
-  router.get("/reports/products", authenticate, async (req, res) => {
+  router.get("/reports/products", authenticate, authorize("reports.products.view"), async (req, res) => {
     try {
       const result = await db(
         `
@@ -68,28 +68,109 @@ export default function createReportsRouter({ authenticate, db }) {
     } catch (error) { console.error("Product report error:", error); res.status(500).json({ success: false, message: "Unable to load product report" }); }
   });
 
-  router.get("/reports/payments", authenticate, async (req, res) => {
+  router.get("/reports/payments", authenticate, authorize("reports.payments.view"), async (req, res) => {
     try {
       const result = await db("SELECT pay.payment_method, COALESCE(SUM(pay.amount),0) total, COUNT(*)::int transactions FROM payments pay INNER JOIN sales s ON s.id=pay.sale_id INNER JOIN companies c ON c.id=s.company_id WHERE s.company_id=$1 AND s.store_id=$2 AND s.status='completed' AND ($3::date IS NULL OR (s.created_at AT TIME ZONE c.timezone)::date >= $3::date) AND ($4::date IS NULL OR (s.created_at AT TIME ZONE c.timezone)::date <= $4::date) GROUP BY pay.payment_method ORDER BY pay.payment_method", [req.user.companyId, req.user.storeId, req.query.dateFrom || null, req.query.dateTo || null]);
       res.json({ success: true, data: result.rows.map((row) => ({ method: row.payment_method, total: Number(row.total), transactions: row.transactions })) });
     } catch (error) { res.status(500).json({ success: false, message: "Unable to load payment report" }); }
   });
 
-  router.get("/reports/customers", authenticate, async (req, res) => {
+  router.get("/reports/customers", authenticate, authorize("reports.customers.view"), async (req, res) => {
     try {
       const result = await db("SELECT COALESCE(c.name,'Walk-in Customer') customer, COUNT(s.id)::int transactions, COALESCE(SUM(s.total),0) spend FROM sales s LEFT JOIN customers c ON c.id=s.customer_id INNER JOIN companies co ON co.id=s.company_id WHERE s.company_id=$1 AND s.store_id=$2 AND s.status='completed' AND ($3::date IS NULL OR (s.created_at AT TIME ZONE co.timezone)::date >= $3::date) AND ($4::date IS NULL OR (s.created_at AT TIME ZONE co.timezone)::date <= $4::date) GROUP BY c.id,c.name ORDER BY spend DESC LIMIT 100", [req.user.companyId, req.user.storeId, req.query.dateFrom || null, req.query.dateTo || null]);
       res.json({ success: true, data: result.rows.map((row) => ({ customer: row.customer, transactions: row.transactions, spend: Number(row.spend), returns: 0, netSpend: Number(row.spend) })) });
     } catch (error) { res.status(500).json({ success: false, message: "Unable to load customer report" }); }
   });
 
-  router.get("/reports/inventory", authenticate, async (req, res) => {
+
+  router.get("/reports/inventory-movements", authenticate, authorize("reports.inventory_movements.view", "inventory.movements.view"), async (req, res) => {
     try {
-      const result = await db("SELECT m.created_at, p.name AS product, st.name AS store_name, m.movement_type, m.quantity_change, m.balance_after, m.reference_type, m.reference_id, u.username, m.reason FROM inventory_movements m INNER JOIN products p ON p.id=m.product_id LEFT JOIN stores st ON st.id=m.store_id LEFT JOIN users u ON u.id=m.created_by WHERE m.company_id=$1 AND m.store_id=$2 ORDER BY m.created_at DESC LIMIT 500", [req.user.companyId, req.user.storeId]);
-      res.json({ success: true, data: result.rows });
-    } catch (error) { res.status(500).json({ success: false, message: "Unable to load inventory report" }); }
+      const limit = Math.max(1, Math.min(10000, Number(req.query.limit) || 500));
+      const offset = Math.max(0, Number(req.query.offset) || 0);
+      const companyId = req.user.companyId;
+      const storeId = req.user.storeId;
+      const dateFrom = req.query.dateFrom || null;
+      const dateTo = req.query.dateTo || null;
+
+      const whereClauses = ["m.company_id = $1", "m.store_id = $2"];
+      const params = [companyId, storeId];
+
+      if (dateFrom || dateTo) {
+        params.push(dateFrom || "1970-01-01", dateTo || "2099-12-31");
+        whereClauses.push("(m.created_at AT TIME ZONE c.timezone)::date >= $3::date");
+        whereClauses.push("(m.created_at AT TIME ZONE c.timezone)::date <= $4::date");
+      } else {
+        params.push(null, null);
+      }
+
+      const rowsSql = `
+        SELECT
+          m.id,
+          m.created_at,
+          p.name AS product,
+          p.sku,
+          p.ean,
+          s.name AS store_name,
+          m.movement_type,
+          m.quantity_change,
+          m.balance_after,
+          m.reference_type,
+          m.reference_id,
+          u.username,
+          m.reason
+        FROM inventory_movements m
+        INNER JOIN products p ON p.id = m.product_id
+        INNER JOIN companies c ON c.id = m.company_id
+        LEFT JOIN stores s ON s.id = m.store_id
+        LEFT JOIN users u ON u.id = m.created_by
+        WHERE ${whereClauses.join(" AND ")}
+        ORDER BY m.created_at DESC, m.id DESC
+        LIMIT $${params.length + 1} OFFSET $${params.length + 2}
+      `;
+      params.push(limit, offset);
+
+      const rowsResult = await db(rowsSql, params);
+
+      const countParams = params.slice(0, params.length - 2);
+      const countSql = `
+        SELECT COUNT(*)::int AS total
+        FROM inventory_movements m
+        INNER JOIN products p ON p.id = m.product_id
+        INNER JOIN companies c ON c.id = m.company_id
+        WHERE ${whereClauses.join(" AND ")}
+      `;
+      const totalResult = await db(countSql, countParams);
+
+      res.json({
+        success: true,
+        data: {
+          rows: rowsResult.rows.map((row) => ({
+            id: row.id,
+            createdAt: row.created_at,
+            product: row.product,
+            sku: row.sku,
+            ean: row.ean,
+            storeName: row.store_name,
+            movementType: row.movement_type,
+            quantityChange: Number(row.quantity_change),
+            balanceAfter: row.balance_after !== null ? Number(row.balance_after) : null,
+            referenceType: row.reference_type,
+            referenceId: row.reference_id,
+            createdBy: row.username,
+            reason: row.reason,
+          })),
+          total: Number(totalResult.rows[0]?.total ?? 0),
+          limit,
+          offset,
+        },
+      });
+    } catch (error) {
+      console.error("Inventory movements report error:", error);
+      res.status(500).json({ success: false, message: "Unable to load inventory movements report" });
+    }
   });
 
-  router.get("/reports/profit", authenticate, async (req, res) => {
+  router.get("/reports/profit", authenticate, authorize("reports.profit.view"), async (req, res) => {
     try {
       const result = await db(
         `
@@ -132,7 +213,7 @@ export default function createReportsRouter({ authenticate, db }) {
     } catch (error) { console.error("Profit report error:", error); res.status(500).json({ success: false, message: "Unable to load profit report" }); }
   });
 
-  router.get("/reports/till", authenticate, async (req, res) => {
+  router.get("/reports/till", authenticate, authorize("reports.till.view"), async (req, res) => {
     try {
       const result = await db(
         `
@@ -206,7 +287,7 @@ export default function createReportsRouter({ authenticate, db }) {
     } catch (error) { console.error("Till report error:", error); res.status(500).json({ success: false, message: "Unable to load till report" }); }
   });
 
-  router.get("/reports/vat", authenticate, async (req, res) => {
+  router.get("/reports/vat", authenticate, authorize("reports.vat.view"), async (req, res) => {
     try {
       const result = await db(
         `

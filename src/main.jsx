@@ -8,3 +8,12 @@ ReactDOM.createRoot(document.getElementById("root")).render(
     <App />
   </React.StrictMode>
 );
+
+// Narrow app scope leaves the marketing website uncontrolled. Production
+// assets are cached by the worker; development hot modules are never cached.
+if (import.meta.env.PROD && "serviceWorker" in navigator) {
+  navigator.serviceWorker.register("/app/offline-sw.js", { scope: "/app/" }).catch(() => {
+    // Existing loaded tills still work; offline reload requires HTTPS + worker.
+  });
+}
+

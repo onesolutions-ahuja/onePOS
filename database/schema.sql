@@ -218,6 +218,9 @@ CREATE TABLE IF NOT EXISTS ean_product_master (
 CREATE UNIQUE INDEX IF NOT EXISTS ux_ean_product_master_ean
 ON ean_product_master(ean);
 
+ALTER TABLE ean_product_master ADD COLUMN IF NOT EXISTS image_url TEXT NULL;
+ALTER TABLE ean_product_master ADD COLUMN IF NOT EXISTS source TEXT NULL;
+
 -- EAN lookup audit only; no limits, pricing or customer product changes.
 CREATE TABLE IF NOT EXISTS ean_lookup_usage (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -243,6 +246,8 @@ CREATE TABLE IF NOT EXISTS products (
     price NUMERIC(12,2) NOT NULL DEFAULT 0,
     cost_price NUMERIC(12,2) NOT NULL DEFAULT 0,
     vat_rate NUMERIC(5,2) NOT NULL DEFAULT 20,
+    vat_applicable BOOLEAN NOT NULL DEFAULT TRUE,
+    age_restricted BOOLEAN NOT NULL DEFAULT FALSE,
     stock_quantity NUMERIC(12,3) NOT NULL DEFAULT 0,
     low_stock_level NUMERIC(12,3) NOT NULL DEFAULT 0,
     track_stock BOOLEAN NOT NULL DEFAULT TRUE,
@@ -875,14 +880,16 @@ ON platform_api_logs(order_id);
 
 INSERT INTO permissions (code, name, description)
 VALUES
+('sale.view', 'View Sales', 'View sales history and receipts'),
 ('sale.create', 'Create Sale', 'Create sales'),
+('sale.edit', 'Edit Sale', 'Edit completed sales'),
+('sale.delete', 'Delete / Void Sale', 'Delete or void sales'),
+('sale.invoice.view', 'View Invoices', 'View sale invoices'),
+('sale.invoice.reprint', 'Reprint Invoice', 'Reprint or download sale invoices'),
 ('sale.discount', 'Apply Discount', 'Apply discounts'),
 ('sale.void_item', 'Void Item', 'Void individual sale items'),
-('sale.void', 'Void Sale', 'Void complete sales'),
 ('sale.refund', 'Refund Sale', 'Process refunds'),
 ('sale.refund_without_receipt', 'Refund Without Receipt', 'Allow refunds without receipt'),
-('returns.create', 'Create Returns', 'Process customer and supplier returns'),
-('returns.view', 'View Returns', 'View return history'),
 ('sale.price_change', 'Change Price', 'Change item price at till'),
 ('sale.hold', 'Hold Sale', 'Hold and retrieve sales'),
 
@@ -897,18 +904,41 @@ VALUES
 ('product.edit', 'Edit Product', 'Edit products'),
 ('product.delete', 'Delete Product', 'Delete products'),
 
-('inventory.view', 'View Inventory', 'View stock'),
-('inventory.adjust', 'Adjust Inventory', 'Adjust stock'),
-
 ('customer.view', 'View Customers', 'View customers'),
 ('customer.create', 'Create Customer', 'Create customers'),
 ('customer.edit', 'Edit Customer', 'Edit customers'),
+('customer.delete', 'Delete Customer', 'Delete customers'),
 
-('report.view', 'View Reports', 'View reports'),
-('report.export', 'Export Reports', 'Export reports'),
+('purchase.view', 'View Purchases', 'View purchase orders'),
+('purchase.create', 'Create Purchase', 'Create purchase orders'),
+('purchase.edit', 'Edit Purchase', 'Edit purchase orders'),
+('purchase.delete', 'Delete / Cancel Purchase', 'Delete or cancel purchase orders'),
+
+('inventory.view', 'View Inventory', 'View stock overview'),
+('inventory.movements.view', 'View Stock Movements', 'View stock movement ledger'),
+('inventory.adjust', 'Adjust Inventory', 'Adjust stock levels'),
+
+('returns.view', 'View Returns', 'View return history'),
+('returns.create', 'Create Returns', 'Process customer and supplier returns'),
+('returns.approve', 'Approve / Process Returns', 'Approve and process pending returns'),
+
+('reports.sales.view', 'Sales Report', 'View the daily sales report'),
+('reports.products.view', 'Product Sales Report', 'View the product sales report'),
+('reports.customers.view', 'Customer Report', 'View the customer spend report'),
+('reports.inventory.view', 'Inventory Overview', 'View the inventory overview report'),
+('reports.inventory_movements.view', 'Stock Movement Ledger', 'View the stock movement ledger report'),
+('reports.low_stock.view', 'Low Stock Report', 'View the low stock report (included in inventory overview)'),
+('reports.payments.view', 'Payments Report', 'View the payment method breakdown report'),
+('reports.purchases.view', 'Purchase Report', 'View the purchase orders report'),
+('reports.returns.view', 'Sales Returns Report', 'View the sales returns report'),
+('reports.profit.view', 'Profit Report', 'View the profit / margin report'),
+('reports.till.view', 'Till Report', 'View the till session report'),
+('reports.vat.view', 'Tax / VAT Report', 'View the tax/VAT report'),
+('reports.summary.view', 'Reports Summary', 'View the reports summary cards'),
+('report.export', 'Export Reports', 'Export reports to CSV'),
 
 ('user.manage', 'Manage Users', 'Manage users'),
-('role.manage', 'Manage Roles', 'Manage roles'),
+('role.manage', 'Manage Roles', 'Manage roles and permissions'),
 ('payment.manage', 'Manage Payments', 'Manage payment settings'),
 ('integration.manage', 'Manage Integrations', 'Manage integrations'),
 ('settings.manage', 'Manage Settings', 'Manage settings'),
