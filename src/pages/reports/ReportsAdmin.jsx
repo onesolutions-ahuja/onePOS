@@ -8,6 +8,7 @@ import ProductsReport from "./ProductsReport.jsx";
 import PaymentsReport from "./PaymentsReport.jsx";
 import CustomersReport from "./CustomersReport.jsx";
 import InventoryReport from "./InventoryReport.jsx";
+import StockMovementLedger from "./StockMovementLedger.jsx";
 import ProfitReport from "./ProfitReport.jsx";
 import TillReport from "./TillReport.jsx";
 import VATReport from "./VATReport.jsx";

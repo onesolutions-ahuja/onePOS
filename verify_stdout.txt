@@ -1,5 +1,0 @@
-sales.online_order_id column exists: true
-ux_sales_online_order index exists: true
-fk_sales_online_order constraint exists: true
-sales rows: 5
-done

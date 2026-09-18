@@ -44,7 +44,7 @@ export default function PlatformsPage() {
         lead="onePOS runs in any modern browser, which means the same till, dashboard and reports work on Windows touch terminals, Android tablets and iPads. No business should be locked into one hardware vendor."
       >
         <div className="page-hero-actions">
-          <Btn to="/login" variant="primary">Log in to onePOS</Btn>
+          <Btn href="/login" variant="primary">Log in to onePOS</Btn>
           <Btn to="/hardware" variant="secondary">Hardware guide</Btn>
         </div>
       </PageHero>

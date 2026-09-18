@@ -1,5 +1,4 @@
 import React from "react";
-import { Link } from "react-router-dom";
 import {
   Truck,
   Building2,
@@ -9,8 +8,7 @@ import {
   CircleDollarSign,
   ArrowRight,
   FileSpreadsheet,
-  ClipboardCheck,
-} from "lucide-react";
+  ClipboardCheck } from "lucide-react";
 import { usePageMeta } from "../utils/meta";
 import { PageHero, SectionHead, CheckList, Btn, CTASection, BrowserFrame } from "../components/Ui";
 import { PurchasingScreen } from "../components/AppMockups";
@@ -47,7 +45,7 @@ export default function PurchasingPage() {
         lead="Purchase orders and goods receiving in the same flow as the stockroom: create the order, receive the goods, and the balances, cost and history all update together."
       >
         <div className="page-hero-actions">
-          <Btn to="/login" variant="primary">Log in to onePOS</Btn>
+          <Btn href="/login" variant="primary">Log in to onePOS</Btn>
           <Btn to="/inventory" variant="secondary">See Inventory</Btn>
         </div>
       </PageHero>

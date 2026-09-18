@@ -83,6 +83,58 @@ export default function createReportsRouter({ authenticate, authorize, db }) {
   });
 
 
+  /*
+   * GET /reports/inventory-overview
+   * Current stock snapshot for the store: product, SKU/barcode, category,
+   * on-hand quantity, cost and stock value (plus a low-stock flag), used by
+   * the "Inventory Overview" report page. Company/store come from the
+   * authenticated session — never from query parameters.
+   */
+  router.get("/reports/inventory-overview", authenticate, authorize("reports.inventory.view"), async (req, res) => {
+    try {
+      const limit = Math.max(1, Math.min(10000, Number(req.query.limit) || 1000));
+      const offset = Math.max(0, Number(req.query.offset) || 0);
+
+      const result = await db(
+        `
+        SELECT
+          p.name AS product,
+          p.sku,
+          p.barcode AS ean,
+          COALESCE(cat.name, '-') AS category,
+          p.stock_quantity,
+          p.cost_price,
+          (p.stock_quantity * COALESCE(p.cost_price, 0)) AS stock_value,
+          (p.track_stock = true AND p.low_stock_level IS NOT NULL AND p.stock_quantity <= p.low_stock_level) AS low_stock
+        FROM products p
+        LEFT JOIN categories cat ON cat.id = p.category_id
+        WHERE p.company_id = $1
+        ORDER BY p.name
+        LIMIT $2 OFFSET $3
+        `,
+        [req.user.companyId, limit, offset]
+      );
+
+      res.json({
+        success: true,
+        data: result.rows.map((row) => ({
+          product: row.product,
+          sku: row.sku,
+          ean: row.ean,
+          category: row.category,
+          stock_quantity: Number(row.stock_quantity) || 0,
+          cost_price: row.cost_price !== null ? Number(row.cost_price) : null,
+          stock_value: Number(row.stock_value) || 0,
+          low_stock: row.low_stock === true,
+        })),
+      });
+    } catch (error) {
+      console.error("Inventory overview report error:", error);
+      res.status(500).json({ success: false, message: "Unable to load inventory overview report" });
+    }
+  });
+
+
   router.get("/reports/inventory-movements", authenticate, authorize("reports.inventory_movements.view", "inventory.movements.view"), async (req, res) => {
     try {
       const limit = Math.max(1, Math.min(10000, Number(req.query.limit) || 500));
@@ -109,7 +161,7 @@ export default function createReportsRouter({ authenticate, authorize, db }) {
           m.created_at,
           p.name AS product,
           p.sku,
-          p.ean,
+          p.barcode AS ean,
           s.name AS store_name,
           m.movement_type,
           m.quantity_change,

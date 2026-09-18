@@ -50,7 +50,7 @@ export default function ResourcesPage() {
         lead="Everything a team needs to get the most from onePOS — from quick answers to the details behind the platform."
       >
         <div className="page-hero-actions">
-          <Btn to="/login" variant="primary">Log in to onePOS</Btn>
+          <Btn href="/login" variant="primary">Log in to onePOS</Btn>
         </div>
       </PageHero>
 

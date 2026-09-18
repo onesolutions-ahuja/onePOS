@@ -68,7 +68,7 @@ export default function HomePage() {
               online orders into one workspace — from a single counter to a multi-store business.
             </p>
             <div className="hero-actions">
-              <Btn to="/login" variant="primary" size="lg">Log in to onePOS</Btn>
+              <Btn href="/login" variant="primary" size="lg">Log in to onePOS</Btn>
               <Btn to="/pos" variant="secondary" size="lg">Explore onePOS</Btn>
             </div>
             <div className="hero-chips">

@@ -66,7 +66,7 @@ export default function POSPage() {
         lead="Scan, sell, repeat. onePOS turns the counter into a fast, accurate checkout — with the payments, receipts, stock and reports handled automatically in the background."
       >
         <div className="page-hero-actions">
-          <Btn to="/login" variant="primary">Log in to onePOS</Btn>
+          <Btn href="/login" variant="primary">Log in to onePOS</Btn>
           <Btn to="/inventory" variant="secondary">See Inventory</Btn>
         </div>
       </PageHero>

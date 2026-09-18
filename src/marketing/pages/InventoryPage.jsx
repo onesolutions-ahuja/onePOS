@@ -53,7 +53,7 @@ export default function InventoryPage() {
         lead="One product catalogue with live balances — and a dated movement ledger behind every number, so stock never becomes a mystery."
       >
         <div className="page-hero-actions">
-          <Btn to="/login" variant="primary">Log in to onePOS</Btn>
+          <Btn href="/login" variant="primary">Log in to onePOS</Btn>
           <Btn to="/purchasing" variant="secondary">See Purchasing</Btn>
         </div>
       </PageHero>

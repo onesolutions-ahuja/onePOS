@@ -50,7 +50,7 @@ export default function PlatformPage() {
         lead={platform.summary}
       >
         <div className="page-hero-actions">
-          <Btn to="/login" variant="primary">Log in to onePOS</Btn>
+          <Btn href="/login" variant="primary">Log in to onePOS</Btn>
           <Btn to="/hardware" variant="secondary">Hardware guide</Btn>
         </div>
         {isBrand && (

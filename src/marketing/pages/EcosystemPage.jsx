@@ -28,7 +28,7 @@ export default function EcosystemPage() {
         lead="onePOS is built around a solid retail core: the till, stock, purchasing, customers and reports. Around that core sit channels, connections and add-ons — each one a configuration, not a second system."
       >
         <div className="page-hero-actions">
-          <Btn to="/login" variant="primary">Log in to onePOS</Btn>
+          <Btn href="/login" variant="primary">Log in to onePOS</Btn>
           <Btn to="/integrations" variant="secondary">All integrations</Btn>
         </div>
       </PageHero>

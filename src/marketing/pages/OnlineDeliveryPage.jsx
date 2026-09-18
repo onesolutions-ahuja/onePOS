@@ -159,10 +159,10 @@ function OnlineDeliveryPage() {
           <div className="cta-content">
             <h2>Ready to streamline your delivery operations?</h2>
             <p>Configure delivery platform integrations from your onePOS settings.</p>
-            <Link to="/login" className="button button-primary">
+            <a href="/login" className="button button-primary">
               Login to onePOS
               <span className="arrow" aria-hidden="true">→</span>
-            </Link>
+            </a>
           </div>
         </div>
       </section>

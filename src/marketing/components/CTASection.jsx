@@ -1,5 +1,4 @@
 import React from "react";
-import { Link } from "react-router-dom";
 
 function CTASection() {
   return (
@@ -8,10 +7,10 @@ function CTASection() {
         <div className="cta-content">
           <p className="eyebrow">YOUR ONEPOS WORKSPACE</p>
           <h2 id="cta-title">Ready to get back to running the shop?</h2>
-          <Link to="/login" className="button button-primary button-light">
+          <a href="/login" className="button button-primary button-light">
             Login to onePOS
             <span className="arrow" aria-hidden="true">→</span>
-          </Link>
+          </a>
         </div>
       </div>
     </section>

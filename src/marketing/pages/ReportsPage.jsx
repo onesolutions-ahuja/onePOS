@@ -48,7 +48,7 @@ export default function ReportsPage() {
         lead="Sales, payments, products, profit, cash and VAT — each report filters by range, respects permissions, and exports when the accountant asks."
       >
         <div className="page-hero-actions">
-          <Btn to="/login" variant="primary">Log in to onePOS</Btn>
+          <Btn href="/login" variant="primary">Log in to onePOS</Btn>
           <Btn to="/inventory" variant="secondary">See Inventory</Btn>
         </div>
       </PageHero>

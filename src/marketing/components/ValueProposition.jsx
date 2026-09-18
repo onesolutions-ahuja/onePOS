@@ -1,13 +1,11 @@
 import React from "react";
-import { Link } from "react-router-dom";
 
 function ValueProposition() {
   const operations = [
     {
       title: "Multi-store Management",
       description: "Bring store-level operations into a company-aware system built around stores, terminals and teams.",
-      icon: "🏪",
-    },
+      icon: "🏪" },
     {
       title: "Online Orders",
       description: "Bring online-order preparation into the operational flow, with platform configuration foundations for Uber Eats and Deliveroo.",
@@ -34,10 +32,10 @@ function ValueProposition() {
           <p>
             onePOS is structured for the details behind the sale: stock arriving, teams working, orders progressing and decisions being made from useful information.
           </p>
-          <Link to="/login" className="text-link">
+          <a href="/login" className="text-link">
             Go to login
             <span className="arrow" aria-hidden="true">→</span>
-          </Link>
+          </a>
         </div>
         <div className="operation-list">
           {operations.map((operation) => (

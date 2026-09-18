@@ -20,10 +20,10 @@ function HeroSection() {
             <span className="hero-badge">✓ Business Reports</span>
           </div>
           <div className="hero-actions">
-            <Link to="/login" className="button button-primary">
+            <a href="/login" className="button button-primary">
               Log in to onePOS
               <span className="arrow" aria-hidden="true">→</span>
-            </Link>
+            </a>
             <Link to="/product/pos" className="button button-secondary">
               Explore onePOS
               <span className="arrow" aria-hidden="true">→</span>

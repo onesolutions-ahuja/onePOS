@@ -46,7 +46,7 @@ export default function FeaturePage({ feature: featureProp }) {
         lead={product.summary}
       >
         <div className="page-hero-actions">
-          <Btn to="/login" variant="primary">Log in to onePOS</Btn>
+          <Btn href="/login" variant="primary">Log in to onePOS</Btn>
           <Btn to="/multi-store" variant="secondary">Business management</Btn>
         </div>
       </PageHero>

@@ -71,7 +71,7 @@ export default function FAQPage() {
         lead="Quick answers about the platform — from devices and offline to permissions and online orders."
       >
         <div className="page-hero-actions">
-          <Btn to="/login" variant="primary">Log in to onePOS</Btn>
+          <Btn href="/login" variant="primary">Log in to onePOS</Btn>
           <Btn to="/resources" variant="secondary">All resources</Btn>
         </div>
       </PageHero>

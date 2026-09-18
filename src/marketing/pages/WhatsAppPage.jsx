@@ -1,5 +1,4 @@
 import React from "react";
-import { Link } from "react-router-dom";
 import {
   Link2,
   FileText,
@@ -10,8 +9,7 @@ import {
   Eye,
   ArrowRight,
   Lock,
-  History,
-} from "lucide-react";
+  History } from "lucide-react";
 import { usePageMeta } from "../utils/meta";
 import { PageHero, SectionHead, CheckList, Btn, CTASection, BrowserFrame } from "../components/Ui";
 import { BrandIcon } from "../components/BrandIcons";
@@ -54,7 +52,7 @@ export default function WhatsAppPage() {
         lead="WhatsApp is an available onePOS capability: send each sale to the customer as a secure, tokenised invoice link or a PDF — automatically after the sale, or on demand."
       >
         <div className="page-hero-actions">
-          <Btn to="/login" variant="primary">Log in to onePOS</Btn>
+          <Btn href="/login" variant="primary">Log in to onePOS</Btn>
           <Btn to="/integrations" variant="secondary">All integrations</Btn>
         </div>
         <div className="hero-brand-note">

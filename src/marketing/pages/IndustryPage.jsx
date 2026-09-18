@@ -43,7 +43,7 @@ export default function IndustryPage() {
         lead={industry.description}
       >
         <div className="page-hero-actions">
-          <Btn to="/login" variant="primary">Log in to onePOS</Btn>
+          <Btn href="/login" variant="primary">Log in to onePOS</Btn>
           <Btn to="/pos" variant="secondary">The till</Btn>
         </div>
       </PageHero>

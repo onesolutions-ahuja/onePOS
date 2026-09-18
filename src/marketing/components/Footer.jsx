@@ -65,9 +65,9 @@ export default function Footer() {
             customers and online channels in one workspace.
           </p>
           <div className="footer-cta">
-            <Link to="/login" className="btn btn-primary btn-sm">
+            <a href="/login" className="btn btn-primary btn-sm">
               Log in to onePOS
-            </Link>
+            </a>
             <Link to="/ecosystem" className="btn btn-ghost btn-sm">
               Explore the ecosystem
             </Link>
@@ -90,7 +90,7 @@ export default function Footer() {
 
       <div className="wrap footer-bottom">
         <div className="footer-legal">
-          <Link to="/login">Login</Link>
+          <a href="/login">Login</a>
           <span>·</span>
           <Link to="/resources">Privacy</Link>
           <span>·</span>

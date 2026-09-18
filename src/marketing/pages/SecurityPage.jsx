@@ -54,7 +54,7 @@ export default function SecurityPage() {
         lead="onePOS puts permissions where decisions matter — discounts, refunds, cash access, stock changes and reports — so every action is understood, attributable and reversible."
       >
         <div className="page-hero-actions">
-          <Btn to="/login" variant="primary">Log in to onePOS</Btn>
+          <Btn href="/login" variant="primary">Log in to onePOS</Btn>
           <Btn to="/employees" variant="secondary">Employees & Permissions</Btn>
         </div>
       </PageHero>

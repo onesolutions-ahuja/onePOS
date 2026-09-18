@@ -133,9 +133,9 @@ export default function Navigation({ mobileMenuOpen, setMobileMenuOpen }) {
         </nav>
 
         <div className="header-actions">
-          <Link to="/login" className="btn btn-primary btn-sm">
+          <a href="/login" className="btn btn-primary btn-sm">
             Log in
-          </Link>
+          </a>
           <button
             type="button"
             className={`mobile-toggle ${mobileMenuOpen ? "is-open" : ""}`}
@@ -182,9 +182,9 @@ export default function Navigation({ mobileMenuOpen, setMobileMenuOpen }) {
               )}
             </div>
           ))}
-          <Link to="/login" className="btn btn-primary mobile-cta">
+          <a href="/login" className="btn btn-primary mobile-cta">
             Log in to onePOS
-          </Link>
+          </a>
         </nav>
       )}
     </header>

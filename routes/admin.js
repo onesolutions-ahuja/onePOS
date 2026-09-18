@@ -238,7 +238,7 @@ export default function createAdminRouter({
             AND s.status = 'completed'
             AND (s.created_at AT TIME ZONE c.timezone)::date = d.today) AS today_transactions,
           (SELECT COUNT(*) FROM products p
-            WHERE p.company_id = $1 AND p.store_id = $2
+            WHERE p.company_id = $1
             AND p.active = true AND p.track_stock = true
             AND p.stock_quantity <= p.low_stock_level AND p.low_stock_level > 0) AS low_stock_count
         `,

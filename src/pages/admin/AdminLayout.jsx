@@ -3,7 +3,8 @@ import { BarChart3, Bell, Calculator, ChevronDown, CreditCard, Database, FileTex
 import { apiRequest } from "../../services/api.js";
 import BottomStatusBar from "../../components/BottomStatusBar.jsx";
 import AdminNavDock from "../../components/AdminNavDock.jsx";
-import Dashboard from "../dashboard/Dashboard.jsx";import ProductsAdmin from "../products/ProductsAdmin.jsx";
+import Dashboard from "../dashboard/Dashboard.jsx";
+import ProductsAdmin from "../products/ProductsAdmin.jsx";
 import GlobalProductsAdmin from "../products/GlobalProductsAdmin.jsx";
 import CategoriesAdmin from "../categories/CategoriesAdmin.jsx";
 import InventoryAdmin from "../inventory/InventoryAdmin.jsx";

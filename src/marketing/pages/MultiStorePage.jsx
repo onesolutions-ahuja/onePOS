@@ -40,7 +40,7 @@ export default function MultiStorePage() {
         lead="onePOS is built around companies, stores and terminals. Owners see the whole business; staff see their store — and everyone works from the same system."
       >
         <div className="page-hero-actions">
-          <Btn to="/login" variant="primary">Log in to onePOS</Btn>
+          <Btn href="/login" variant="primary">Log in to onePOS</Btn>
           <Btn to="/employees" variant="secondary">See Employees & Permissions</Btn>
         </div>
       </PageHero>

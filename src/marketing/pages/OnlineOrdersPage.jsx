@@ -49,7 +49,7 @@ export default function OnlineOrdersPage() {
         lead="onePOS's online-orders module is built around delivery platforms: orders arrive, map to your products, prep in one place — and completing an order creates the POS sale and updates stock in the same transaction."
       >
         <div className="page-hero-actions">
-          <Btn to="/login" variant="primary">Log in to onePOS</Btn>
+          <Btn href="/login" variant="primary">Log in to onePOS</Btn>
           <Btn to="/integrations" variant="secondary">See all integrations</Btn>
         </div>
       </PageHero>

@@ -75,7 +75,7 @@ export default function IntegrationsPage() {
           lead={entry.tagline}
         >
           <div className="page-hero-actions">
-            <Btn to="/login" variant="primary">Log in to onePOS</Btn>
+            <Btn href="/login" variant="primary">Log in to onePOS</Btn>
             <Btn to="/online-orders" variant="secondary">Online Orders</Btn>
           </div>
           <div className="hero-brand-note">
@@ -172,7 +172,7 @@ export default function IntegrationsPage() {
         lead="Invoices to WhatsApp, orders from delivery platforms, data to your accounting system — each connection is a configuration, not a compromise."
       >
         <div className="page-hero-actions">
-          <Btn to="/login" variant="primary">Log in to onePOS</Btn>
+          <Btn href="/login" variant="primary">Log in to onePOS</Btn>
           <Btn to="/ecosystem" variant="secondary">The ecosystem</Btn>
         </div>
       </PageHero>

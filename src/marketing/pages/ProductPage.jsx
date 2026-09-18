@@ -111,10 +111,10 @@ function ProductPage() {
               <div className="sidebar-card cta-card">
                 <h3>Ready to get started?</h3>
                 <p>Log in to your onePOS workspace to explore these features.</p>
-                <Link to="/login" className="button button-primary">
+                <a href="/login" className="button button-primary">
                   Login to onePOS
                   <span className="arrow" aria-hidden="true">→</span>
-                </Link>
+                </a>
               </div>
             </aside>
           </div>

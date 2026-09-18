@@ -71,7 +71,7 @@ export default function HardwarePage() {
         lead="Scanners, receipt printers, cash drawers, touchscreens and payment terminals. onePOS connects to retail hardware where the device and connection setup supports it — explained honestly, not over-promised."
       >
         <div className="page-hero-actions">
-          <Btn to="/login" variant="primary">Log in to onePOS</Btn>
+          <Btn href="/login" variant="primary">Log in to onePOS</Btn>
           <Btn to="/platforms" variant="secondary">Platforms & offline</Btn>
         </div>
       </PageHero>
