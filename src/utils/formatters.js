@@ -16,6 +16,7 @@ export function normaliseProduct(product) {
     availableOnDeliveroo: product.available_on_deliveroo === true || product.availableOnDeliveroo === true,
     uberItemId: product.uber_item_id || product.uberItemId || "",
     deliverooItemId: product.deliveroo_item_id || product.deliverooItemId || "",
+    imageUrl: product.image_url || product.imageUrl || "",
     category: product.category || product.category_name || "All",
     stock: Number(product.stock_quantity ?? product.stock ?? product.quantity ?? 0),
     active: product.active !== false && product.is_active !== false,

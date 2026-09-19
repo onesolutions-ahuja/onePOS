@@ -43,7 +43,7 @@ function queueKeyFor(tenant) {
  * absent; foreign/corrupt data is NEVER deleted (it may belong to another
  * login on this terminal and must survive).
  */
-function readQueue(tenant) {
+export function readQueue(tenant) {
   let record = null;
   try {
     const raw = localStorage.getItem(queueKeyFor(tenant));
@@ -58,6 +58,39 @@ function readQueue(tenant) {
     return [];
   }
   return Array.isArray(record.data) ? record.data : [];
+}
+
+/* Read-only helper for debugging a queued offline sale from the browser.
+   Prints the queue contents and a decoded sale summary to console. Safe to
+   leave in dev/build; it reads localStorage but never modifies it. */
+export function inspectOfflineQueue() {
+  const tenant = getTenantFromToken();
+  if (!tenant) {
+    console.log("[offlineQueue] not logged in");
+    return null;
+  }
+  const key = queueKeyFor(tenant);
+  let raw;
+  try { raw = localStorage.getItem(key); } catch { raw = null; }
+  console.log(
+    "[offlineQueue] key=%s tenant=%s store=%s raw=%.200s",
+    key,
+    tenant.companyId ? tenant.companyId.slice(0, 8) : "no-company",
+    tenant.storeId ? tenant.storeId.slice(0, 8) : "no-store",
+    raw || "(empty)"
+  );
+  const queue = readQueue(tenant);
+  console.log("[offlineQueue] items=%d", queue.length);
+  for (const item of queue) {
+    console.log("[offlineQueue] item id=%s status=%s attempts=%s sealed=%s",
+      item.id,
+      item.status,
+      item.attempts ?? "?",
+      Boolean(item.tenant && item.tenant.companyId === tenant.companyId && item.tenant.storeId === tenant.storeId)
+    );
+    console.log("[offlineQueue] sale=%o", item.sale);
+  }
+  return { key, tenant, items: queue };
 }
 
 function writeQueue(tenant, entries) {
@@ -435,8 +468,7 @@ export function startAutoSync({ pollMs = 30000 } = {}) {
     // Probe even with an empty/blocked queue: navigator.onLine alone does not
     // detect a recovered backend. Never cache this authenticated response.
     try {
-      const token = localStorage.getItem("onepos_token");
-      const response = await fetch("/api/auth/me", { headers: { Authorization: `Bearer ${token || ""}` }, signal: AbortSignal.timeout(10000), cache: "no-store" });
+      const response = await fetch("/api/health", { signal: AbortSignal.timeout(10000), cache: "no-store" });
       reportConnection(response.status < 500);
     } catch { reportConnection(false); }
     await syncOfflineQueue();

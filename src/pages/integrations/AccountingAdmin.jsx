@@ -8,7 +8,7 @@
  * (T9A routes, T9G dispatch status, T9M components).
  */
 import { useCallback, useEffect, useState } from "react";
-import { Calculator, Pencil, PlugZap, Plus, RefreshCw, Trash2 } from "lucide-react";
+import { Calculator, CloudUpload, Pencil, PlugZap, Plus, RefreshCw, Trash2 } from "lucide-react";
 import { apiRequest } from "../../services/api.js";
 import { fmtDateTime, Flash, StatusPill } from "./shared.jsx";
 import IntegrationFormModal from "./IntegrationFormModal.jsx";
@@ -31,6 +31,10 @@ export default function AccountingAdmin({ storeId }) {
   const [editing, setEditing] = useState(null);
   const [managing, setManaging] = useState(null);
   const [testingId, setTestingId] = useState(null);
+  /* T10V - Sales Export centre state (wired to /api/accounting). */
+  const [exportSales, setExportSales] = useState([]);
+  const [activeConnection, setActiveConnection] = useState(null);
+  const [exportingId, setExportingId] = useState(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -48,6 +52,45 @@ export default function AccountingAdmin({ storeId }) {
       setLoading(false);
     }
   }, []);
+
+  /* T10V - export centre data. Kept separate so a permission gap on the
+   * export endpoints never breaks the connection management page. */
+  const loadExportCentre = useCallback(async () => {
+    try {
+      const [conns, queue] = await Promise.all([
+        apiRequest("/api/accounting/integrations"),
+        apiRequest("/api/accounting/exportable"),
+      ]);
+      const connRows = Array.isArray(conns?.data) ? conns.data : [];
+      setActiveConnection(connRows.find((c) => c.enabled) || null);
+      setExportSales(Array.isArray(queue?.data) ? queue.data : []);
+    } catch {
+      /* export centre stays empty (e.g. no accounting.export permission) */
+    }
+  }, []);
+
+  useEffect(() => {
+    loadExportCentre();
+  }, [loadExportCentre]);
+
+  const exportSale = async (sale) => {
+    setError("");
+    setMessage("");
+    setExportingId(sale.id);
+    try {
+      const r = await apiRequest(`/api/accounting/export/${sale.id}`, { method: "POST" });
+      setMessage(
+        r.status === "duplicate"
+          ? `Sale ${sale.receiptNumber || ""} was already exported — no duplicate created.`
+          : `Sale ${sale.receiptNumber || ""} exported to ${r.integration?.name || "accounting"}.`,
+      );
+      await Promise.all([load(), loadExportCentre()]);
+    } catch (err) {
+      setError(err.message || "Accounting export failed");
+    } finally {
+      setExportingId(null);
+    }
+  };
 
   useEffect(() => {
     load();
@@ -223,6 +266,87 @@ export default function AccountingAdmin({ storeId }) {
                       </tr>
                     );
                   })
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {!managing && (
+        <div className="bg-white border border-slate-200 rounded-xl mt-6 overflow-hidden">
+          <div className="px-4 py-3 border-b border-slate-200 flex items-center justify-between">
+            <div>
+              <h2 className="font-semibold text-slate-900 text-sm flex items-center gap-2">
+                <CloudUpload size={16} className="text-blue-600" /> Sales Export
+              </h2>
+              <p className="text-xs text-slate-500 mt-0.5">
+                Recent sales ready to push to your accounting connection. Exporting is idempotent —
+                a sale already exported is never sent twice.
+              </p>
+            </div>
+            <button
+              onClick={loadExportCentre}
+              className="h-8 px-3 bg-white border border-slate-200 rounded-lg text-xs flex items-center gap-1.5 hover:bg-slate-50"
+            >
+              <RefreshCw size={13} /> Refresh queue
+            </button>
+          </div>
+          {activeConnection && (
+            <div className="px-4 py-2 bg-slate-50 border-b border-slate-200 text-xs text-slate-600">
+              Exporting to <span className="font-medium">{activeConnection.name}</span>
+              {activeConnection.baseUrl ? <span className="text-slate-400"> · {activeConnection.baseUrl}</span> : null}
+            </div>
+          )}
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="bg-slate-50 border-b border-slate-200 text-left text-xs text-slate-500 uppercase tracking-wide">
+                  <th className="px-4 py-2.5 font-medium">Receipt</th>
+                  <th className="px-4 py-2.5 font-medium">Date</th>
+                  <th className="px-4 py-2.5 font-medium">Items</th>
+                  <th className="px-4 py-2.5 font-medium">Net</th>
+                  <th className="px-4 py-2.5 font-medium">VAT</th>
+                  <th className="px-4 py-2.5 font-medium">Gross</th>
+                  <th className="px-4 py-2.5 font-medium">Export status</th>
+                  <th className="px-4 py-2.5 font-medium text-right">Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                {exportSales.length === 0 ? (
+                  <tr>
+                    <td colSpan={8} className="px-4 py-6 text-center text-slate-400 text-sm">
+                      {loading ? "Loading…" : "No recent sales to export."}
+                    </td>
+                  </tr>
+                ) : (
+                  exportSales.map((sale) => (
+                    <tr key={sale.id} className="border-b border-slate-100 hover:bg-slate-50/60">
+                      <td className="px-4 py-2.5 font-mono text-xs">{sale.receiptNumber || sale.id.slice(0, 8)}</td>
+                      <td className="px-4 py-2.5 text-xs text-slate-500">{fmtDateTime(sale.createdAt)}</td>
+                      <td className="px-4 py-2.5 text-xs">{sale.itemCount}</td>
+                      <td className="px-4 py-2.5 text-xs">£{(sale.total - sale.vat).toFixed(2)}</td>
+                      <td className="px-4 py-2.5 text-xs">£{sale.vat.toFixed(2)}</td>
+                      <td className="px-4 py-2.5 text-xs font-medium">£{sale.total.toFixed(2)}</td>
+                      <td className="px-4 py-2.5 text-xs">
+                        {sale.dispatched ? (
+                          <span className="px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">Exported</span>
+                        ) : (
+                          <span className="px-2 py-0.5 rounded-full bg-slate-100 text-slate-500 border border-slate-200">Not exported</span>
+                        )}
+                      </td>
+                      <td className="px-4 py-2.5 text-right">
+                        <button
+                          onClick={() => exportSale(sale)}
+                          disabled={exportingId === sale.id || !activeConnection || sale.dispatched}
+                          className="px-3 py-1.5 text-xs rounded-lg bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed"
+                          title={sale.dispatched ? "Already exported" : !activeConnection ? "Enable an accounting integration first" : "Export this sale"}
+                        >
+                          {exportingId === sale.id ? "Exporting…" : sale.dispatched ? "Exported" : "Export"}
+                        </button>
+                      </td>
+                    </tr>
+                  ))
                 )}
               </tbody>
             </table>

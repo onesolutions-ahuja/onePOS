@@ -2,6 +2,8 @@ import { CreditCard, Receipt, ShoppingCart } from "lucide-react";
 
 function CartPanel({
   basket,
+  miscLines = [],
+  onRemoveMiscLine,
   selectedCustomer,
   onCustomerClick,
   onCustomerRemove,
@@ -126,6 +128,55 @@ function CartPanel({
                 </div>
               </div>
             ))}
+
+            {/* Till Misc Item lines: manual-price lines with no catalogue SKU.
+                They check out on the same sale/receipt; the backend records
+                them as item_type='MISC'. Removable like any basket line. */}
+            {miscLines.map((line, index) => (
+              <div key={`misc-${index}-${line.description}`}
+                className="border-b border-slate-100 py-3"
+                data-testid="misc-cart-line"
+              >
+                <div className="flex justify-between gap-2">
+                  <div className="font-medium text-sm">
+                    {line.description}
+                    <span className="ml-1 text-[10px] uppercase tracking-wide text-slate-400">
+                      Misc
+                    </span>
+                  </div>
+
+                  <div className="font-semibold text-sm">
+                    £
+                    {(
+                      Number(line.price || 0) *
+                      Number(line.quantity || 0)
+                    ).toFixed(2)}
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-between mt-2">
+                  <div className="flex items-center border border-slate-200 rounded">
+                    <span className="w-8 text-center text-sm font-medium">
+                      {line.quantity}
+                    </span>
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs text-slate-400">
+                      £{Number(line.price || 0).toFixed(2)} each
+                    </span>
+                    <button
+                      onClick={() => onRemoveMiscLine(index)}
+                      className="w-8 h-8 text-red-500 hover:bg-red-50"
+                      title="Remove misc item"
+                      aria-label={`Remove ${line.description}`}
+                    >
+                      ×
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ))}
           </div>
         )}
       </div>
@@ -161,7 +212,7 @@ function CartPanel({
 
         <button
           disabled={
-            basket.length === 0
+            basket.length === 0 && miscLines.length === 0
           }
           onClick={onCheckout}
           className="w-full h-14 bg-blue-600 hover:bg-blue-700 disabled:bg-slate-300 text-white rounded-md text-lg font-bold flex items-center justify-center gap-2"

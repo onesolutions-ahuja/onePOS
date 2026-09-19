@@ -174,12 +174,108 @@ function normalizeUberItem(rawItem) {
 }
 
 /*
+ * ---------------------------------------------------------------------------
+ * T10-UBER-MENU - Menu Sync (OnePOS -> Uber Eats)
+ *
+ * OnePOS is the SOURCE OF TRUTH: the payload is built from the existing
+ * Product Master (and nothing is ever read back into it). Deterministic and
+ * idempotent by identity: the Uber item id IS the stable external mapping -
+ * the saved products.uber_item_id when present, otherwise the onePOS product
+ * UUID - so repeated syncs UPDATE the same Uber items instead of creating
+ * duplicates. Uber item ids echo back as pos_item_id on orders, which the
+ * existing webhook intake already resolves against products.uber_item_id.
+ *
+ * Price: integer minor units (pence) computed from the onePOS selling price.
+ * Availability: active+available_on_uber -> is_available true; active but not
+ * offered on Uber -> published but is_available false; inactive products are
+ * excluded entirely (counted as skipped). Modifiers: none published (no
+ * modifier data exists in the onePOS product model today).
+ * ---------------------------------------------------------------------------
+ */
+
+function uberMenuCategoryId(categoryName) {
+  const slug = String(categoryName)
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return `onepos-cat-${slug || "uncategorised"}`;
+}
+
+/**
+ * Pure payload builder (exported for tests). NEVER mutates its inputs.
+ *
+ * @param {Array<{id,name,description,price,vat_rate,active,category_name,uber_item_id,available_on_uber}>} products
+ * @param {{storeId: string, currency?: string}} meta
+ */
+export function buildMenuPayload(products, { storeId, currency = "GBP" } = {}) {
+  void currency; // Uber menu items carry prices only; store currency is fixed by the store
+
+  const groups = new Map();
+  const published = [];
+  let skippedInactive = 0;
+  let missingPrice = 0;
+
+  for (const product of products || []) {
+    if (!product || product.active === false) {
+      skippedInactive += 1;
+      continue;
+    }
+
+    const priceMinor = Math.round((Number(product.price) || 0) * 100);
+    if (!(Number(product.price) > 0)) missingPrice += 1;
+
+    const uberItemId = String(product.uber_item_id || product.id);
+    const category = product.category_name || "Uncategorised";
+    const categoryId = uberMenuCategoryId(category);
+
+    if (!groups.has(categoryId)) {
+      groups.set(categoryId, { id: categoryId, title: category, items: [] });
+    }
+
+    const item = {
+      id: uberItemId,
+      title: product.name || uberItemId,
+      description: product.description || "",
+      price: Math.max(priceMinor, 0),
+      is_available: product.available_on_uber !== false,
+      external_data: `onepos:${product.id}`,
+    };
+
+    groups.get(categoryId).items.push(item);
+    published.push(item);
+  }
+
+  return {
+    menus: [
+      {
+        id: `onepos-menu-${storeId || "store"}`,
+        title: "onePOS Menu",
+        service_availability: ["mon", "tue", "wed", "thu", "fri", "sat", "sun"].map((day) => ({
+          day_of_week: day,
+          time_periods: [{ start_time: "00:00", end_time: "23:59" }],
+        })),
+        categories: [...groups.values()],
+      },
+    ],
+    _meta: {
+      storeId: storeId || null,
+      publishedCount: published.length,
+      categoryCount: groups.size,
+      skippedInactiveCount: skippedInactive,
+      missingPriceCount: missingPrice,
+      publishedItemIds: published.map((item) => item.id),
+    },
+  };
+}
+
+/*
  * Uber Eats order endpoints (Order API). NOTE: endpoint paths come from the
  * current Uber developer docs (Order API suite) - re-verify while testing in
  * the sandbox and adjust here only; nothing else in the codebase knows them.
  */
 const API_ENDPOINTS = {
   stores: "/v1/eats/stores",
+  menu: (storeId) => `/v1/eats/stores/${encodeURIComponent(storeId)}/menus`,
   accept: (orderId) => `/v1/eats/orders/${encodeURIComponent(orderId)}/accept_pos_order`,
   deny: (orderId) => `/v1/eats/orders/${encodeURIComponent(orderId)}/deny_pos_order`,
   cancel: (orderId) => `/v1/eats/orders/${encodeURIComponent(orderId)}/cancel`,
@@ -400,6 +496,78 @@ const uberEatsService = {
     return response.success
       ? confirmed("MARK_READY", response, { externalOrderId: order.external_order_id })
       : rejected("MARK_READY", response);
+  },
+
+  /*
+   * MENU SYNC (OnePOS -> Uber Eats): PUT the built menu payload to the Uber
+   * Menu API for the configured store (sandbox or production host depending
+   * on config.environment). Read-only towards onePOS: the caller passes the
+   * products; this method never touches any onePOS table. Every exchange is
+   * logged to platform_api_logs by uberRequest (secrets redacted).
+   */
+  async syncMenu(products, config) {
+    if (!isRealApiMode(config)) {
+      return {
+        success: false,
+        platform: "uber",
+        action: "MENU_SYNC",
+        code: "NOT_CONFIGURED",
+        message: "Uber credentials are not configured in Settings - Online Platforms",
+        httpStatus: null,
+        data: null,
+      };
+    }
+
+    const storeId = config.store_id || config.store_location_id;
+
+    if (!storeId) {
+      return {
+        success: false,
+        platform: "uber",
+        action: "MENU_SYNC",
+        code: "STORE_NOT_MAPPED",
+        message: "No Uber store is mapped for this company - save the Store ID first (Test connection / Get sandbox IDs or a store.provisioned webhook)",
+        httpStatus: null,
+        data: null,
+      };
+    }
+
+    const payload = buildMenuPayload(products, { storeId });
+
+    const response = await uberRequest({
+      config,
+      method: "PUT",
+      path: API_ENDPOINTS.menu(storeId),
+      body: { menus: payload.menus },
+      action: "MENU_SYNC",
+      scope: STORES_OAUTH_SCOPE,
+    });
+
+    if (!response.success) {
+      return {
+        success: false,
+        platform: "uber",
+        action: "MENU_SYNC",
+        code: response.code || (response.httpStatus >= 500 ? "PLATFORM_CALL_FAILED" : "UBER_REJECTED_MENU"),
+        message:
+          response.message ||
+          (response.data && (response.data.message || response.data.error_description || response.data.error)) ||
+          `Uber did not accept the menu (HTTP ${response.httpStatus ?? "?"})`,
+        httpStatus: response.httpStatus,
+        data: response.data,
+        meta: payload._meta,
+      };
+    }
+
+    return {
+      success: true,
+      platform: "uber",
+      action: "MENU_SYNC",
+      simulated: false,
+      httpStatus: response.httpStatus,
+      data: response.data,
+      meta: payload._meta,
+    };
   },
 
   /*

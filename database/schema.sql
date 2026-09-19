@@ -33,6 +33,10 @@ CREATE TABLE IF NOT EXISTS stores (
     postcode VARCHAR(30),
     phone VARCHAR(50),
     active BOOLEAN NOT NULL DEFAULT TRUE,
+    /* Self-Checkout device pairing: bcrypt hash of the device key an admin
+       generates in Settings. The login screen uses it to mint a restricted
+       self_checkout mode token WITHOUT any staff session on that device. */
+    self_checkout_key_hash VARCHAR(100),
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -70,6 +74,26 @@ CREATE TABLE IF NOT EXISTS company_settings (
     loyalty_earning_rate NUMERIC(5,4) NOT NULL DEFAULT 0.0100,
     /* T10U: negative-inventory billing safety — OFF by default. */
     allow_negative_inventory_billing BOOLEAN NOT NULL DEFAULT FALSE,
+    /* T10P: Scan & Go feature flag — OFF by default. */
+    scan_go_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+    /* Till product browser presentation: 'image' (default) or 'compact'. */
+    product_view VARCHAR(20) NOT NULL DEFAULT 'image',
+    /* Admin dock quick-access pages shown directly on the bottom bar
+       (T10W): ordered page names; the launcher always exposes every page.
+       Default mirrors the original fixed dock layout. */
+    dock_quick_access JSONB NOT NULL DEFAULT '["Dashboard", "Sales", "Products", "Inventory", "Customers", "Reports"]'::jsonb,
+    /* Customer-facing bill display (second monitor). OFF = the till header
+       button stays hidden and /customer-display shows its disabled screen. */
+    customer_display_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+    online_ordering_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+    online_payment_methods JSONB NOT NULL DEFAULT '["card", "cash", "cod"]'::jsonb,
+    /* Configurable sale invoice/receipt prefixes per sale source.
+       Till and self-checkout receipts use PREFIX-YYYYMMDD-NNNN through the
+       existing per-terminal sequencing; delivery (online order) receipts use
+       PREFIX-<platform external order id>. */
+    till_invoice_prefix VARCHAR(10) NOT NULL DEFAULT 'TO',
+    delivery_invoice_prefix VARCHAR(10) NOT NULL DEFAULT 'DEL',
+    self_checkout_invoice_prefix VARCHAR(10) NOT NULL DEFAULT 'SC',
     updated_by UUID,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -238,6 +262,10 @@ CREATE UNIQUE INDEX IF NOT EXISTS ux_ean_product_master_ean
 ON ean_product_master(ean);
 
 ALTER TABLE ean_product_master ADD COLUMN IF NOT EXISTS image_url TEXT NULL;
+
+-- Product image (data URL or remote URL), set from the Product Master form
+-- or pre-filled from the global catalogue. Additive; NULL = no image.
+ALTER TABLE products ADD COLUMN IF NOT EXISTS image_url TEXT NULL;
 ALTER TABLE ean_product_master ADD COLUMN IF NOT EXISTS source TEXT NULL;
 
 -- EAN lookup audit only; no limits, pricing or customer product changes.
@@ -287,6 +315,17 @@ ON products(barcode);
 
 CREATE INDEX IF NOT EXISTS idx_products_sku
 ON products(sku);
+
+/*
+ * Till Misc Item (manual-price sale line): one invisible MISC placeholder
+ * product per company. sale_items.product_id is NOT NULL, so misc lines
+ * reference this company row; the description lives on sale_items.product_name
+ * and item_type='MISC' keeps the line distinguishable from real products.
+ */
+CREATE UNIQUE INDEX IF NOT EXISTS uq_products_misc_per_company
+ON products(company_id)
+WHERE sku = 'MISC'
+  AND active = false;
 
 -- ============================================================
 -- INVENTORY MOVEMENTS / STOCK LEDGER
@@ -449,12 +488,58 @@ CREATE TABLE IF NOT EXISTS customers (
     notes TEXT,
     active BOOLEAN NOT NULL DEFAULT TRUE,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 
+    /*
+     * T10Y — Customer credit account fields. Credit is OFF for every
+     * existing customer (default FALSE); balance is DERIVED from the
+     * customer_credit_ledger (never stored/mutated here).
+     */
+    credit_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+    credit_limit NUMERIC(12,2) NULL
+);
 CREATE INDEX IF NOT EXISTS idx_customers_company
 ON customers(company_id);
 
+-- ============================================================
+-- T10Y — CUSTOMER CREDIT LEDGER
+-- Immutable, auditable credit transactions. Outstanding balance is
+-- always DERIVED: SUM(amount * sign(transaction_type)). Every row is
+-- company-scoped; reference_type/reference_id link back to the sale,
+-- payment or adjustment that produced it.
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS customer_credit_ledger (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+    store_id UUID NULL REFERENCES stores(id) ON DELETE SET NULL,
+    customer_id UUID NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
+    transaction_type VARCHAR(30) NOT NULL CHECK (transaction_type IN
+        ('credit_sale', 'payment', 'credit_note', 'debit_note', 'opening')),
+    /* Unsigned magnitude in major units; direction comes from
+       transaction_type (credit_sale/credit_note/opening increase,
+       payment/debit_note decrease). */
+    amount NUMERIC(12,2) NOT NULL CHECK (amount > 0),
+    balance_after NUMERIC(12,2) NULL,
+    reference_type VARCHAR(40) NULL,
+    reference_id UUID NULL,
+    description TEXT NULL,
+    vat_amount NUMERIC(12,2) NULL,
+    net_amount NUMERIC(12,2) NULL,
+    gross_amount NUMERIC(12,2) NULL,
+    vat_rate NUMERIC(6,3) NULL,
+    payment_method VARCHAR(40) NULL,
+    idempotency_key VARCHAR(120) NULL,
+    created_by UUID NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (company_id, idempotency_key)
+);
+
+CREATE INDEX IF NOT EXISTS idx_credit_ledger_customer
+ON customer_credit_ledger(company_id, customer_id, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_credit_ledger_reference
+ON customer_credit_ledger(reference_type, reference_id);
 CREATE TABLE IF NOT EXISTS customer_stores (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     customer_id UUID NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
@@ -584,7 +669,8 @@ CREATE TABLE IF NOT EXISTS sale_items (
     unit_price NUMERIC(12,2) NOT NULL,
     discount NUMERIC(12,2) NOT NULL DEFAULT 0,
     tax NUMERIC(12,2) NOT NULL DEFAULT 0,
-    total NUMERIC(12,2) NOT NULL
+    total NUMERIC(12,2) NOT NULL,
+    item_type VARCHAR(20) NOT NULL DEFAULT 'PRODUCT'
 );
 
 CREATE INDEX IF NOT EXISTS idx_sale_items_sale
@@ -757,6 +843,41 @@ CREATE TABLE IF NOT EXISTS integrations (
 
 CREATE UNIQUE INDEX IF NOT EXISTS ux_integrations_company_provider
 ON integrations(company_id, provider);
+
+-- ============================================================
+-- SCAN & GO (T10P) — customer scan sessions
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS scan_and_go_sessions (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+    store_id UUID NOT NULL REFERENCES stores(id),
+    status VARCHAR(30) NOT NULL DEFAULT 'active' CHECK (
+        status IN ('active', 'checking_out', 'completed', 'abandoned', 'expired')
+    ),
+    started_by UUID REFERENCES users(id) ON DELETE SET NULL,
+    sale_id UUID,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    completed_at TIMESTAMPTZ,
+    expires_at TIMESTAMPTZ NOT NULL DEFAULT (NOW() + INTERVAL '24 hours')
+);
+
+CREATE INDEX IF NOT EXISTS idx_scan_go_sessions_company_store
+    ON scan_and_go_sessions(company_id, store_id, created_at);
+
+CREATE TABLE IF NOT EXISTS scan_and_go_session_items (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    session_id UUID NOT NULL REFERENCES scan_and_go_sessions(id) ON DELETE CASCADE,
+    product_id UUID NOT NULL REFERENCES products(id),
+    quantity NUMERIC(12,3) NOT NULL DEFAULT 1 CHECK (quantity > 0),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT scan_and_go_session_items_unique UNIQUE (session_id, product_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_scan_go_session_items_session
+    ON scan_and_go_session_items(session_id);
 
 -- ============================================================
 -- ONLINE ORDERS (UBER EATS / DELIVEROO)
@@ -1018,6 +1139,10 @@ VALUES
 ('payment.manage', 'Manage Payments', 'Manage payment settings'),
 ('integration.manage', 'Manage Integrations', 'Manage integrations'),
 ('settings.manage', 'Manage Settings', 'Manage settings'),
+
+/* T10V - accounting integration export (push sales to the connected
+   accounting system through the existing T9A connections). */
+('accounting.export', 'Export to Accounting', 'Push sales to the connected accounting integration'),
 
 ('online_orders.view', 'View Online Orders', 'View online platform orders'),
 ('online_orders.manage', 'Manage Online Orders', 'Accept, reject, cancel and complete online orders'),

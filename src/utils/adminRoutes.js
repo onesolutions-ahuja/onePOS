@@ -77,12 +77,19 @@ export const SETTINGS_TAB_SLUGS = {
   "Payment Terminals": "payment-terminals",
   "Customer Loyalty": "customer-loyalty",
   Hardware: "hardware",
-  "Users & Permissions": "users-permissions",
-  Integrations: "integrations",
-  "Online Platforms": "online-platforms",
+  Users: "users",
+  "Roles & Permissions": "roles-permissions",
+  Connections: "connections",
+  "Uber Eats": "uber-eats",
+  Deliveroo: "deliveroo",
   WhatsApp: "whatsapp",
   "SMS Delivery": "sms-delivery",
   "Email Delivery": "email-delivery",
+  /* Legacy sections (pre left-panel navigation) - kept so existing deep
+     links still resolve; the Settings page redirects them internally. */
+  "Users & Permissions": "users-permissions",
+  "Online Platforms": "online-platforms",
+  Integrations: "integrations",
 };
 
 export const SETTINGS_SLUG_TO_TAB = Object.fromEntries(

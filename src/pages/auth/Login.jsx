@@ -1,11 +1,22 @@
 import { useState } from "react";
-import { Calculator } from "lucide-react";
+import { Monitor, Calculator } from "lucide-react";
 import { apiRequest } from "../../services/api.js";
 
-export default function Login({ onLogin, sessionMessage = "" }) {
+/*
+ * Login screen — staff sign-in plus the customer-facing Self-Checkout entry.
+ *
+ * Self-Checkout runs on a dedicated customer device with NO staff logged in.
+ * The device proves itself once with the store's Self-Checkout device key
+ * (Settings → Store & Till → Self-Checkout device pairing); a valid key
+ * starts the restricted card-only Self-Checkout screen with Guest /
+ * Sign-in identification for the customer.
+ */
+export default function Login({ onLogin, sessionMessage = "", onStartSelfCheckout = null, scoStarting = false, scoError = "" }) {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
+  const [deviceKey, setDeviceKey] = useState("");
+  const [scoOpen, setScoOpen] = useState(false); /* reveal the device-key panel */
 
   const login = async () => {
     setError("");
@@ -104,6 +115,57 @@ export default function Login({ onLogin, sessionMessage = "" }) {
                 Sign in
               </button>
             </form>
+
+            {/* Customer-facing Self-Checkout entry (dedicated device) */}
+            {onStartSelfCheckout && (
+              <div className="border-t border-slate-200 pt-4 mt-2">
+                {!scoOpen ? (
+                  <button
+                    type="button"
+                    onClick={() => setScoOpen(true)}
+                    className="w-full h-12 rounded-lg bg-teal-700 hover:bg-teal-800 text-white font-semibold flex items-center justify-center gap-2"
+                  >
+                    <Monitor size={18} /> Self-Checkout
+                  </button>
+                ) : (
+                  <div className="space-y-2">
+                    <div className="text-sm font-medium text-slate-700">Start Self-Checkout on this device</div>
+                    <input
+                      value={deviceKey}
+                      onChange={(event) => setDeviceKey(event.target.value)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter" && deviceKey.trim()) onStartSelfCheckout(deviceKey.trim());
+                      }}
+                      placeholder="Device key (from Settings → Store & Till)"
+                      autoFocus
+                      className="w-full h-11 px-3 border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-teal-600 tracking-wider"
+                    />
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        onClick={() => onStartSelfCheckout(deviceKey.trim())}
+                        disabled={scoStarting || !deviceKey.trim()}
+                        className="flex-1 h-11 rounded-lg bg-teal-700 hover:bg-teal-800 text-white font-semibold disabled:opacity-50"
+                      >
+                        {scoStarting ? "Starting…" : "Start"}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => { setScoOpen(false); setDeviceKey(""); }}
+                        className="h-11 px-4 rounded-lg border text-slate-600 hover:bg-slate-50"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                    {scoError ? (
+                      <div role="alert" className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg p-2 text-center">
+                        {scoError}
+                      </div>
+                    ) : null}
+                  </div>
+                )}
+              </div>
+            )}
 
             <div className="text-center text-xs text-slate-400">
               Till 01 · London Store

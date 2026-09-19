@@ -21,6 +21,11 @@ export async function initializeDatabase(pool) {
     );
 
     ALTER TABLE companies ADD COLUMN IF NOT EXISTS logo_url TEXT;
+    /* Till Misc Item: line type on sale items (existing rows read as PRODUCT). */
+    ALTER TABLE sale_items ADD COLUMN IF NOT EXISTS item_type VARCHAR(20) NOT NULL DEFAULT 'PRODUCT';
+    /* One invisible MISC placeholder product per company (Till Misc Item). */
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_products_misc_per_company
+      ON products(company_id) WHERE sku = 'MISC' AND active = false;
 
     CREATE TABLE IF NOT EXISTS stores (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -55,8 +60,15 @@ export async function initializeDatabase(pool) {
       loyalty_enabled BOOLEAN NOT NULL DEFAULT FALSE,
       loyalty_earning_rate NUMERIC(5,4) NOT NULL DEFAULT 0.0100,
       scan_go_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+      product_view VARCHAR(20) NOT NULL DEFAULT 'image',
+      dock_quick_access JSONB NOT NULL DEFAULT '["Dashboard", "Sales", "Products", "Inventory", "Customers", "Reports"]'::jsonb,
+      customer_display_enabled BOOLEAN NOT NULL DEFAULT FALSE,
       online_ordering_enabled BOOLEAN NOT NULL DEFAULT FALSE,
       online_payment_methods JSONB NOT NULL DEFAULT '["card", "cash", "cod"]'::jsonb,
+      /* Configurable sale invoice/receipt prefixes per sale source. */
+      till_invoice_prefix VARCHAR(10) NOT NULL DEFAULT 'TO',
+      delivery_invoice_prefix VARCHAR(10) NOT NULL DEFAULT 'DEL',
+      self_checkout_invoice_prefix VARCHAR(10) NOT NULL DEFAULT 'SC',
       updated_by UUID,
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
@@ -181,7 +193,13 @@ export async function initializeDatabase(pool) {
     CREATE UNIQUE INDEX IF NOT EXISTS ux_ean_product_master_ean
     ON ean_product_master(ean);
 
+    ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS dock_quick_access JSONB NOT NULL DEFAULT '["Dashboard", "Sales", "Products", "Inventory", "Customers", "Reports"]'::jsonb;
+    ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS customer_display_enabled BOOLEAN NOT NULL DEFAULT FALSE;
+    ALTER TABLE stores ADD COLUMN IF NOT EXISTS self_checkout_key_hash VARCHAR(100);
     ALTER TABLE ean_product_master ADD COLUMN IF NOT EXISTS image_url TEXT NULL;
+
+    /* Product image (data URL or remote URL). Additive; NULL = no image. */
+    ALTER TABLE products ADD COLUMN IF NOT EXISTS image_url TEXT NULL;
     ALTER TABLE ean_product_master ADD COLUMN IF NOT EXISTS source TEXT NULL;
 
     -- EAN lookup audit only; no limits, pricing or customer product changes.
@@ -243,15 +261,63 @@ export async function initializeDatabase(pool) {
        against databases created before the column existed). */
     ALTER TABLE company_settings
       ADD COLUMN IF NOT EXISTS scan_go_enabled BOOLEAN NOT NULL DEFAULT FALSE;
+    /* Till product browser presentation ('image' | 'compact'). */
+    ALTER TABLE company_settings
+      ADD COLUMN IF NOT EXISTS product_view VARCHAR(20) NOT NULL DEFAULT 'image';
     /* Online-ordering feature flags consumed by routes/settings.js. */
     ALTER TABLE company_settings
       ADD COLUMN IF NOT EXISTS online_ordering_enabled BOOLEAN NOT NULL DEFAULT FALSE;
     ALTER TABLE company_settings
       ADD COLUMN IF NOT EXISTS online_payment_methods JSONB NOT NULL DEFAULT '["card", "cash", "cod"]'::jsonb;
+    /* Configurable sale invoice/receipt prefixes per sale source. */
+    ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS till_invoice_prefix VARCHAR(10) NOT NULL DEFAULT 'TO';
+    ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS delivery_invoice_prefix VARCHAR(10) NOT NULL DEFAULT 'DEL';
+    ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS self_checkout_invoice_prefix VARCHAR(10) NOT NULL DEFAULT 'SC';
     ALTER TABLE company_settings
       ADD COLUMN IF NOT EXISTS loyalty_enabled BOOLEAN NOT NULL DEFAULT FALSE;
     ALTER TABLE company_settings
       ADD COLUMN IF NOT EXISTS loyalty_earning_rate NUMERIC(5,4) NOT NULL DEFAULT 0.0100;
+
+    /* T10P Scan & Go: customer scan sessions. A session is scoped to exactly
+     * one company+store, holds its basket in a child table, and links to the
+     * onePOS sale created at checkout (sales.client_request_id = session id
+     * provides the database-level duplicate-checkout guard). Additive; no
+     * changes to existing sales/inventory semantics. */
+    CREATE TABLE IF NOT EXISTS scan_and_go_sessions (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+      store_id UUID NOT NULL REFERENCES stores(id),
+      status VARCHAR(30) NOT NULL DEFAULT 'active' CHECK (
+        status IN ('active', 'checking_out', 'completed', 'abandoned', 'expired')
+      ),
+      started_by UUID REFERENCES users(id) ON DELETE SET NULL,
+      sale_id UUID,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      completed_at TIMESTAMPTZ,
+      expires_at TIMESTAMPTZ NOT NULL DEFAULT (NOW() + INTERVAL '24 hours')
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_scan_go_sessions_company_store
+      ON scan_and_go_sessions(company_id, store_id, created_at);
+
+    CREATE TABLE IF NOT EXISTS scan_and_go_session_items (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      session_id UUID NOT NULL REFERENCES scan_and_go_sessions(id) ON DELETE CASCADE,
+      product_id UUID NOT NULL REFERENCES products(id),
+      quantity NUMERIC(12,3) NOT NULL DEFAULT 1 CHECK (quantity > 0),
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      CONSTRAINT scan_and_go_session_items_unique UNIQUE (session_id, product_id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_scan_go_session_items_session
+      ON scan_and_go_session_items(session_id);
+
+    /* T10P: sale rows created from a Scan & Go checkout carry the session id
+     * in client_request_id (existing unique index enforces one sale per
+     * session); receipt_number is prefixed SCANANDGO-<session> so reporting
+     * can identify the channel without a schema change. */
 
     CREATE TABLE IF NOT EXISTS inventory_movements (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -603,6 +669,12 @@ export async function initializeDatabase(pool) {
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
 
+    /* T10Y — customer credit account (credit OFF by default; balance is
+       derived from customer_credit_ledger, never stored here). */
+    ALTER TABLE customers
+      ADD COLUMN IF NOT EXISTS credit_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+      ADD COLUMN IF NOT EXISTS credit_limit NUMERIC(12,2) NULL;
+
     ALTER TABLE customers
       ADD COLUMN IF NOT EXISTS postcode VARCHAR(30),
       ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
@@ -626,6 +698,36 @@ export async function initializeDatabase(pool) {
     CREATE INDEX IF NOT EXISTS idx_customer_stores_customer
     ON customer_stores(customer_id, active);
 
+    /* T10Y — immutable customer credit ledger; balance is derived via
+       SUM(amount * sign) over transaction_type (see services/customerCredit.js). */
+    CREATE TABLE IF NOT EXISTS customer_credit_ledger (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+      store_id UUID NULL REFERENCES stores(id) ON DELETE SET NULL,
+      customer_id UUID NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
+      transaction_type VARCHAR(30) NOT NULL CHECK (transaction_type IN
+        ('credit_sale', 'payment', 'credit_note', 'debit_note', 'opening')),
+      amount NUMERIC(12,2) NOT NULL CHECK (amount > 0),
+      balance_after NUMERIC(12,2) NULL,
+      reference_type VARCHAR(40) NULL,
+      reference_id UUID NULL,
+      description TEXT NULL,
+      vat_amount NUMERIC(12,2) NULL,
+      net_amount NUMERIC(12,2) NULL,
+      gross_amount NUMERIC(12,2) NULL,
+      vat_rate NUMERIC(6,3) NULL,
+      payment_method VARCHAR(40) NULL,
+      idempotency_key VARCHAR(120) NULL,
+      created_by UUID NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE (company_id, idempotency_key)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_credit_ledger_customer
+    ON customer_credit_ledger(company_id, customer_id, created_at DESC);
+
+    CREATE INDEX IF NOT EXISTS idx_credit_ledger_reference
+    ON customer_credit_ledger(reference_type, reference_id);
     CREATE TABLE IF NOT EXISTS customer_loyalty_balances (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
@@ -740,7 +842,8 @@ export async function initializeDatabase(pool) {
       unit_price NUMERIC(12,2) NOT NULL,
       discount NUMERIC(12,2) NOT NULL DEFAULT 0,
       tax NUMERIC(12,2) NOT NULL DEFAULT 0,
-      total NUMERIC(12,2) NOT NULL
+      total NUMERIC(12,2) NOT NULL,
+      item_type VARCHAR(20) NOT NULL DEFAULT 'PRODUCT'
     );
 
     CREATE TABLE IF NOT EXISTS payments (
@@ -940,9 +1043,17 @@ export async function initializeDatabase(pool) {
     ["payment.manage", "Manage Payments"],
     ["integration.manage", "Manage Integrations"],
     ["settings.manage", "Manage Settings"],
+    /* T10V - accounting integration export (push sales through the T9A connections). */
+    ["accounting.export", "Export to Accounting"],
     ["online_orders.view", "View Online Orders"],
     ["online_orders.manage", "Manage Online Orders"],
-    ["online_orders.configure", "Configure Online Platforms"]
+    ["online_orders.configure", "Configure Online Platforms"],
+    /* T10Z - Combos / Meal Deals. Granular, matching the existing naming style. */
+    ["combo.view", "View Combo / Meal Deals"],
+    ["combo.create", "Create Combo / Meal Deals"],
+    ["combo.edit", "Edit Combo / Meal Deals"],
+    ["combo.delete", "Delete Combo / Meal Deals"],
+    ["combo.activate", "Activate / Deactivate Combo / Meal Deals"]
   ];
 
   for (const [code, name] of permissions) {
@@ -1086,6 +1197,114 @@ ON secure_invoice_links(sale_id);
 CREATE INDEX IF NOT EXISTS idx_secure_invoice_links_company_created
 ON secure_invoice_links(company_id, created_at DESC);
     `);
+
+  /*
+   * T10Z — Combos / Meal Deals. Additive: existing sales, products, pricing
+   * and inventory are untouched. A deal references EXISTING product ids and
+   * category ids (no product data is copied into a second product table), and
+   * its price is applied by the single shared engine in
+   * services/comboPricing.js. Nothing here creates fake "meal deal" products.
+   */
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS combo_deals (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+      name VARCHAR(200) NOT NULL,
+      description TEXT,
+      deal_type VARCHAR(30) NOT NULL DEFAULT 'meal_deal' CHECK (
+        deal_type IN ('meal_deal', 'bundle')
+      ),
+      deal_price NUMERIC(12,2) NOT NULL DEFAULT 0 CHECK (deal_price >= 0),
+      store_scope VARCHAR(20) NOT NULL DEFAULT 'all' CHECK (
+        store_scope IN ('all', 'selected')
+      ),
+      active BOOLEAN NOT NULL DEFAULT TRUE,
+      starts_at TIMESTAMPTZ,
+      ends_at TIMESTAMPTZ,
+      created_by UUID REFERENCES users(id) ON DELETE SET NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      CONSTRAINT combo_deals_date_range CHECK (
+        starts_at IS NULL OR ends_at IS NULL OR starts_at < ends_at
+      )
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_combo_deals_company
+    ON combo_deals(company_id, active);
+
+    CREATE TABLE IF NOT EXISTS combo_deal_groups (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      deal_id UUID NOT NULL REFERENCES combo_deals(id) ON DELETE CASCADE,
+      name VARCHAR(200) NOT NULL,
+      required_quantity INTEGER NOT NULL DEFAULT 1 CHECK (required_quantity > 0),
+      display_order INTEGER NOT NULL DEFAULT 0,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_combo_deal_groups_deal
+    ON combo_deal_groups(deal_id, display_order);
+
+    CREATE TABLE IF NOT EXISTS combo_deal_group_products (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      group_id UUID NOT NULL REFERENCES combo_deal_groups(id) ON DELETE CASCADE,
+      product_id UUID NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+      CONSTRAINT combo_deal_group_products_unique UNIQUE (group_id, product_id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_combo_group_products_group
+    ON combo_deal_group_products(group_id);
+
+    CREATE INDEX IF NOT EXISTS idx_combo_group_products_product
+    ON combo_deal_group_products(product_id);
+
+    CREATE TABLE IF NOT EXISTS combo_deal_group_categories (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      group_id UUID NOT NULL REFERENCES combo_deal_groups(id) ON DELETE CASCADE,
+      category_id UUID NOT NULL REFERENCES categories(id) ON DELETE CASCADE,
+      CONSTRAINT combo_deal_group_categories_unique UNIQUE (group_id, category_id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_combo_group_categories_group
+    ON combo_deal_group_categories(group_id);
+
+    CREATE TABLE IF NOT EXISTS combo_deal_stores (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      deal_id UUID NOT NULL REFERENCES combo_deals(id) ON DELETE CASCADE,
+      store_id UUID NOT NULL REFERENCES stores(id) ON DELETE CASCADE,
+      CONSTRAINT combo_deal_stores_unique UNIQUE (deal_id, store_id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_combo_deal_stores_deal
+    ON combo_deal_stores(deal_id);
+
+    /*
+     * Per-sale audit of the meal deals that were applied. This is the ONLY
+     * record of a deal on a sale: the sale and its lines keep their ordinary
+     * shape, and no synthetic product row is ever inserted.
+     */
+    CREATE TABLE IF NOT EXISTS sale_combo_applications (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      sale_id UUID NOT NULL REFERENCES sales(id) ON DELETE CASCADE,
+      company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+      store_id UUID REFERENCES stores(id) ON DELETE SET NULL,
+      deal_id UUID REFERENCES combo_deals(id) ON DELETE SET NULL,
+      deal_name VARCHAR(200) NOT NULL,
+      deal_type VARCHAR(30) NOT NULL DEFAULT 'meal_deal',
+      deal_price NUMERIC(12,2) NOT NULL DEFAULT 0,
+      original_value NUMERIC(12,2) NOT NULL DEFAULT 0,
+      deal_value NUMERIC(12,2) NOT NULL DEFAULT 0,
+      discount NUMERIC(12,2) NOT NULL DEFAULT 0,
+      lines JSONB NOT NULL DEFAULT '[]'::jsonb,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_sale_combo_applications_sale
+    ON sale_combo_applications(sale_id);
+
+    CREATE INDEX IF NOT EXISTS idx_sale_combo_applications_company
+    ON sale_combo_applications(company_id, created_at DESC);
+  `);
 
   console.log("onePOS: database ready");
 }

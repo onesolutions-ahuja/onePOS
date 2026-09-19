@@ -1,3 +1,13 @@
 node_modules/
 .env
 dist/data/product-master/openfoodfacts_official_starter_raw.tsv 
+
+.forge-permissions.json
+bash_events/
+conversations/
+dist/ bash_events/
+conversations/
+dist/ bash_events/
+conversations/
+dist/
+data/product-master/openfoodfacts_official_starter_raw.tsv

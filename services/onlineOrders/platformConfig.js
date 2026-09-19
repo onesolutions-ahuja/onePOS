@@ -98,6 +98,11 @@ export function maskConfiguration(configuration = {}) {
     store_location_id: configuration.store_location_id || null,
     store_id: configuration.store_id || null,
     brand_id: configuration.brand_id || null,
+    /* T10-UBER-MENU: non-secret sync-status passthrough. */
+    menu_sync_last_attempt: configuration.menu_sync_last_attempt || null,
+    menu_sync_last_success: configuration.menu_sync_last_success || null,
+    menu_sync_last_error: configuration.menu_sync_last_error || null,
+    menu_sync_last_count: configuration.menu_sync_last_count ?? null,
     order_acceptance: configuration.order_acceptance === "auto" ? "auto" : "manual",
     require_otp_on_completion: configuration.require_otp_on_completion === true,
     notes: configuration.notes || null,
@@ -172,6 +177,12 @@ export async function loadPlatformConfig(db, companyId, platform) {
   runtime.api_key = decryptSecret(configuration.api_key);
   runtime.webhook_secret = decryptSecret(configuration.webhook_secret);
   runtime.configured = Boolean(runtime.client_id || runtime.client_secret || runtime.api_key);
+
+  /* T10-UBER-MENU: non-secret menu-sync status (Settings display). */
+  runtime.menu_sync_last_attempt = configuration.menu_sync_last_attempt || null;
+  runtime.menu_sync_last_success = configuration.menu_sync_last_success || null;
+  runtime.menu_sync_last_error = configuration.menu_sync_last_error || null;
+  runtime.menu_sync_last_count = configuration.menu_sync_last_count ?? null;
 
   /*
    * Internal handles for the platform services (request/response auditing in

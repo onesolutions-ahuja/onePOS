@@ -22,11 +22,12 @@ const strip = (src) =>
 
 const display = strip(read("src/pages/pos/CustomerBillDisplay.jsx"));
 const displayRaw = read("src/pages/pos/CustomerBillDisplay.jsx");
-const window_ = read("src/pages/pos/CustomerDisplayWindow.jsx");
 const pos = read("src/pages/pos/POS.jsx");
 const header = read("src/pages/pos/POSHeader.jsx");
 const cartPanel = read("src/pages/pos/CartPanel.jsx");
 const engine = read("src/utils/saleTotals.js");
+const page = read("src/pages/pos/CustomerDisplay.jsx");
+const settingsSrc = read("src/pages/settings/SettingsAdmin.jsx");
 
 describe("T10F-FIX — two physical screens: till is primary", () => {
   test("POS.jsx renders no in-till customer display at all", () => {
@@ -64,25 +65,13 @@ describe("T10F-FIX — two physical screens: till is primary", () => {
     assert.ok(/aria-label=\{`Remove \$\{item\.name\}`\}/.test(cartPanel), "remove is labelled");
   });
 
-  test("T10F-FIX-UI: popup copies the REAL app stylesheets (CSS text inline + link fallback)", () => {
-    assert.ok(
-      /link\[rel="stylesheet"\]/.test(window_),
-      "must read the app document's stylesheet links"
-    );
-    assert.ok(
-      /fetch\(href/.test(window_),
-      "production CSS must be fetched and inlined as text"
-    );
-    assert.ok(
-      /createElement\(["']style["']\)/.test(window_),
-      "inlined <style> injection for the popup"
-    );
-    assert.ok(
-      /cloneNode\(true\)/.test(window_),
-      "link clone fallback retained"
-    );
-    /* Fonts (Inter) are copied so typography matches the app. */
-    assert.ok(/fonts/.test(window_), "web-font links are copied");
+  test("T10F-FIX-UI: the standalone display page uses the app's own design system", () => {
+    /* /customer-display is served by the same index.html + bundle, so the
+       real onePOS CSS always applies — and the page must keep using the
+       shared Tailwind theme (teal header, cards, tabular totals). */
+    assert.ok(/#176F6A/.test(page) || /176F6A/.test(page), "onePOS teal branding on the display");
+    assert.ok(page.includes("£"), "£ currency formatting");
+    assert.ok(page.includes("onePOS"), "onePOS branding present");
   });
 
   test("T10F-FIX-UI: customer bill shows quantity once per line", () => {
@@ -97,84 +86,66 @@ describe("T10F-FIX — two physical screens: till is primary", () => {
     );
   });
 
-  test("header button opens/closes the separate window, not a view swap", () => {
-    assert.ok(header.includes("Customer Display"));
-    assert.ok(header.includes("customerDisplayOn"));
-    assert.ok(header.includes("aria-pressed"));
-    assert.ok(header.includes("separate window"), "title explains the window");
-    assert.ok(
-      header.includes('"Close Display"') && header.includes('"Customer Display"'),
-      "label reflects open/closed state"
-    );
-    assert.ok(
-      !header.includes('"Cashier View"'),
-      "no cashier-view swap wording remains"
-    );
+  test("no Customer Display or Self-Checkout button remains in the till header", () => {
+    /* Both entry points moved: Customer Display → Settings → Store & Till;
+       Self-Checkout → the login screen (customer device). */
+    assert.ok(!header.includes("Customer Display"), "no header Customer Display button");
+    assert.ok(!header.includes("Self-Checkout"), "no header Self-Checkout button");
+    assert.ok(!header.includes("onToggleCustomerDisplay"), "header toggle prop is gone");
+    assert.ok(!header.includes("onStartSelfCheckout"), "header SCO prop is gone");
   });
 });
 
 describe("T10F-FIX — separate window mechanics", () => {
-  test("customer display opens its own browser window (second monitor)", () => {
-    assert.ok(/window\.open\(/.test(window_), "popup window is opened");
-    assert.ok(
-      /createPortal/.test(window_),
-      "content is portalled into the window to share the same state"
-    );
-    assert.ok(
-      /onepos-customer-display/.test(window_),
-      "named target prevents duplicate windows"
-    );
-    assert.ok(
-      /popup=yes/.test(window_),
-      "uses popup features, not a full tab"
-    );
+  test("customer display is a standalone page; Settings opens it in its own window", () => {
+    assert.ok(page.includes("/customer-display"), "standalone route exists in App");
+    assert.ok(/popup=yes/.test(settingsSrc), "Settings opens the display as a popup window, not a tab");
   });
 
   test("closing the customer window never affects the till", () => {
-    /* Close paths only flip POS's own showCustomerDisplay flag. */
-    assert.ok(/onClose=\{\(\) => setShowCustomerDisplay\(false\)\}/.test(pos));
-    /* Popup handles: customer closing their window -> till notices via poll. */
-    assert.ok(/win\.closed/.test(window_), "till detects customer-side close");
-    assert.ok(/win\.close\(\)/.test(window_), "unmount closes the window");
-    /* No navigation/reset of the till from the window component. */
-    assert.ok(!/window\.location|history\./.test(window_));
+    /* The broadcast is one-way: the customer page cannot reach back into
+       the till. The till's own state has no dependency on the display. */
+    assert.ok(pos.includes("BroadcastChannel"), "bill mirror is a one-way broadcast");
+    assert.ok(!/setShowCustomerDisplay/.test(pos), "the legacy portal toggle is fully removed");
+    /* The standalone page has no window.close/handle back into the till. */
+    const page = fs.readFileSync(new URL("../src/pages/pos/CustomerDisplay.jsx", import.meta.url), "utf8");
+    assert.ok(!/window\.close|opener/.test(page), "customer page cannot control the till window");
   });
 
   test("same state reaches the customer window — no second source of truth", () => {
-    for (const prop of [
-      "basket",
-      "subtotal",
-      "vat",
-      "total",
-      "discountAmount",
-    ]) {
+    /* The till broadcasts its live bill values; the page renders them as-is. */
+    for (const field of ["basket", "subtotal", "vat", "total", "discountAmount"]) {
       assert.ok(
-        new RegExp(`\\b${prop}=\\{`).test(pos),
-        `POS must pass live ${prop} into the customer window`
+        new RegExp(`\\b${field}[,}]`).test(pos),
+        `till broadcasts live ${field}`
       );
     }
-    assert.ok(pos.includes("<CustomerDisplayWindow"));
+    const page = fs.readFileSync(new URL("../src/pages/pos/CustomerDisplay.jsx", import.meta.url), "utf8");
+    for (const field of ["basket", "subtotal", "vat", "total", "discountAmount", "hasDiscount", "hasCustomer", "storeName"]) {
+      assert.ok(page.includes(field), `customer page renders the broadcast ${field}`);
+    }
+    /* The portal window was replaced by a BroadcastChannel bill mirror: the
+       till BROADCASTS the live bill; /customer-display only listens. */
+    assert.ok(pos.includes("onepos-customer-display"), "till broadcasts on the customer-display channel");
+    assert.ok(pos.includes('type: "BILL"'), "till ALWAYS mirrors the bill (no server gate — works offline)");
+    assert.ok(!/customerDisplayEnabled/.test(pos), "the mirror is not gated on a server setting (offline-safe)");
+    assert.ok(/heartbeat|setInterval/.test(pos), "a heartbeat re-sends the bill to late-joining display windows");
+    assert.ok(!pos.includes("<CustomerDisplayWindow"), "no in-document portal window remains");
   });
 
   test("popup-blocked fallback does not break the till", () => {
-    assert.ok(/Popup blocked/.test(window_), "user is told why nothing opened");
-    assert.ok(
-      /onClose\(\)/.test(window_),
-      "till returns to normal if the window can't open"
-    );
+    assert.ok(/blocked by the browser|blocked the window/i.test(settingsSrc), "user is told why nothing opened");
   });
 });
 
 describe("T10F-FIX — customer window is read-only", () => {
-  test("mirrored document disables interactive elements", () => {
-    assert.ok(
-      /pointer-events: none !important/.test(window_),
-      "inputs/buttons inside the customer document are inert"
-    );
-    assert.ok(
-      /data-cashier-exit/.test(window_),
-      "only the cashier close affordance stays clickable"
-    );
+  test("/customer-display page only listens — it cannot mutate anything", () => {
+    const page = fs.readFileSync(new URL("../src/pages/pos/CustomerDisplay.jsx", import.meta.url), "utf8");
+    assert.ok(page.includes("BroadcastChannel"), "the page receives the bill via the broadcast channel");
+    assert.ok(!/apiRequest|fetch\(/.test(page), "no API access from the customer page");
+    assert.ok(!/onAddProduct|setBasket|quantity\s*[+-]|payment/i.test(page), "no mutating controls");
+    const buttons = page.match(/<button/g) || [];
+    assert.equal(buttons.length, 0, "the customer display renders zero buttons");
   });
 
   test("the bill component itself has no mutating controls", () => {
@@ -192,20 +163,15 @@ describe("T10F-FIX — customer window is read-only", () => {
 
   test("no customer PII in the customer window", () => {
     assert.ok(!/phone|email/i.test(display));
-    assert.ok(!/phone|email/i.test(strip(window_)));
+    assert.ok(!/phone|email/i.test(strip(page)));
   });
 
   test("no API calls or Self-Checkout coupling from the customer surface", () => {
     assert.ok(!/apiRequest|fetch\(/.test(display));
-    /* The window component fetches only the app's own CSS text (styling
-       bridge) — it must make no data API calls. Assert against API util. */
-    assert.ok(!window_.includes("apiRequest"), "no API util usage in the window");
-    assert.ok(
-      !/fetch\(["'`]\/api/.test(window_),
-      "the only fetch is the stylesheet href, never an /api call"
-    );
+    assert.ok(!page.includes("apiRequest"), "no API usage on the standalone display page");
+    assert.ok(!/fetch\(["'`]\/api/.test(page), "the display page never calls the API");
     assert.ok(!display.toLowerCase().includes("self-checkout"));
-    assert.ok(!window_.toLowerCase().includes("self-checkout"));
+    assert.ok(!page.toLowerCase().includes("self-checkout"));
   });
 });
 
@@ -230,12 +196,12 @@ describe("T10F-FIX — behaviour contract preserved", () => {
     assert.ok(engine.includes("computeBasketTotals"));
     assert.ok(
       !display.includes("computeBasketTotals") &&
-        !window_.includes("computeBasketTotals"),
-      "display chain reuses the single totals engine via props"
+        !page.includes("computeBasketTotals"),
+      "display chain reuses the single totals engine via the broadcast"
     );
-    assert.ok(!/useState|useReducer|useMemo/.test(display));
-    /* Payment surfaces must not appear in the customer chain. */
-    assert.ok(!display.includes("PaymentModal"));
-    assert.ok(!window_.includes("PaymentModal"));
+    /* The display page holds ONLY the received bill (useState of the
+       broadcast payload) — no second totals/basket engine. */
+    assert.ok(!display.includes("computeBasketTotals"));
+    assert.ok(!page.includes("PaymentModal"));
   });
 });

@@ -44,6 +44,49 @@ function SelfCheckout({ modeToken, storeName, onExit }) {
   const [receipt, setReceipt] = useState(null);
   const searchRef = useRef(null);
 
+  /* Customer identification: guest by default; the customer may attach
+   * their account by entering their own phone/email (company-scoped exact
+   * match via the restricted lookup endpoint). No other customer data is
+   * shown or editable. */
+  const [identifiedCustomer, setIdentifiedCustomer] = useState(null); /* {id, name} | null */
+  const [idQuery, setIdQuery] = useState("");
+  const [idBusy, setIdBusy] = useState(false);
+  const [idError, setIdError] = useState("");
+  const [showIdPanel, setShowIdPanel] = useState(false);
+
+  const lookupCustomer = async () => {
+    const query = idQuery.trim();
+    if (!query || idBusy) return;
+    setIdBusy(true);
+    setIdError("");
+    try {
+      const data = await apiRequest("/api/self-checkout/customer-lookup", {
+        signal: AbortSignal.timeout(10000),
+        method: "POST",
+        headers: { Authorization: `Bearer ${modeToken}` },
+        body: JSON.stringify({ query }),
+      });
+      if (!data.success || !data.found) {
+        setIdError(data.message || "We could not find that account — you can continue as a guest");
+        return;
+      }
+      setIdentifiedCustomer(data.data);
+      setShowIdPanel(false);
+      setIdQuery("");
+    } catch (error) {
+      setIdError(error.message || "Lookup failed — you can continue as a guest");
+    } finally {
+      setIdBusy(false);
+    }
+  };
+
+  const continueAsGuest = () => {
+    setIdentifiedCustomer(null);
+    setShowIdPanel(false);
+    setIdQuery("");
+    setIdError("");
+  };
+
   /* ------------------------------------------------ data loading (read-only APIs) */
 
   useEffect(() => {
@@ -186,7 +229,7 @@ function SelfCheckout({ modeToken, storeName, onExit }) {
           total: lineGross + lineTax,
         };
       }),
-      customerId: null,
+      customerId: identifiedCustomer?.id || null,
       subtotal,
       tax: vat,
       discount: 0,
@@ -204,6 +247,7 @@ function SelfCheckout({ modeToken, storeName, onExit }) {
       setReceipt({ receiptNumber: data.sale.receipt_number || null, total });
       setBasket([]);
       setAgeVerifiedThisSale(false);
+      setIdentifiedCustomer(null); /* next customer starts fresh */
     } catch (error) {
       if (isNetworkError(error)) {
         setSaleError("The card payment could not be completed — the connection to the till server was lost. Your basket is kept; please try again or ask a member of staff.");
@@ -232,7 +276,7 @@ function SelfCheckout({ modeToken, storeName, onExit }) {
           <p className="text-3xl font-bold mt-4">£{receipt.total.toFixed(2)}</p>
           <p className="text-xs text-slate-400 mt-2">Paid by card. A VAT receipt can be emailed to you by a member of staff.</p>
           <button
-            onClick={() => { setReceipt(null); setNotice(""); if (searchRef.current) searchRef.current.focus(); }}
+            onClick={() => { setReceipt(null); setNotice(""); setIdentifiedCustomer(null); if (searchRef.current) searchRef.current.focus(); }}
             className="mt-6 h-12 px-6 bg-blue-600 text-white rounded-lg text-base font-medium hover:bg-blue-700"
             autoFocus
           >
@@ -251,10 +295,71 @@ function SelfCheckout({ modeToken, storeName, onExit }) {
           <div className="h-7 w-px bg-slate-700" />
           <div className="text-sm">Self-Checkout{storeName ? ` — ${storeName}` : ""}</div>
         </div>
-        <button onClick={onExit} className="text-sm underline underline-offset-2 hover:text-slate-200">
-          Staff exit
-        </button>
+        <div className="flex items-center gap-4">
+          {/* Customer identification: guest by default, optional sign-in */}
+          {identifiedCustomer ? (
+            <div className="flex items-center gap-2 text-sm">
+              <span className="text-emerald-200">Hi, {identifiedCustomer.name.split(" ")[0]}</span>
+              <button
+                onClick={continueAsGuest}
+                className="text-sm underline underline-offset-2 hover:text-slate-200"
+              >
+                Continue as guest
+              </button>
+            </div>
+          ) : (
+            <button
+              onClick={() => { setShowIdPanel((v) => !v); setIdError(""); }}
+              className="text-sm underline underline-offset-2 hover:text-slate-200"
+            >
+              {showIdPanel ? "Close sign-in" : "Sign in (optional)"}
+            </button>
+          )}
+          <button onClick={onExit} className="text-sm underline underline-offset-2 hover:text-slate-200">
+            Staff exit
+          </button>
+        </div>
       </header>
+
+      {/* Optional customer sign-in panel — the customer enters their OWN
+          phone/email; only an exact company match attaches to the sale. */}
+      {showIdPanel && !identifiedCustomer && (
+        <div className="bg-white border-b border-slate-200 px-4 py-3">
+          <div className="max-w-xl mx-auto">
+            <div className="text-sm font-medium text-slate-700 mb-2">
+              Add your details to earn points and keep your receipt — or continue as a guest.
+            </div>
+            <div className="flex gap-2">
+              <input
+                value={idQuery}
+                onChange={(event) => setIdQuery(event.target.value)}
+                onKeyDown={(event) => { if (event.key === "Enter") lookupCustomer(); }}
+                placeholder="Phone number or email"
+                autoFocus
+                className="flex-1 h-12 px-3 border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-teal-600 text-base"
+              />
+              <button
+                onClick={lookupCustomer}
+                disabled={idBusy || !idQuery.trim()}
+                className="h-12 px-5 bg-teal-700 text-white rounded-lg font-medium hover:bg-teal-800 disabled:opacity-50"
+              >
+                {idBusy ? "Checking…" : "Sign in"}
+              </button>
+              <button
+                onClick={continueAsGuest}
+                className="h-12 px-5 border rounded-lg text-slate-600 hover:bg-slate-50"
+              >
+                Continue as guest
+              </button>
+            </div>
+            {idError ? (
+              <div role="alert" className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-lg p-2 mt-2">
+                {idError}
+              </div>
+            ) : null}
+          </div>
+        </div>
+      )}
 
       <div className="flex-1 flex min-h-0 p-3 gap-3">
         <div className="flex-1 flex flex-col min-w-0">

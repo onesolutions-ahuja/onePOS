@@ -27,9 +27,18 @@ export function reportConnection(online) {
     try { listener(isOnline()); } catch { /* isolate subscribers */ }
   }
 }
-
 export function isOnline() {
-  return (typeof navigator === "undefined" || navigator.onLine !== false) && backendOnline;
+  // Backend reachability is authoritative: if the backend has confirmed
+  // it's reachable via a health check, the POS is online regardless of
+  // navigator.onLine. This prevents false OFFLINE status when the browser
+  // reports offline but the backend is actually reachable.
+  //
+  // navigator.onLine is still consulted as a fast path for transport-level
+  // disconnections when backendOnline is false (e.g., network cable unplugged,
+  // Wi-Fi turned off).
+  if (backendOnline) return true;
+  if (typeof navigator === "undefined") return true;
+  return navigator.onLine !== false;
 }
 
 /*
@@ -39,7 +48,10 @@ export function isOnline() {
 export function onNetworkChange(handler) {
   listeners.add(handler);
   const goOnline = () => { backendOnline = true; handler(true); };
-  const goOffline = () => handler(false);
+  const goOffline = () => { /* Don't override backendOnline; let the
+      next health check (reportConnection) determine actual backend reachability.
+      This prevents false OFFLINE status when the browser reports offline but
+      the backend is actually reachable. */ handler(isOnline()); };
 
   window.addEventListener("online", goOnline);
   window.addEventListener("offline", goOffline);

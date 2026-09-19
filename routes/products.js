@@ -50,6 +50,127 @@ export default function createProductsRouter({ authenticate, authorize, db, pool
   });
 
   /*
+   * POST /api/products/misc-line
+   *
+   * Till "Misc Item" support. sale_items.product_id is NOT NULL, so a
+   * manual-price line needs a catalogue row to reference. This endpoint
+   * find-or-creates the company's ONE invisible MISC placeholder product
+   * (sku='MISC', inactive — it never appears in the till grid, global
+   * search or product lists, and its stock is never touched: misc lines
+   * carry item_type='MISC' and the sale engine skips stock movement for
+   * them). The cashier's typed description is stored per-line on
+   * sale_items.product_name, so no product is created per transaction.
+   *
+   * Permission: sale.create (the same gate as completing the sale itself).
+   */
+  router.post("/products/misc-line", authenticate, authorize("sale.create"), async (req, res) => {
+    try {
+      const inserted = await db(
+        `
+        INSERT INTO products (
+          company_id,
+          name,
+          sku,
+          price,
+          cost_price,
+          vat_rate,
+          vat_applicable,
+          track_stock,
+          stock_quantity,
+          active
+        )
+        VALUES ($1, 'Misc Item', 'MISC', 0, 0, 20, false, false, 0, false)
+        ON CONFLICT (company_id) WHERE sku = 'MISC' AND active = false
+        DO UPDATE SET updated_at = NOW()
+        RETURNING id
+        `,
+        [req.user.companyId]
+      );
+
+      res.status(201).json({
+        success: true,
+        data: { productId: inserted.rows[0].id },
+      });
+    } catch (error) {
+      console.error("Misc placeholder product error:", error);
+
+      res.status(500).json({
+        success: false,
+        message: "Unable to prepare misc item",
+      });
+    }
+  });
+
+  /*
+   * GET /api/products/most-selling
+   *
+   * Till "Most Selling" pseudo-category. Ranks products by how FREQUENTLY
+   * they appear in sales — COUNT(DISTINCT si.sale_id) — not by total
+   * quantity: a product sold 100 units in 1 transaction must rank BELOW a
+   * product appearing in 50 separate transactions.
+   *
+   * Scope: the authenticated company; store-scoped when the caller has a
+   * store context (matching the till). Only active products are returned.
+   *
+   * Time range: ?days=N (default 30, capped at 365). There is no existing
+   * best-seller period convention in the app (reports take explicit date
+   * ranges), so 30 days is the documented default — a bounded window keeps
+   * the aggregate cheap on every till load.
+   *
+   * Deterministic ordering: frequency DESC, then latest sale recency DESC,
+   * then product name ASC (stable tie-breaker).
+   */
+  router.get("/products/most-selling", authenticate, authorize("product.view"), async (req, res) => {
+    try {
+      const daysRaw = Number(req.query.days);
+      const days = Number.isFinite(daysRaw) && daysRaw > 0 ? Math.min(Math.floor(daysRaw), 365) : 30;
+      const limitRaw = Number(req.query.limit);
+      const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? Math.min(Math.floor(limitRaw), 200) : 50;
+
+      const result = await db(
+        `
+        SELECT
+          p.id,
+          p.name,
+          p.sku,
+          p.barcode,
+          p.image_url,
+          p.price,
+          p.category_id,
+          c.name AS category_name,
+          COUNT(DISTINCT si.sale_id)::int AS sale_frequency,
+          MAX(s.created_at) AS last_sold_at
+        FROM sale_items si
+        INNER JOIN sales s ON s.id = si.sale_id
+          AND s.company_id = $1
+          AND s.status = 'completed'
+          ${req.user.storeId ? "AND s.store_id = $2" : ""}
+          AND s.created_at >= NOW() - ($${req.user.storeId ? "3" : "2"}::text || ' days')::interval
+        INNER JOIN products p ON p.id = si.product_id
+          AND p.company_id = $1
+          AND p.active = true
+          AND p.sku <> 'MISC' /* Misc Item lines are not a product ranking */
+        LEFT JOIN categories c ON c.id = p.category_id
+        GROUP BY p.id, c.name
+        ORDER BY
+          sale_frequency DESC,
+          last_sold_at DESC NULLS LAST,
+          p.name ASC
+        LIMIT $${req.user.storeId ? "4" : "3"}
+        `,
+        req.user.storeId
+          ? [req.user.companyId, req.user.storeId, String(days), limit]
+          : [req.user.companyId, String(days), limit]
+      );
+
+      res.json({ success: true, data: result.rows, days });
+    } catch (error) {
+      console.error("Most-selling error:", error);
+      res.status(500).json({ success: false, message: "Unable to load most-selling products" });
+    }
+  });
+
+  /*
    * POST /api/categories
    */
   router.post("/categories", authenticate, authorize("category.create"), async (req, res) => {
@@ -216,6 +337,7 @@ export default function createProductsRouter({ authenticate, authorize, db, pool
           p.vat_rate,
           p.vat_applicable,
           p.age_restricted,
+          p.image_url,
           p.stock_quantity,
           p.low_stock_level,
           p.track_stock,
@@ -233,6 +355,7 @@ export default function createProductsRouter({ authenticate, authorize, db, pool
           ON c.id = p.category_id
         WHERE p.company_id = $1
           AND p.active = true
+          AND p.sku <> 'MISC'
         ORDER BY p.name
         `,
         [req.user.companyId]
@@ -268,6 +391,7 @@ export default function createProductsRouter({ authenticate, authorize, db, pool
           p.price,
           p.cost_price,
           p.vat_rate,
+          p.image_url,
           p.stock_quantity,
           p.low_stock_level,
           p.track_stock,
@@ -338,6 +462,7 @@ export default function createProductsRouter({ authenticate, authorize, db, pool
         availableOnDeliveroo = false,
         uberItemId = null,
         deliverooItemId = null,
+        imageUrl = null,
       } = req.body;
 
       if (!name || !name.trim()) {
@@ -413,10 +538,11 @@ export default function createProductsRouter({ authenticate, authorize, db, pool
           available_on_deliveroo,
           uber_item_id,
           deliveroo_item_id,
-          age_restricted
+          age_restricted,
+          image_url
         )
         VALUES (
-          $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,0,$11,$12,true,$13,$14,$15,$16
+          $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,0,$11,$12,true,$13,$14,$15,$16,$17,$18
         )
         RETURNING
           id,
@@ -429,6 +555,7 @@ export default function createProductsRouter({ authenticate, authorize, db, pool
           vat_rate,
           vat_applicable,
           age_restricted,
+          image_url,
           stock_quantity,
           low_stock_level,
           track_stock,
@@ -461,6 +588,8 @@ export default function createProductsRouter({ authenticate, authorize, db, pool
           /* T10C: age_restricted is the LAST insert column/param so the
            * pre-existing parameter layout (positions 1-16) is unchanged. */
           Boolean(ageRestricted),
+          /* Product image (data URL or remote URL); null = no image. */
+          typeof imageUrl === "string" && imageUrl.trim() ? imageUrl.trim().slice(0, 500_000) : null,
         ]
       );
 
@@ -495,24 +624,26 @@ export default function createProductsRouter({ authenticate, authorize, db, pool
 
       await client.query("COMMIT");
 
-      // Audit log for product creation
-      writeAudit(
-        req.user.companyId,
-        req.user.id,
-        "product.created",
-        "product",
-        result.rows[0].id,
-        {
-          name: result.rows[0].name,
-          sku: result.rows[0].sku,
-          barcode: result.rows[0].barcode,
-          categoryId: result.rows[0].category_id,
-          price: result.rows[0].price,
-          vatRate: result.rows[0].vat_rate,
-          ageRestricted: result.rows[0].age_restricted,
-          active: result.rows[0].active,
-        }
-      );
+      // Audit log for product creation (best-effort; never fails the create)
+      if (typeof writeAudit === "function") {
+        writeAudit(
+          req.user.companyId,
+          req.user.id,
+          "product.created",
+          "product",
+          result.rows[0].id,
+          {
+            name: result.rows[0].name,
+            sku: result.rows[0].sku,
+            barcode: result.rows[0].barcode,
+            categoryId: result.rows[0].category_id,
+            price: result.rows[0].price,
+            vatRate: result.rows[0].vat_rate,
+            ageRestricted: result.rows[0].age_restricted,
+            active: result.rows[0].active,
+          }
+        );
+      }
 
       res.status(201).json({
         success: true,
@@ -558,6 +689,7 @@ export default function createProductsRouter({ authenticate, authorize, db, pool
         availableOnDeliveroo = false,
         uberItemId = null,
         deliverooItemId = null,
+        imageUrl,
       } = req.body;
 
       if (!name || !name.trim()) {
@@ -595,7 +727,16 @@ export default function createProductsRouter({ authenticate, authorize, db, pool
         [req.params.id, req.user.companyId]
       );
 
-      const previousValues = currentProduct.rows[0];
+      const previousValues = currentProduct.rows[0] || null;
+
+      /* The product must exist in THIS company to be editable; a foreign or
+       * unknown id is a clean 404, never a crash or a cross-tenant update. */
+      if (!previousValues) {
+        return res.status(404).json({
+          success: false,
+          message: "Product not found",
+        });
+      }
 
       if (sku) {
         const duplicateSku = await db(
@@ -669,9 +810,14 @@ export default function createProductsRouter({ authenticate, authorize, db, pool
           available_on_deliveroo = $14,
           uber_item_id = $15,
           deliveroo_item_id = $16,
+          image_url = CASE
+            WHEN $17::text IS NULL THEN image_url        /* field omitted -> keep */
+            WHEN $17::text = ''    THEN NULL             /* explicit clear  */
+            ELSE $17::text                               /* set / replace   */
+          END,
           updated_at = NOW()
-        WHERE id = $17
-          AND company_id = $18
+        WHERE id = $18
+          AND company_id = $19
         RETURNING
           id,
           name,
@@ -683,6 +829,7 @@ export default function createProductsRouter({ authenticate, authorize, db, pool
           vat_rate,
           vat_applicable,
           age_restricted,
+          image_url,
           stock_quantity,
           low_stock_level,
           track_stock,
@@ -717,6 +864,13 @@ export default function createProductsRouter({ authenticate, authorize, db, pool
           Boolean(availableOnDeliveroo),
           uberItemId || null,
           deliverooItemId || null,
+          /* Image: undefined -> keep stored; null/"" -> clear; a data URL/URL
+           * replaces it. Matches the form's Remove (null) / untouched (absent). */
+          imageUrl === undefined
+            ? null
+            : typeof imageUrl === "string" && imageUrl.trim()
+              ? imageUrl.trim().slice(0, 500_000)
+              : "",
           req.params.id,
           req.user.companyId,
         ]
@@ -725,6 +879,15 @@ export default function createProductsRouter({ authenticate, authorize, db, pool
       // Audit log for product changes
       const updatedProduct = result.rows[0];
       const changes = [];
+
+      if (!updatedProduct) {
+        /* Row vanished between the existence check and the UPDATE (or the
+         * WHERE id/company guard filtered it) — treat as not found. */
+        return res.status(404).json({
+          success: false,
+          message: "Product not found",
+        });
+      }
 
       if (previousValues.name !== updatedProduct.name) {
         changes.push({ field: "name", previous: previousValues.name, new: updatedProduct.name });
@@ -751,7 +914,7 @@ export default function createProductsRouter({ authenticate, authorize, db, pool
         changes.push({ field: "active", previous: previousValues.active, new: updatedProduct.active });
       }
 
-      if (changes.length > 0) {
+      if (changes.length > 0 && typeof writeAudit === "function") {
         writeAudit(
           req.user.companyId,
           req.user.id,
@@ -807,17 +970,19 @@ export default function createProductsRouter({ authenticate, authorize, db, pool
         });
       }
 
-      // Audit log for product deletion
-      writeAudit(
-        req.user.companyId,
-        req.user.id,
-        "product.deleted",
-        "product",
-        req.params.id,
-        {
-          active: false,
-        }
-      );
+      // Audit log for product deletion (best-effort)
+      if (typeof writeAudit === "function") {
+        writeAudit(
+          req.user.companyId,
+          req.user.id,
+          "product.deleted",
+          "product",
+          req.params.id,
+          {
+            active: false,
+          }
+        );
+      }
 
       res.json({
         success: true,

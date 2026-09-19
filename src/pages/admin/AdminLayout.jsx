@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { BarChart3, Bell, Calculator, ChevronDown, CreditCard, Database, FileText, Grid3X3, Home, LogOut, Package, Percent, Plug, Receipt, RefreshCw, Settings, ShoppingBag, Store, Tag, UserCircle, Users, X } from "lucide-react";
+import { BarChart3, Bell, Calculator, ChevronDown, CreditCard, Database, FileText, Grid3X3, Home, KeyRound, LogOut, Package, Percent, Plug, Receipt, RefreshCw, Settings, ShoppingBag, Store, Tag, UserCircle, Users, X } from "lucide-react";
 import { apiRequest } from "../../services/api.js";
 import { parseAppPath, buildAppPath } from "../../utils/adminRoutes.js";
 import BottomStatusBar from "../../components/BottomStatusBar.jsx";
@@ -11,6 +11,7 @@ import CategoriesAdmin from "../categories/CategoriesAdmin.jsx";
 import InventoryAdmin from "../inventory/InventoryAdmin.jsx";
 import ReplenishmentAdmin from "../inventory/ReplenishmentAdmin.jsx";
 import SettingsAdmin from "../settings/SettingsAdmin.jsx";
+import ChangePasswordModal from "../settings/ChangePasswordModal.jsx";
 import SuppliersAdmin from "../suppliers/SuppliersAdmin.jsx";
 import IntegrationsAdmin from "../integrations/IntegrationsAdmin.jsx";
 import AccountingAdmin from "../integrations/AccountingAdmin.jsx";
@@ -127,6 +128,8 @@ export default function AdminLayout({
      reuses the same navigation action as the T5A gear button. */
   const [profileOpen, setProfileOpen] = useState(false);
   const profileRef = useRef(null);
+  /* T10Y-followup: standalone Reset Password dialog (top-right header). */
+  const [resetPwOpen, setResetPwOpen] = useState(false);
   useEffect(() => {
     if (!profileOpen) return undefined;
     const handlePointerDown = (event) => {
@@ -145,6 +148,18 @@ export default function AdminLayout({
 
   const [onlinePermissions, setOnlinePermissions] = useState({ isAdmin: false, permissions: [] });
   const [reportsLoaded, setReportsLoaded] = useState(false);
+  /* T10W: dock quick-access pages configured in Settings → Store & Till.
+     null = not loaded yet → the dock falls back to its default layout. */
+  const [dockQuickAccess, setDockQuickAccess] = useState(null);
+  useEffect(() => {
+    let alive = true;
+    apiRequest("/api/settings").then((data) => {
+      if (alive && data.success && Array.isArray(data.data?.dock?.quickAccess)) {
+        setDockQuickAccess(data.data.dock.quickAccess);
+      }
+    }).catch(() => {}); /* default dock layout on failure — non-critical */
+    return () => { alive = false; };
+  }, []);
   useEffect(() => {
     let alive = true;
     apiRequest("/api/auth/me/permissions").then((data) => {
@@ -277,7 +292,10 @@ export default function AdminLayout({
         page={page}
         onNavigate={navigate}
         onOpenTill={onPOS}
+        quickAccess={dockQuickAccess}
       />
+
+      <ChangePasswordModal open={resetPwOpen} onClose={() => setResetPwOpen(false)} />
 
       {/* MAIN */}
       <main className="flex-1 min-w-0 flex flex-col">
@@ -334,6 +352,15 @@ export default function AdminLayout({
               }`}
             >
               <Settings size={18} />
+            </button>
+
+            <button
+              onClick={() => setResetPwOpen(true)}
+              aria-label="Reset Password"
+              title="Reset Password"
+              className="p-2 hover:bg-slate-100 rounded focus:outline-none focus:ring-2 focus:ring-blue-500 text-slate-600"
+            >
+              <KeyRound size={18} />
             </button>
 
             <button

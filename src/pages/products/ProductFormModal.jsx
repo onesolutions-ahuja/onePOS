@@ -1,5 +1,5 @@
-import { useMemo, useState } from "react";
-import { RefreshCw, Search, X } from "lucide-react";
+import { useMemo, useRef, useState } from "react";
+import { ImagePlus, RefreshCw, Search, Trash2, X } from "lucide-react";
 import { apiRequest } from "../../services/api.js";
 
 /*
@@ -17,6 +17,10 @@ import { apiRequest } from "../../services/api.js";
  * Duplicate / EAN validation is the responsibility of the existing
  * POST /api/products handler, which returns 409 "A product with this
  * barcode already exists" for within-company duplicates.
+ *
+ * Layout: wide (1170px) two-column body — image picker + EAN lookup live in
+ * a left rail, all fields in one right-hand column — so the entire form fits
+ * a 15" till screen without scrolling.
  */
 export default function ProductFormModal({ product, categories, preset = null, saving, error, onClose, onSave }) {
   const presetCategoryId = useMemo(() => {
@@ -47,28 +51,42 @@ export default function ProductFormModal({ product, categories, preset = null, s
     openingStock: 0,
     trackStock: product?.trackStock ?? true,
     ageRestricted: product?.ageRestricted === true,
+    imageUrl: product?.imageUrl || preset?.imageUrl || "",
     availableOnUber: product?.availableOnUber ?? false,
     availableOnDeliveroo: product?.availableOnDeliveroo ?? false,
     uberItemId: product?.uberItemId || "",
     deliverooItemId: product?.deliverooItemId || "",
   }));
 
-  const presetBanner = !product && preset ? (
-    <div className="mb-4 p-3 bg-emerald-50 border border-emerald-200 rounded-lg flex items-start gap-3">
-      <div className="w-9 h-9 shrink-0 rounded-lg bg-emerald-100 text-emerald-700 flex items-center justify-center">
-        <Search size={18} />
-      </div>
-      <div className="min-w-0 flex-1">
-        <div className="text-sm font-semibold text-emerald-800">
-          Pre-filled from the global product catalogue
-        </div>
-        <div className="text-xs text-emerald-700 mt-0.5">
-          Reference details have been added below.  Set your own selling price,
-          cost price, VAT and opening stock before saving.
-        </div>
-      </div>
-    </div>
-  ) : null;
+  const imageInputRef = useRef(null);
+
+  /*
+   * Product image: chosen from a local file, downscaled to a compact data
+   * URL (same approach as the Settings company logo uploader, but 400px for
+   * product shots). Also accepts a pasted/typed remote URL via the small
+   * "Use URL" input. Stored in products.image_url.
+   */
+  const handleImageFile = (file) => {
+    if (!file || !file.type.startsWith("image/")) return;
+    const img = new Image();
+    img.onload = () => {
+      const maxSize = 400;
+      const canvas = document.createElement("canvas");
+      const ctx = canvas.getContext("2d");
+      let { width, height } = img;
+      if (width > height) {
+        if (width > maxSize) { height = Math.round((height * maxSize) / width); width = maxSize; }
+      } else {
+        if (height > maxSize) { width = Math.round((width * maxSize) / height); height = maxSize; }
+      }
+      canvas.width = width;
+      canvas.height = height;
+      ctx.drawImage(img, 0, 0, width, height);
+      const dataUrl = canvas.toDataURL("image/jpeg", 0.82);
+      updateField("imageUrl", dataUrl);
+    };
+    img.src = URL.createObjectURL(file);
+  };
 
   const updateField = (field, value) =>
     setForm((current) => ({ ...current, [field]: value }));
@@ -168,6 +186,7 @@ export default function ProductFormModal({ product, categories, preset = null, s
       availableOnDeliveroo: Boolean(form.availableOnDeliveroo),
       uberItemId: form.uberItemId.trim() || null,
       deliverooItemId: form.deliverooItemId.trim() || null,
+      imageUrl: form.imageUrl || null,
     };
 
     if (!product) {
@@ -187,30 +206,10 @@ export default function ProductFormModal({ product, categories, preset = null, s
     ["vatRate", "VAT rate %", "number", false],
   ];
 
-  const openingStockField = !product ? (
-    <label className="text-sm text-slate-600">
-      <span className="block mb-1 font-medium">Opening stock</span>
-      <input
-        type="number"
-        min="0"
-        step="1"
-        disabled={!form.trackStock}
-        value={form.openingStock}
-        onChange={(event) => updateField("openingStock", event.target.value)}
-        className="w-full h-9 px-3 border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50 disabled:bg-slate-50"
-      />
-      <span className="block mt-1 text-xs text-slate-400">
-        {form.trackStock
-          ? "Starting quantity for your store — recorded as an OPENING stock movement."
-          : "Enable stock tracking to set an opening stock."}
-      </span>
-    </label>
-  ) : null;
-
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-xl w-[620px] max-w-full shadow-2xl max-h-[92vh] overflow-y-auto">
-        <div className="px-4 py-3 border-b border-slate-200 flex items-center justify-between">
+      <div className="bg-white rounded-xl w-[1170px] max-w-[95vw] shadow-2xl max-h-[92vh] overflow-y-auto">
+        <div className="px-4 py-2.5 border-b border-slate-200 flex items-center justify-between">
           <div>
             <h2 className="font-bold text-lg">
               {product ? "Edit Product" : "Add Product"}
@@ -229,33 +228,32 @@ export default function ProductFormModal({ product, categories, preset = null, s
           </button>
         </div>
 
-        <form onSubmit={submit} className="p-4">
+        <form onSubmit={submit} className="p-4 pt-3">
+          {/* EAN / barcode lookup (create mode only) — top strip */}
           {!product && (
-            <div className="mb-4 p-3 bg-slate-50 border border-slate-200 rounded-lg">
-              <span className="block text-xs font-medium text-slate-600 mb-1.5">
-                EAN / barcode lookup
-                <span className="font-normal text-slate-400"> — scan or type, then press Enter</span>
-              </span>
+            <div className="mb-3 p-3 bg-slate-50 border border-slate-200 rounded-lg">
               <div className="flex gap-2">
-                <input
-                  value={eanInput}
-                  onChange={(event) => setEanInput(event.target.value)}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter") {
-                      event.preventDefault();
-                      runEanLookup();
-                    }
-                  }}
-                  inputMode="numeric"
-                  autoComplete="off"
-                  placeholder="Scan or type EAN / barcode (8, 12–14 digits)"
-                  className="flex-1 h-9 px-3 border border-slate-200 rounded-lg text-sm outline-none focus:ring-2 focus:ring-blue-500 bg-white"
-                />
+                <div className="min-w-0 flex-1">
+                  <input
+                    value={eanInput}
+                    onChange={(event) => setEanInput(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") {
+                        event.preventDefault();
+                        runEanLookup();
+                      }
+                    }}
+                    inputMode="numeric"
+                    autoComplete="off"
+                    placeholder="EAN / barcode lookup — scan or type, then press Enter (8, 12–14 digits)"
+                    className="w-full h-9 px-3 border border-slate-200 rounded-lg text-sm outline-none focus:ring-2 focus:ring-blue-500 bg-white"
+                  />
+                </div>
                 <button
                   type="button"
                   onClick={runEanLookup}
                   disabled={lookingUp || saving}
-                  className="h-9 px-3 bg-slate-800 text-white rounded-lg text-sm hover:bg-slate-700 disabled:opacity-60 flex items-center gap-1.5 shrink-0"
+                  className="h-9 px-4 bg-slate-800 text-white rounded-lg text-sm hover:bg-slate-700 disabled:opacity-60 flex items-center justify-center gap-1.5 shrink-0"
                 >
                   {lookingUp ? (
                     <RefreshCw size={14} className="animate-spin" />
@@ -302,138 +300,210 @@ export default function ProductFormModal({ product, categories, preset = null, s
             </div>
           )}
 
-          {presetBanner}
-
           {error && (
-            <div className="mb-4 px-3 py-2 bg-red-50 border border-red-200 text-red-700 rounded text-sm">
+            <div className="mb-3 px-3 py-2 bg-red-50 border border-red-200 text-red-700 rounded text-sm">
               {error}
             </div>
           )}
 
-          <div className="grid grid-cols-2 gap-3">
-            {fields.map(([field, label, type, required]) => (
-              <label key={field} className="text-sm text-slate-600">
-                <span className="block mb-1 font-medium">{label}</span>
+          <div className="flex items-start gap-4">
+            {/* ------------------------------------------------ left rail */}
+            <div className="w-[260px] shrink-0 flex flex-col gap-3">
+              {/* Product image picker (create + edit) */}
+              <div className="bg-slate-50 border border-slate-200 rounded-lg p-3 flex flex-col items-center gap-2">
+                {form.imageUrl ? (
+                  <img
+                    src={form.imageUrl}
+                    alt="Product"
+                    className="w-24 h-24 rounded-lg object-cover border border-slate-200 bg-white"
+                  />
+                ) : (
+                  <div className="w-24 h-24 rounded-lg border border-dashed border-slate-300 bg-white flex items-center justify-center text-slate-300">
+                    <ImagePlus size={28} />
+                  </div>
+                )}
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => imageInputRef.current?.click()}
+                    disabled={saving}
+                    className="h-8 px-3 bg-white border border-slate-200 rounded-lg text-sm text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+                  >
+                    {form.imageUrl ? "Change image" : "Add image"}
+                  </button>
+                  {form.imageUrl && (
+                    <button
+                      type="button"
+                      onClick={() => updateField("imageUrl", "")}
+                      disabled={saving}
+                      className="h-8 px-2.5 text-red-600 hover:bg-red-50 rounded-lg text-sm flex items-center gap-1"
+                    >
+                      <Trash2 size={13} /> Remove
+                    </button>
+                  )}
+                </div>
                 <input
-                  required={required}
-                  type={type}
-                  min={type === "number" ? "0" : undefined}
-                  step={type === "number" ? "0.01" : undefined}
-                  value={form[field]}
-                  onChange={(event) => updateField(field, event.target.value)}
-                  className="w-full h-9 px-3 border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-blue-500"
+                  ref={imageInputRef}
+                  type="file"
+                  accept="image/*"
+                  hidden
+                  onChange={(event) => {
+                    handleImageFile(event.target.files[0]);
+                    event.target.value = "";
+                  }}
                 />
-              </label>
-            ))}
+                <p className="text-xs text-slate-400 text-center">
+                  JPG/PNG — resized automatically. Shown on product lists.
+                </p>
+              </div>
+            </div>
 
-            <label className="text-sm text-slate-600">
-              <span className="block mb-1 font-medium">Category</span>
-              <select
-                value={form.categoryId}
-                onChange={(event) => updateField("categoryId", event.target.value)}
-                className="w-full h-9 px-3 border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-blue-500 bg-white"
-              >
-                <option value="">Uncategorised</option>
-                {categories.map((category) => (
-                  <option key={category.id} value={category.id}>
-                    {category.name}
-                  </option>
+            {/* ----------------------------------------------- right column */}
+            <div className="flex-1 min-w-0 flex flex-col gap-3">
+              <div className="grid grid-cols-4 gap-x-3 gap-y-2.5">
+                {fields.map(([field, label, type, required]) => (
+                  <label key={field} className="text-sm text-slate-600">
+                    <span className="block mb-1 font-medium">{label}</span>
+                    <input
+                      required={required}
+                      type={type}
+                      min={type === "number" ? "0" : undefined}
+                      step={type === "number" ? "0.01" : undefined}
+                      value={form[field]}
+                      onChange={(event) => updateField(field, event.target.value)}
+                      className="w-full h-9 px-3 border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-blue-500"
+                    />
+                  </label>
                 ))}
-              </select>
-            </label>
 
-            <label className="flex items-center gap-2 text-sm text-slate-600 pt-6">
-              <input
-                type="checkbox"
-                checked={form.trackStock}
-                onChange={(event) => updateField("trackStock", event.target.checked)}
-                className="w-4 h-4 accent-blue-600"
-              />
-              Track stock for this product
-            </label>
+                <label className="text-sm text-slate-600">
+                  <span className="block mb-1 font-medium">Category</span>
+                  <select
+                    value={form.categoryId}
+                    onChange={(event) => updateField("categoryId", event.target.value)}
+                    className="w-full h-9 px-3 border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-blue-500 bg-white"
+                  >
+                    <option value="">Uncategorised</option>
+                    {categories.map((category) => (
+                      <option key={category.id} value={category.id}>
+                        {category.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
 
-            {openingStockField}            <div className="col-span-2 grid grid-cols-2 gap-3 items-center bg-slate-50 border border-slate-200 rounded-lg px-3 py-2">
-              <label className="flex items-center gap-2 text-sm text-slate-600">
-                <input
-                  type="checkbox"
-                  checked={form.vatApplicable}
-                  onChange={(event) => updateField("vatApplicable", event.target.checked)}
-                  className="w-4 h-4 accent-blue-600"
-                />
-                VAT applicable
-              </label>
-              <p className="text-xs text-slate-400">
-                {form.vatApplicable
-                  ? `VAT is charged at the rate above (${form.vatRate || 0}%).`
-                  : "No VAT is charged for this product — zero-rated/exempt items."}
-              </p>
-            </div>
+                <div className="text-sm text-slate-600">
+                  <span className="block mb-1 font-medium">Stock tracking</span>
+                  <div className="flex items-center gap-2 h-9">
+                    <label className="flex items-center gap-1.5 whitespace-nowrap">
+                      <input
+                        type="checkbox"
+                        checked={form.trackStock}
+                        onChange={(event) => updateField("trackStock", event.target.checked)}
+                        className="w-4 h-4 accent-blue-600"
+                      />
+                      Track stock
+                    </label>
+                    {!product && (
+                      <input
+                        type="number"
+                        min="0"
+                        step="1"
+                        disabled={!form.trackStock}
+                        value={form.openingStock}
+                        onChange={(event) => updateField("openingStock", event.target.value)}
+                        placeholder="Opening stock"
+                        title={
+                          form.trackStock
+                            ? "Starting quantity for your store — recorded as an OPENING stock movement."
+                            : "Enable stock tracking to set an opening stock."
+                        }
+                        className="w-28 h-9 px-3 border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50 disabled:bg-slate-50"
+                      />
+                    )}
+                  </div>
+                </div>
+              </div>
 
-            <div className="col-span-2 flex items-center justify-between gap-3 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2">
-              <label className="flex items-center gap-2 text-sm text-slate-600">
-                <input
-                  type="checkbox"
-                  checked={form.ageRestricted}
-                  onChange={(event) => updateField("ageRestricted", event.target.checked)}
-                  className="w-4 h-4 accent-blue-600"
-                />
-                Age restricted (18+)
-              </label>
-              <p className="text-xs text-slate-400 text-right">
-                {form.ageRestricted
-                  ? "Cashier must confirm age verification before completing the sale."
-                  : "Sells without an age check."}
-              </p>
-            </div>
-          </div>
+              <div className="grid grid-cols-4 gap-3">
+                <div className="flex items-center justify-between gap-3 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 col-span-2">
+                  <label className="flex items-center gap-2 text-sm text-slate-600 whitespace-nowrap">
+                    <input
+                      type="checkbox"
+                      checked={form.vatApplicable}
+                      onChange={(event) => updateField("vatApplicable", event.target.checked)}
+                      className="w-4 h-4 accent-blue-600"
+                    />
+                    VAT applicable
+                  </label>
+                  <p className="text-xs text-slate-400 text-right">
+                    {form.vatApplicable
+                      ? `Charged at ${form.vatRate || 0}% (rate above).`
+                      : "No VAT — zero-rated/exempt."}
+                  </p>
+                </div>
 
-          <div className="mt-4 pt-3 border-t border-slate-200">
-            <p className="text-sm font-semibold text-slate-700 mb-3">
-              Online platforms (Uber Eats / Deliveroo)
-            </p>
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <label className="flex items-center gap-2 text-sm text-slate-600">
+                <div className="flex items-center justify-between gap-3 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 col-span-2">
+                  <label className="flex items-center gap-2 text-sm text-slate-600 whitespace-nowrap">
+                    <input
+                      type="checkbox"
+                      checked={form.ageRestricted}
+                      onChange={(event) => updateField("ageRestricted", event.target.checked)}
+                      className="w-4 h-4 accent-blue-600"
+                    />
+                    Age restricted (18+)
+                  </label>
+                  <p className="text-xs text-slate-400 text-right">
+                    {form.ageRestricted
+                      ? "Age check required before sale."
+                      : "Sells without an age check."}
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-4 flex-wrap bg-slate-50 border border-slate-200 rounded-lg px-3 py-2">
+                <span className="text-sm font-semibold text-slate-700">
+                  Online platforms
+                </span>
+                <label className="flex items-center gap-1.5 text-sm text-slate-600 whitespace-nowrap">
                   <input
                     type="checkbox"
                     checked={form.availableOnUber}
                     onChange={(event) => updateField("availableOnUber", event.target.checked)}
                     className="w-4 h-4 accent-blue-600"
                   />
-                  Available on Uber Eats
+                  Uber Eats
                 </label>
                 {form.availableOnUber && (
                   <input
                     placeholder="Uber item ID (optional)"
                     value={form.uberItemId}
                     onChange={(event) => updateField("uberItemId", event.target.value)}
-                    className="w-full h-9 px-3 border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+                    className="w-44 h-8 px-2.5 border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-blue-500 text-sm"
                   />
                 )}
-              </div>
-              <div className="space-y-2">
-                <label className="flex items-center gap-2 text-sm text-slate-600">
+                <label className="flex items-center gap-1.5 text-sm text-slate-600 whitespace-nowrap">
                   <input
                     type="checkbox"
                     checked={form.availableOnDeliveroo}
                     onChange={(event) => updateField("availableOnDeliveroo", event.target.checked)}
                     className="w-4 h-4 accent-blue-600"
                   />
-                  Available on Deliveroo
+                  Deliveroo
                 </label>
                 {form.availableOnDeliveroo && (
                   <input
                     placeholder="Deliveroo item ID (optional)"
                     value={form.deliverooItemId}
                     onChange={(event) => updateField("deliverooItemId", event.target.value)}
-                    className="w-full h-10 px-3 border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+                    className="w-44 h-8 px-2.5 border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-blue-500 text-sm"
                   />
                 )}
               </div>
             </div>
           </div>
 
-          <div className="flex justify-end gap-2 mt-4 pt-3 border-t border-slate-200">
+          <div className="flex justify-end gap-2 mt-3 pt-2.5 border-t border-slate-200">
             <button
               type="button"
               onClick={onClose}

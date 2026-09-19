@@ -1,4 +1,4 @@
-import { defineConfig } from "vite";
+﻿import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import { resolve } from "node:path";
 
@@ -13,6 +13,11 @@ export default defineConfig({
       input: {
         marketing: resolve(__dirname, "index.html"),
         app: resolve(__dirname, "app/index.html"),
+      },
+      output: {
+        // T10P-CAMERA: keep the barcode decoder in its own chunk so the camera
+        // scanner (dynamic import in ScanAndGo) loads it on demand.
+        manualChunks: { zxing: ["@zxing/library"] },
       },
     },
   },
@@ -32,7 +37,7 @@ proxy: {
         changeOrigin: true,
       },
     },
-  
+
 
   },
 });

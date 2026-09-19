@@ -63,6 +63,37 @@ const COMPANY = "a0000000-0000-4000-8000-000000000001";
 const STORE = "c0000000-0000-4000-8000-000000000003";
 const USER = "u0000000-0000-4000-8000-000000000009";
 
+/*
+ * REGRESSION (production incident): the create-product INSERT listed 19
+ * columns but its VALUES clause had only 18 expressions (the $17 added with
+ * age_restricted was missing), so PostgreSQL rejected EVERY product create
+ * with "INSERT has more target columns than expressions" -> the UI showed
+ * "Unable to create product". The fake db does not parse SQL, so the suite
+ * stayed green while production was broken. This static contract test pins
+ * column/VALUES arity and placeholder continuity for the create INSERT.
+ */
+test("create-product INSERT: VALUES arity matches columns and placeholders are contiguous", async () => {
+  const src = fs.readFileSync(new URL("../routes/products.js", import.meta.url), "utf8");
+  const m = src.match(/INSERT INTO products \(([\s\S]*?)\)\s*VALUES\s*\(([\s\S]*?)\)\s*RETURNING/);
+  assert.ok(m, "INSERT INTO products ... VALUES ... RETURNING shape found");
+
+  const columns = m[1].split(",").map((c) => c.trim()).filter(Boolean);
+  const values = m[2].split(",").map((v) => v.trim()).filter(Boolean);
+
+  assert.equal(
+    columns.length, values.length,
+    `INSERT has ${columns.length} target columns but ${values.length} VALUES expressions`
+  );
+
+  const placeholders = values
+    .filter((v) => /^\$\d+$/.test(v))
+    .map((v) => Number(v.slice(1)))
+    .sort((a, b) => a - b);
+  placeholders.forEach((n, i) => {
+    assert.equal(n, i + 1, `placeholder sequence must be $1..$${placeholders.length} with no gaps (found $${n} at position ${i + 1})`);
+  });
+});
+
 function makeCtx() {
   const state = { products: new Map(), movements: [] };
   const db = async (sql, params = []) => {
@@ -72,10 +103,16 @@ function makeCtx() {
       const row = state.products.get(params[0]);
       return { rows: row && row.company_id === params[1] ? [{ id: row.id }] : [] };
     }
+    // PUT pre-update audit snapshot (name, sku, barcode, category_id, price, vat_rate, age_restricted, active)
+    if (/SELECT\s+name, sku, barcode, category_id, price, vat_rate, age_restricted, active\s+FROM products WHERE id = \$1 AND company_id = \$2/i.test(s)) {
+      const row = state.products.get(params[0]);
+      return { rows: row && row.company_id === params[1] ? [{ name: row.name, sku: row.sku, barcode: row.barcode, category_id: row.category_id, price: row.price, vat_rate: row.vat_rate, age_restricted: row.age_restricted, active: row.active }] : [] };
+    }
     // PUT main UPDATE runs through db() (not the transaction client).
+    // Params: image=$17 (null=keep, ''=clear), id=$18, companyId=$19.
     if (/^UPDATE products SET/i.test(s)) {
-      const row = state.products.get(params[16]);
-      if (!row || row.company_id !== params[17]) return { rows: [] };
+      const row = state.products.get(params[17]);
+      if (!row || row.company_id !== params[18]) return { rows: [] };
       Object.assign(row, {
         name: params[1], price: Number(params[5]) || 0,
         vat_rate: Number(params[7]) || 0,
@@ -83,6 +120,8 @@ function makeCtx() {
         vat_applicable: params[8] === null ? row.vat_applicable : params[8] === true,
         // COALESCE($10, age_restricted): null keeps stored value (T10C).
         age_restricted: params[9] === null ? row.age_restricted : params[9] === true,
+        // image_url: null = field omitted (keep), '' = cleared, else set.
+        image_url: params[16] === null ? row.image_url : params[16] === "" ? null : params[16],
         track_stock: params[11] === true,
       });
       return { rows: [{ ...row }] };

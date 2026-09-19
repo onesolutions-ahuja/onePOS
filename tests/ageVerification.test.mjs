@@ -28,9 +28,14 @@ function makeProductsCtx() {
       const row = state.products.get(params[0]);
       return { rows: row && row.company_id === params[1] ? [{ id: row.id }] : [] };
     }
+    // PUT pre-update audit snapshot (name, sku, barcode, category_id, price, vat_rate, age_restricted, active)
+    if (/SELECT\s+name, sku, barcode, category_id, price, vat_rate, age_restricted, active\s+FROM products WHERE id = \$1 AND company_id = \$2/i.test(s)) {
+      const row = state.products.get(params[0]);
+      return { rows: row && row.company_id === params[1] ? [{ name: row.name, sku: row.sku, barcode: row.barcode, category_id: row.category_id, price: row.price, vat_rate: row.vat_rate, age_restricted: row.age_restricted, active: row.active }] : [] };
+    }
     if (/^UPDATE products SET/i.test(s)) {
-      const row = state.products.get(params[16]); // id is $17
-      if (!row || row.company_id !== params[17]) return { rows: [] };
+      const row = state.products.get(params[17]); // id is $18 (image is $17)
+      if (!row || row.company_id !== params[18]) return { rows: [] };
       Object.assign(row, {
         name: params[1],
         price: Number(params[5]) || 0,
@@ -147,6 +152,11 @@ function makeSalesCtx() {
     }
     // Sale-row verification lookup used by router-internal checks.
     if (/SELECT id FROM users WHERE id = \$1/.test(s)) return { rows: [{ ok: 1 }] };
+    // PUT pre-update audit snapshot (name, sku, barcode, category_id, price, vat_rate, age_restricted, active)
+    if (/SELECT\s+name, sku, barcode, category_id, price, vat_rate, age_restricted, active\s+FROM products WHERE id = \$1 AND company_id = \$2/i.test(s)) {
+      const row = state.products.get(params[0]);
+      return { rows: row && row.company_id === params[1] ? [{ name: row.name, sku: row.sku, barcode: row.barcode, category_id: row.category_id, price: row.price, vat_rate: row.vat_rate, age_restricted: row.age_restricted, active: row.active }] : [] };
+    }
     return { rows: [], rowCount: 0 };
   };
   const pool = { async connect() { return { ...client, release() {} }; } };

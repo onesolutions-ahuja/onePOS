@@ -278,3 +278,272 @@ test("idempotencyLookupParams preserves store scoping when present", () => {
   assert.strictEqual(withStore.store_id, "store-1");
   assert.strictEqual(noStore.store_id, null);
 });
+
+/* ============================================================ purchase normalization */
+
+const aPurchase = {
+  id: "purch-1",
+  supplier_id: "sup-1",
+  supplier_name: "Acme Supplies",
+  reference_number: "INV-1001",
+  purchase_date: "2025-01-14T09:00:00Z",
+  created_at: "2025-01-14T09:00:00Z",
+  subtotal: 100.00,
+  total: 120.00,
+  status: "RECEIVED",
+  notes: "First order",
+};
+
+const aPurchaseItems = [
+  {
+    product_id: "prod-1",
+    product_name: "Coffee Beans",
+    quantity: 10,
+    unit_cost: 8.00,
+    line_total: 80.00,
+    line_tax: 16.00,
+    sku: "COF-001",
+    barcode: "5012345678901",
+    vat_rate: 20,
+    vat_applicable: true,
+  },
+  {
+    product_id: "prod-2",
+    product_name: "Milk",
+    quantity: 5,
+    unit_cost: 4.00,
+    line_total: 20.00,
+    line_tax: 0,
+    sku: "MLK-001",
+    barcode: "5012345678902",
+    vat_rate: 0,
+    vat_applicable: true,
+  },
+];
+
+const aSupplier = { id: "sup-1", name: "Acme Supplies" };
+
+test("normalizePurchase produces provider-neutral accounting record", () => {
+  const rec = normalizePurchase(aPurchase, aPurchaseItems, aSupplier);
+  assert.strictEqual(rec.source_type, "purchase");
+  assert.strictEqual(rec.source_id, "purch-1");
+  assert.strictEqual(rec.supplier_id, "sup-1");
+  assert.strictEqual(rec.supplier_name, "Acme Supplies");
+  assert.strictEqual(rec.supplier_reference, "INV-1001");
+  assert.strictEqual(rec.document_status, "RECEIVED");
+  assert.strictEqual(rec.net_purchase, 100);
+  assert.strictEqual(rec.input_vat, 20);
+  assert.strictEqual(rec.gross_purchase, 120);
+  assert.ok(Array.isArray(rec.lines));
+  assert.strictEqual(rec.lines.length, 2);
+  const beans = rec.lines.find((l) => l.product_id === "prod-1");
+  assert.ok(beans);
+  assert.strictEqual(beans.line_net, 64);
+  assert.strictEqual(beans.line_vat, 16);
+  assert.strictEqual(beans.line_gross, 80);
+  assert.strictEqual(beans.vat_rate, 20);
+  assert.strictEqual(beans.vat_category, "VAT_STANDARD");
+  assert.strictEqual(beans.vat_applicable, true);
+  const milk = rec.lines.find((l) => l.product_id === "prod-2");
+  assert.strictEqual(milk.line_net, 20);
+  assert.strictEqual(milk.line_vat, 0);
+  assert.strictEqual(milk.line_gross, 20);
+  assert.strictEqual(milk.vat_rate, 0);
+    assert.strictEqual(milk.vat_category, "VAT_ZERO");
+});
+
+test("normalizePurchase handles missing supplier object", () => {
+  const rec = normalizePurchase({ ...aPurchase, supplier_name: "Fallback Name" }, [], null);
+  assert.strictEqual(rec.supplier_name, "Fallback Name");
+});
+
+test("purchaseShape / purchaseItemShape / supplierShape carry authoritative fields", () => {
+  assert.deepStrictEqual(purchaseShape(aPurchase), {
+    id: "purch-1",
+    supplier_id: "sup-1",
+    supplier_name: "Acme Supplies",
+    reference_number: "INV-1001",
+    purchase_date: "2025-01-14T09:00:00Z",
+    subtotal: 100,
+    total: 120,
+    status: "RECEIVED",
+    received_at: undefined,
+    notes: "First order",
+  });
+  assert.deepStrictEqual(purchaseItemShape(aPurchaseItems[0]), {
+    product_id: "prod-1",
+    product_name: "Coffee Beans",
+    quantity: 10,
+    unit_cost: 8,
+    line_total: 80,
+    line_tax: 16,
+    sku: "COF-001",
+    barcode: "5012345678901",
+    vat_rate: 20,
+    vat_applicable: true,
+  });
+      assert.deepStrictEqual(supplierShape(aSupplier), {
+    id: "sup-1",
+    name: "Acme Supplies",
+    contact_name: null,
+    email: null,
+    phone: null,
+    address: null,
+  });
+});
+
+/* ============================================================ refund normalization */
+
+const aRefund = {
+  id: "refund-1",
+  sale_id: "sale-1",
+  amount: 12.00,
+  refund_amount: 12.00,
+  payment_method: "Card",
+  reason: "Wrong item",
+  status: "completed",
+  created_at: "2025-01-16T10:00:00Z",
+  return_number: "RET-0001",
+};
+
+test("normalizeRefund produces provider-neutral accounting record", () => {
+  const rec = normalizeRefund(aRefund, aSale);
+  assert.strictEqual(rec.source_type, "refund");
+  assert.strictEqual(rec.source_id, "refund-1");
+  assert.strictEqual(rec.original_sale_id, "sale-1");
+  assert.strictEqual(rec.original_sale_reference, "POS-0001");
+  assert.strictEqual(rec.refund_reference, "RET-0001");
+  assert.strictEqual(rec.refund_status, "completed");
+    assert.strictEqual(rec.net_refund, 10);
+  assert.strictEqual(rec.vat_refund, 2);
+  assert.strictEqual(rec.gross_refund, 12);
+  assert.strictEqual(rec.refund_method, "Card");
+    assert.strictEqual(rec.customer_id, "cust-1");
+});
+
+test("normalizeRefund computes VAT proportionally from original sale", () => {
+  const rec = normalizeRefund(aRefund, { subtotal: 80, tax: 16, total: 96 });
+  // 12 / 96 * 16 = 2
+  assert.strictEqual(rec.vat_refund, 2);
+  assert.strictEqual(rec.net_refund, 10);
+});
+
+test("normalizeRefund caps VAT refund at original sale tax", () => {
+  const bigRefund = { ...aRefund, amount: 200 };
+  const rec = normalizeRefund(bigRefund, { subtotal: 80, tax: 16, total: 96 });
+  assert.strictEqual(rec.vat_refund, 16);
+  assert.strictEqual(rec.net_refund, 184);
+});
+
+test("normalizeRefund works without original sale", () => {
+  const rec = normalizeRefund(aRefund);
+  assert.strictEqual(rec.original_sale_id, "sale-1");
+  assert.strictEqual(rec.original_sale_reference, null);
+  assert.strictEqual(rec.net_refund, 12);
+  assert.strictEqual(rec.vat_refund, 0);
+});
+
+test("refundShape carries authoritative fields", () => {
+  assert.deepStrictEqual(refundShape(aRefund), {
+    id: "refund-1",
+    sale_id: "sale-1",
+    amount: 12,
+    payment_method: "Card",
+    reason: "Wrong item",
+    return_id: undefined,
+    created_at: "2025-01-16T10:00:00Z",
+  });
+});
+
+/* ============================================================ customer credit normalization */
+
+const aCreditTx = {
+  id: "cred-1",
+  customer_id: "cust-1",
+  amount: 5.00,
+  balance_after: 25.00,
+  transaction_type: "credit",
+  reference_type: "sale",
+  reference_id: "sale-1",
+  description: "Store credit",
+  created_at: "2025-01-15T11:00:00Z",
+  created_by: "user-1",
+};
+
+test("normalizeCustomerCreditTransaction splits debit/credit", () => {
+  const creditRec = normalizeCustomerCreditTransaction(aCreditTx);
+  const debitTx = { ...aCreditTx, id: "cred-2", amount: -3.00, transaction_type: "debit" };
+  const debitRec = normalizeCustomerCreditTransaction(debitTx);
+  assert.strictEqual(creditRec.is_credit, true);
+  assert.strictEqual(creditRec.is_debit, false);
+  assert.strictEqual(creditRec.credit_amount, 5);
+  assert.strictEqual(creditRec.debit_amount, 0);
+  assert.strictEqual(debitRec.is_debit, true);
+  assert.strictEqual(debitRec.is_credit, false);
+  assert.strictEqual(debitRec.debit_amount, 3);
+  assert.strictEqual(debitRec.credit_amount, 0);
+});
+
+test("normalizeCustomerCreditTransaction includes customer name", () => {
+  const rec = normalizeCustomerCreditTransaction(aCreditTx, aCustomer);
+  assert.strictEqual(rec.customer_name, "Jane Doe");
+  assert.strictEqual(rec.amount, 5);
+  assert.strictEqual(rec.balance_after, 25);
+  assert.strictEqual(rec.source_type, "customer_credit");
+});
+
+test("normalizeCustomerCreditTransaction returns null for no tx", () => {
+  assert.strictEqual(normalizeCustomerCreditTransaction(null), null);
+});
+
+test("loyaltyTransactionShape carries authoritative fields", () => {
+  const tx = { id: "cred-1", customer_id: "cust-1", transaction_type: "credit", amount: 5, balance_after: 25, reference_type: "sale", reference_id: "sale-1", description: "credit", created_by: "u1", created_at: "2025-01-15T11:00:00Z" };
+    assert.deepStrictEqual(loyaltyTransactionShape(tx), tx);
+});
+
+/* ============================================================ VAT rate preservation */
+
+test("VAT rate is preserved per sale line", () => {
+  const rec = normalizeSale(aSale, aSaleItems, [], aCustomer, aStore);
+  const coffee = rec.lines[0];
+  assert.strictEqual(coffee.vat_rate, aSaleItems[0].vat_rate);
+  assert.strictEqual(coffee.vat_category, "VAT_STANDARD");
+  assert.strictEqual(coffee.vat_applicable, true);
+});
+
+test("VAT zero-rated and exempt products handled per line", () => {
+  const items = [{ ...aSaleItems[0], vat_rate: 0, vat_applicable: false }];
+  const rec = normalizeSale({ ...aSale, tax: 0, total: 7.7 }, items, [], aCustomer, aStore);
+  assert.strictEqual(rec.lines[0].vat_category, "VAT_EXEMPT");
+  assert.strictEqual(rec.lines[0].vat_applicable, false);
+});
+
+/* ============================================================ stable source IDs (idempotency) */
+
+test("normalized sale carries stable source_id", () => {
+  const rec = normalizeSale(aSale, [], [], aCustomer, aStore);
+  assert.strictEqual(rec.source_id, aSale.id);
+  assert.strictEqual(rec.source_type, "sale");
+});
+
+test("normalized purchase carries stable source_id", () => {
+  const rec = normalizePurchase(aPurchase, aPurchaseItems, aSupplier);
+  assert.strictEqual(rec.source_id, aPurchase.id);
+});
+
+test("normalized refund carries stable source_id", () => {
+  const rec = normalizeRefund(aRefund);
+  assert.strictEqual(rec.source_id, aRefund.id);
+});
+
+test("same source ID + different companies produce different idempotency keys", () => {
+  const compA = idempotencyLookupParams(ACCOUNTING_ENTITY_TYPES.SALE, "sale-1", "comp-A");
+  const compB = idempotencyLookupParams(ACCOUNTING_ENTITY_TYPES.SALE, "sale-1", "comp-B");
+  assert.notDeepStrictEqual(compA, compB);
+  assert.notStrictEqual(compA.company_id, compB.company_id);
+});
+
+test("stockReturnShape carries authoritative fields", () => {
+  const row = { id: "ret-1", return_number: "RET-0001", sale_id: "sale-1", purchase_id: null, supplier_id: null, refund_amount: 10, refund_method: "Card", reason: "defect", status: "completed", created_at: "2025-01-16T10:00:00Z" };
+  assert.deepStrictEqual(stockReturnShape(row), row);
+});

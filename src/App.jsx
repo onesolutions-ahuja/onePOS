@@ -39,15 +39,18 @@ export default function App() {
   const [scoError, setScoError] = useState("");
   const [scoStarting, setScoStarting] = useState(false);
 
-  const enterSelfCheckout = async () => {
+  const enterSelfCheckout = async (deviceKey) => {
     if (scoStarting) return;
     setScoStarting(true);
     setScoError("");
     try {
-      const data = await apiRequest("/api/self-checkout/session", {
+      /* Customer-device entry: the store's paired device key (Settings →
+         Store & Till → Self-Checkout device pairing) mints the restricted
+         session — no staff login on the SCO device. */
+      const data = await apiRequest("/api/self-checkout/device-session", {
         signal: AbortSignal.timeout(10000),
         method: "POST",
-        body: JSON.stringify({}),
+        body: JSON.stringify({ deviceKey }),
       });
       if (!data.success || !data.data?.modeToken) throw new Error(data.message || "Unable to start Self-Checkout");
       setScoToken(data.data.modeToken);

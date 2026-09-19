@@ -13,6 +13,7 @@ import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import express from "express";
+import bcrypt from "bcryptjs";
 import { signSessionPayload } from "../services/session.js";
 import createSelfCheckoutRouter, { createSelfCheckoutModeGate } from "../routes/selfCheckout.js";
 
@@ -35,6 +36,28 @@ function makeScoCtx() {
       };
       const store = stores[params[0]];
       return { rows: store && store.company_id === params[1] ? [store] : [] };
+    }
+    /* Device pairing (customer login-screen entry): only ACTIVE stores with
+       a paired key hash are candidates. */
+    if (/SELECT id, company_id, name, self_checkout_key_hash FROM stores WHERE active = true AND self_checkout_key_hash IS NOT NULL/.test(s)) {
+      return { rows: state.pairedStores || [] };
+    }
+    if (/JOIN roles r ON r\.id = u\.role_id[\s\S]*LOWER\(r\.name\) IN \('administrator','admin','owner'\)/.test(s)) {
+      return { rows: state.admins || [] };
+    }
+    if (/SELECT u\.id, u\.role_id, u\.username FROM users u WHERE u\.company_id = \$1 AND u\.active = true/.test(s)) {
+      return { rows: state.anyUsers || [] };
+    }
+    /* Customer lookup: exact company-scoped phone/email match. */
+    if (/SELECT id, name FROM customers/.test(s) && /company_id = \$1/.test(s)) {
+      const list = state.customers || [];
+      const q = String(params[1] || "").toLowerCase();
+      const digits = String(params[2] || "");
+      const found = list.find(
+        (c) => c.company_id === params[0] &&
+          (c.email.toLowerCase() === q || c.phone === params[1] || (digits && c.phoneDigits === digits))
+      );
+      return { rows: found ? [{ id: found.id, name: found.name }] : [] };
     }
     return { rows: [], rowCount: 0 };
   };
@@ -104,6 +127,8 @@ async function buildScoApp(ctx, { user, writeAudit } = {}) {
       return res.status(403).json({ success: false, message: "You do not have permission to perform this action" });
     },
     db: ctx.db,
+    bcrypt,
+    jwtSecret: "test-sco-secret",
     writeAudit,
   }));
   return app;
@@ -358,10 +383,90 @@ describe("Self-Checkout frontend contract", () => {
     assert.doesNotMatch(scoSrc, /[>"']Cash[<"']/, "no Cash button is rendered");
   });
 
-  test("mode is entered explicitly, renders only self-checkout, and exits safely", () => {
+  test("mode is entered from the LOGIN screen (customer device), not the staff till", () => {
     assert.match(appSrc, /enterSelfCheckout/, "explicit entry action exists");
     assert.match(appSrc, /if \(scoToken\) \{[\s\S]*?<SelfCheckout[\s\S]*?\}\s*\n\s*if \(view === "admin"\)/s, "while in mode ONLY SelfCheckout renders");
     assert.match(appSrc, /exitSelfCheckout/, "explicit exit exists");
-    assert.match(posSrc, /onStartSelfCheckout/, "staff POS exposes the entry action");
+    assert.match(appSrc, /self-checkout\/device-session/, "entry mints the session via the device-key endpoint");
+    assert.doesNotMatch(posSrc, /onStartSelfCheckout/, "the staff till header has NO Self-Checkout button");
+  });
+
+  test("customer device-session security contracts (backend routes)", () => {
+    const routeSrc = fs.readFileSync(new URL("../routes/selfCheckout.js", import.meta.url), "utf8");
+    assert.match(routeSrc, /self-checkout\/device-session/, "device-key session endpoint exists");
+    assert.match(routeSrc, /bcrypt\.compare/, "device keys are verified against a stored hash");
+    assert.match(routeSrc, /self_checkout_key_hash IS NOT NULL/, "only explicitly paired stores can mint sessions");
+    assert.match(routeSrc, /mode: "self_checkout"/, "device sessions get the SAME restricted mode token");
+  });
+
+  test("customer identification: guest by default, company-scoped lookup, no cross-company access", async () => {
+    const ctx = makeScoCtx();
+    const app = await buildScoApp(ctx, {
+      user: { id: USER, companyId: COMPANY, storeId: STORE, roleId: ROLE, username: "sco", mode: "self_checkout" },
+    });
+    const { server, port } = await listen(app);
+    try {
+      /* no query → 400; no match → 404 with guest fallback message */
+      const empty = await req(port, "POST", "/api/self-checkout/customer-lookup", { body: { query: "" } });
+      assert.equal(empty.status, 400);
+      const miss = await req(port, "POST", "/api/self-checkout/customer-lookup", { body: { query: "nobody@nowhere.test" } });
+      assert.equal(miss.status, 404);
+      assert.match(miss.body.message, /guest/);
+
+      /* exact match inside the company → id + name only */
+      ctx.state.customers = [
+        { id: "cust-1", name: "Amy Wong", email: "amy@example.com", phone: "07700900123", phoneDigits: "07700900123", company_id: COMPANY },
+        { id: "cust-2", name: "Foreign", email: "amy@example.com", phone: "07700900123", phoneDigits: "07700900123", company_id: COMPANY_B },
+      ];
+      const hit = await req(port, "POST", "/api/self-checkout/customer-lookup", { body: { query: "amy@example.com" } });
+      assert.equal(hit.status, 200);
+      assert.deepEqual(hit.body.data, { id: "cust-1", name: "Amy Wong" }); /* company A's record — never B's */
+
+      /* phone match is digit-insensitive (spaces/dashes) */
+      const byPhone = await req(port, "POST", "/api/self-checkout/customer-lookup", { body: { query: "07700 900-123" } });
+      assert.equal(byPhone.status, 200);
+      assert.equal(byPhone.body.data.id, "cust-1");
+
+      /* staff tokens are refused — the lookup exists only for SCO sessions */
+      const staffApp = await buildScoApp(ctx, { user: adminUser });
+      const staffServer = await listen(staffApp);
+      const staffRes = await req(staffServer.port, "POST", "/api/self-checkout/customer-lookup", { body: { query: "amy@example.com" } });
+      assert.equal(staffRes.status, 403);
+      staffServer.server.close();
+    } finally {
+      server.close();
+    }
+  });
+
+  test("device-key pairing: valid key mints a scoped token, wrong key rejected, unpaired store impossible", async () => {
+    const ctx = makeScoCtx();
+    const goodKey = "SCO-TEST-KEY-1234";
+    ctx.state.pairedStores = [
+      { id: STORE, company_id: COMPANY, name: "Paired Store", self_checkout_key_hash: await bcrypt.hash(goodKey, 4) },
+    ];
+    ctx.state.admins = [{ id: USER, role_id: ROLE, username: "kate" }];
+    const writeAudit = (companyId, userId, action) => { ctx.state.audits.push({ companyId, userId, action }); };
+    const app = await buildScoApp(ctx, { user: null, writeAudit });
+    const { server, port } = await listen(app);
+    try {
+      const ok = await req(port, "POST", "/api/self-checkout/device-session", { body: { deviceKey: goodKey } });
+      assert.equal(ok.status, 201);
+      assert.ok(ok.body.data?.modeToken, "mode token minted");
+      const claims = JSON.parse(Buffer.from(ok.body.data.modeToken.split(".")[1], "base64url").toString());
+      assert.equal(claims.companyId, COMPANY);
+      assert.equal(claims.storeId, STORE);
+      assert.equal(claims.mode, "self_checkout");
+      assert.equal(claims.id, USER, "token operator identity comes from the store's company — never the browser");
+
+      const bad = await req(port, "POST", "/api/self-checkout/device-session", { body: { deviceKey: "WRONG-KEY" } });
+      assert.equal(bad.status, 401);
+
+      const none = await req(port, "POST", "/api/self-checkout/device-session", { body: {} });
+      assert.equal(none.status, 400);
+
+      assert.ok(ctx.state.audits.some((a) => a.action === "SELF_CHECKOUT_DEVICE_SESSION_STARTED"), "device start is audited");
+    } finally {
+      server.close();
+    }
   });
 });

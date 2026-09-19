@@ -25,6 +25,8 @@ export default function createSettingsRouter({
           cs.date_format, cs.vat_enabled, cs.default_vat_rate, cs.loyalty_enabled, cs.loyalty_earning_rate,
           cs.allow_negative_inventory_billing,
           cs.scan_go_enabled, cs.online_ordering_enabled, cs.online_payment_methods,
+          cs.product_view, cs.dock_quick_access,
+          cs.customer_display_enabled,
           s.id AS store_id, s.name AS store_name,
           t.id AS till_id, t.name AS till_name, t.terminal_number
         FROM companies c
@@ -74,6 +76,36 @@ export default function createSettingsRouter({
           scanGo: {
             enabled: settings.scan_go_enabled ?? false,
           },
+          till: {
+            id: settings.till_id,
+            name: settings.till_name,
+            terminalNumber: settings.terminal_number,
+            /* Till product browser presentation: 'image' | 'compact'. */
+            productView: settings.product_view === "compact" ? "compact" : "image",
+          },
+          /* Configurable sale invoice/receipt prefixes per sale source.
+             Defaults TO / DEL / SC; till + self-checkout receipts keep the
+             existing PREFIX-YYYYMMDD-NNNN sequencing, delivery receipts
+             become PREFIX-<platform external order id>. */
+          invoicePrefixes: {
+            till: settings.till_invoice_prefix || "TO",
+            delivery: settings.delivery_invoice_prefix || "DEL",
+            selfCheckout: settings.self_checkout_invoice_prefix || "SC",
+          },
+          /* Admin dock quick-access (T10W): pages shown directly on the
+             bottom bar. Ordered; validated on save; launcher always shows
+             every permitted page regardless of this list. */
+          dock: {
+            quickAccess: Array.isArray(settings.dock_quick_access)
+              ? settings.dock_quick_access
+              : ["Dashboard", "Sales", "Products", "Inventory", "Customers", "Reports"],
+          },
+          /* Customer Display (second monitor): master ON/OFF. When OFF the
+             till shows no entry point and the /customer-display page refuses
+             to connect. */
+          customerDisplay: {
+            enabled: settings.customer_display_enabled === true,
+          },
           onlineOrdering: {
             enabled: settings.online_ordering_enabled ?? false,
             paymentMethods: Array.isArray(settings.online_payment_methods) ? settings.online_payment_methods : ["card", "cash", "cod"],
@@ -81,11 +113,6 @@ export default function createSettingsRouter({
           store: {
             id: settings.store_id,
             name: settings.store_name,
-          },
-          till: {
-            id: settings.till_id,
-            name: settings.till_name,
-            terminalNumber: settings.terminal_number,
           },
         },
       });
@@ -176,8 +203,12 @@ export default function createSettingsRouter({
       loyaltyEnabled,
       loyaltyEarningRate,
       scanGoEnabled,
+      productView,
+      dockQuickAccess,
+      customerDisplayEnabled,
       onlineOrderingEnabled,
       onlinePaymentMethods,
+      invoicePrefixes,
       logoUrl = null,
     } = req.body;
 
@@ -195,6 +226,50 @@ export default function createSettingsRouter({
       const earningRate = Number(loyaltyEarningRate);
       if (!Number.isFinite(earningRate) || earningRate < 0 || earningRate > 1) {
         return res.status(400).json({ success: false, message: "Loyalty earning rate must be between 0 and 1 (0% to 100%)" });
+      }
+    }
+
+    // Validate till product view (T10Q: image | compact; default image)
+    if (productView !== undefined && productView !== null && !["image", "compact"].includes(productView)) {
+      return res.status(400).json({ success: false, message: "Till product view must be 'image' or 'compact'" });
+    }
+
+    // Validate dock quick-access list (T10W): array of known admin page
+    // names, no duplicates, max 8 (dock stays touch-sized on 15").
+    if (dockQuickAccess !== undefined && dockQuickAccess !== null) {
+      if (!Array.isArray(dockQuickAccess)) {
+        return res.status(400).json({ success: false, message: "Dock quick access must be an array of page names" });
+      }
+      const knownPages = new Set([
+        "Dashboard", "Sales", "Returns", "Supplier Returns", "Order Prep", "Payments", "Open Till",
+        "Products", "Global Products", "Categories", "Purchases", "Suppliers", "Inventory", "Replenishment",
+        "Customers", "Employees", "Stores", "Reports", "Integrations", "Accounting", "Settings",
+      ]);
+      if (dockQuickAccess.length > 8 || new Set(dockQuickAccess).size !== dockQuickAccess.length ||
+          dockQuickAccess.some((p) => !knownPages.has(p))) {
+        return res.status(400).json({ success: false, message: "Dock quick access must be up to 8 unique known page names" });
+      }
+    }
+
+    // customerDisplayEnabled (Customer Display master switch): boolean only.
+    if (customerDisplayEnabled !== undefined && customerDisplayEnabled !== null
+        && typeof customerDisplayEnabled !== "boolean") {
+      return res.status(400).json({ success: false, message: "customerDisplayEnabled must be a boolean" });
+    }
+
+    // Validate invoice prefixes (configurable receipt prefixes per sale
+    // source): uppercase alphanumeric, 1-10 chars. null/undefined = keep.
+    if (invoicePrefixes !== undefined && invoicePrefixes !== null) {
+      if (typeof invoicePrefixes !== "object" || Array.isArray(invoicePrefixes)) {
+        return res.status(400).json({ success: false, message: "invoicePrefixes must be an object" });
+      }
+      const prefixFields = ["till", "delivery", "selfCheckout"];
+      for (const field of prefixFields) {
+        const value = invoicePrefixes[field];
+        if (value === undefined || value === null) continue;
+        if (typeof value !== "string" || !/^[A-Za-z0-9]{1,10}$/.test(value.trim())) {
+          return res.status(400).json({ success: false, message: `Invoice prefix for ${field} must be 1-10 letters/numbers` });
+        }
       }
     }
 
@@ -223,9 +298,9 @@ export default function createSettingsRouter({
       );
       await client.query(
         `
-        INSERT INTO company_settings (company_id, date_format, vat_enabled, default_vat_rate, loyalty_enabled, loyalty_earning_rate, scan_go_enabled, online_ordering_enabled, online_payment_methods, updated_by, updated_at)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,NOW())
-        ON CONFLICT (company_id) DO UPDATE SET date_format=$2, vat_enabled=$3, default_vat_rate=$4, loyalty_enabled=$5, loyalty_earning_rate=$6, scan_go_enabled=$7, online_ordering_enabled=$8, online_payment_methods=$9, updated_by=$10, updated_at=NOW()
+        INSERT INTO company_settings (company_id, date_format, vat_enabled, default_vat_rate, loyalty_enabled, loyalty_earning_rate, scan_go_enabled, product_view, dock_quick_access, customer_display_enabled, online_ordering_enabled, online_payment_methods, till_invoice_prefix, delivery_invoice_prefix, self_checkout_invoice_prefix, updated_by, updated_at)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,COALESCE($8, 'image'),COALESCE($9::jsonb, dock_quick_access, '["Dashboard", "Sales", "Products", "Inventory", "Customers", "Reports"]'::jsonb),$10,$11,COALESCE($12::jsonb, '["card", "cash", "cod"]'::jsonb),COALESCE($13,'TO'),COALESCE($14,'DEL'),COALESCE($15,'SC'),$16,NOW())
+        ON CONFLICT (company_id) DO UPDATE SET date_format=$2, vat_enabled=$3, default_vat_rate=$4, loyalty_enabled=$5, loyalty_earning_rate=$6, scan_go_enabled=$7, product_view=COALESCE($8, company_settings.product_view), dock_quick_access=COALESCE($9::jsonb, company_settings.dock_quick_access), customer_display_enabled=COALESCE($10, company_settings.customer_display_enabled), online_ordering_enabled=$11, online_payment_methods=COALESCE($12::jsonb, company_settings.online_payment_methods), till_invoice_prefix=COALESCE($13, company_settings.till_invoice_prefix), delivery_invoice_prefix=COALESCE($14, company_settings.delivery_invoice_prefix), self_checkout_invoice_prefix=COALESCE($15, company_settings.self_checkout_invoice_prefix), updated_by=$16, updated_at=NOW()
         `,
         [
           req.user.companyId,
@@ -235,14 +310,27 @@ export default function createSettingsRouter({
           loyaltyEnabled !== false,
           loyaltyEarningRate !== undefined ? loyaltyEarningRate : null,
           scanGoEnabled === true,
+          productView === "compact" ? "compact" : productView === "image" ? "image" : null,
+          Array.isArray(dockQuickAccess) ? JSON.stringify(dockQuickAccess) : null,
+          typeof customerDisplayEnabled === "boolean" ? customerDisplayEnabled : null,
           onlineOrderingEnabled === true,
           onlinePaymentMethods !== undefined ? JSON.stringify(onlinePaymentMethods) : null,
+          /* Invoice prefixes: per-source objects only; null = keep existing. */
+          invoicePrefixes && typeof invoicePrefixes === "object" && !Array.isArray(invoicePrefixes)
+            ? (typeof invoicePrefixes.till === "string" ? invoicePrefixes.till.trim().toUpperCase() : null)
+            : null,
+          invoicePrefixes && typeof invoicePrefixes === "object" && !Array.isArray(invoicePrefixes)
+            ? (typeof invoicePrefixes.delivery === "string" ? invoicePrefixes.delivery.trim().toUpperCase() : null)
+            : null,
+          invoicePrefixes && typeof invoicePrefixes === "object" && !Array.isArray(invoicePrefixes)
+            ? (typeof invoicePrefixes.selfCheckout === "string" ? invoicePrefixes.selfCheckout.trim().toUpperCase() : null)
+            : null,
           req.user.id
         ]
       );
       await client.query(
         `INSERT INTO audit_logs (company_id, user_id, action, entity_type, entity_id, details) VALUES ($1,$2,'settings.updated','company',$1,$3)`,
-        [req.user.companyId, req.user.id, JSON.stringify({ currency, timezone, dateFormat, vatEnabled, defaultVatRate: vatRate, loyaltyEnabled, loyaltyEarningRate, scanGoEnabled, onlineOrderingEnabled, onlinePaymentMethods })]
+        [req.user.companyId, req.user.id, JSON.stringify({ currency, timezone, dateFormat, vatEnabled, defaultVatRate: vatRate, loyaltyEnabled, loyaltyEarningRate, scanGoEnabled, productView, dockQuickAccess, customerDisplayEnabled, onlineOrderingEnabled, onlinePaymentMethods, invoicePrefixes })]
       );
       await client.query("COMMIT");
       res.json({ success: true, message: "Settings updated" });

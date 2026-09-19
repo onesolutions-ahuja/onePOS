@@ -1,6 +1,7 @@
 import React from "react";
 import { Routes, Route, Navigate, useParams } from "react-router-dom";
 import MarketingSite from "./marketing/MarketingSite.jsx";
+import OfflineQueueDebug from "./pages/offlineQueue/OfflineQueueDebug.jsx";
 
 import HomePage from "./marketing/pages/HomePage";
 import POSPage from "./marketing/pages/POSPage";
@@ -112,7 +113,8 @@ export function MarketingRoutes() {
         <Route path="resources" element={<ResourcesPage />} />
         <Route path="faq" element={<FAQPage />} />
 
-        {/* Legacy aliases */}
+        {/* Diagnostics */}
+        <Route path="offline-queue" element={<LoginGate element={<OfflineQueueDebug />} />} />
         <Route path="product" element={<LegacyRedirect to="/pos" />} />
         <Route path="product/:feature" element={<LegacyFeatureRedirect />} />
         <Route path="online-delivery" element={<LegacyRedirect to="/online-orders" />} />

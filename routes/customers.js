@@ -1,4 +1,13 @@
 import express from "express";
+import {
+  toCents,
+  fromCents,
+  checkCreditLimit,
+  checkPayment,
+  buildPaymentTransaction,
+  buildAdjustmentTransaction,
+  generateStatement,
+} from "../services/customerCredit.js";
 
 export default function createCustomersRouter({
   authenticate,
@@ -43,6 +52,9 @@ export default function createCustomersRouter({
         SELECT c.id, c.company_id, c.name, c.phone, c.email, c.address, c.postcode,
           c.loyalty_number, c.notes, c.active, c.created_at, c.updated_at,
           COALESCE(clb.balance, 0) AS loyalty_balance,
+          c.credit_enabled,
+          c.credit_limit,
+          COALESCE(ccl.outstanding, 0) AS credit_balance,
           MAX(cs.last_purchase_at) AS last_purchase_at,
           STRING_AGG(DISTINCT st.name, ', ' ORDER BY st.name) AS store_names
         FROM customers c
@@ -53,16 +65,31 @@ export default function createCustomersRouter({
         }
         LEFT JOIN stores st ON st.id = cs.store_id
         LEFT JOIN customer_loyalty_balances clb ON clb.company_id = c.company_id AND clb.customer_id = c.id
+        LEFT JOIN LATERAL (
+          SELECT COALESCE(SUM(l.amount * CASE WHEN l.transaction_type IN ('payment','debit_note') THEN -1 ELSE 1 END), 0) AS outstanding
+          FROM customer_credit_ledger l
+          WHERE l.company_id = c.company_id AND l.customer_id = c.id
+        ) ccl ON TRUE
         WHERE ${filters.join(" AND ")}
-        GROUP BY c.id, clb.balance
+        GROUP BY c.id, clb.balance, c.credit_enabled, c.credit_limit, ccl.outstanding
         ORDER BY c.name
         `,
         params
       );
 
+      const enriched = result.rows.map((r) => ({
+        ...r,
+        credit: {
+          enabled: !!r.credit_enabled,
+          limit: Number(r.credit_limit) || 0,
+          balance: Number(r.credit_balance) || 0,
+          available: Math.max(0, (Number(r.credit_limit) || 0) - (Number(r.credit_balance) || 0)),
+        },
+      }));
+
       res.json({
         success: true,
-        data: result.rows,
+        data: enriched,
         scope: companyScope ? "company" : "store",
       });
     } catch (error) {
@@ -117,6 +144,8 @@ export default function createCustomersRouter({
         SELECT c.id, c.company_id, c.name, c.phone, c.email, c.address, c.postcode,
           c.loyalty_number, c.notes, c.active, c.created_at, c.updated_at,
           COALESCE(clb.balance, 0) AS loyalty_balance,
+          c.credit_enabled, c.credit_limit,
+          COALESCE(ccl.outstanding, 0) AS credit_balance,
           COALESCE(json_agg(json_build_object(
             'storeId', cs.store_id,
             'storeName', st.name,
@@ -127,8 +156,13 @@ export default function createCustomersRouter({
         LEFT JOIN customer_stores cs ON cs.customer_id = c.id
         LEFT JOIN stores st ON st.id = cs.store_id
         LEFT JOIN customer_loyalty_balances clb ON clb.company_id = c.company_id AND clb.customer_id = c.id
+        LEFT JOIN LATERAL (
+          SELECT COALESCE(SUM(l.amount * CASE WHEN l.transaction_type IN ('payment','debit_note') THEN -1 ELSE 1 END), 0) AS outstanding
+          FROM customer_credit_ledger l
+          WHERE l.company_id = c.company_id AND l.customer_id = c.id
+        ) ccl ON TRUE
         WHERE c.id = $1 AND c.company_id = $2
-        GROUP BY c.id, clb.balance
+        GROUP BY c.id, clb.balance, c.credit_enabled, c.credit_limit, ccl.outstanding
         `,
         [req.params.id, req.user.companyId]
       );
@@ -160,9 +194,16 @@ export default function createCustomersRouter({
         [req.params.id, req.user.companyId]
       );
 
+      const credit = {
+        enabled: !!result.rows[0].credit_enabled,
+        limit: Number(result.rows[0].credit_limit) || 0,
+        balance: Number(result.rows[0].credit_balance) || 0,
+      };
+      credit.available = Math.max(0, credit.limit - credit.balance);
+
       res.json({
         success: true,
-        data: { ...result.rows[0], sales: sales.rows },
+        data: { ...result.rows[0], sales: sales.rows, credit },
       });
     } catch (error) {
       console.error("Get customer error:", error);
@@ -462,6 +503,302 @@ export default function createCustomersRouter({
       res
         .status(500)
         .json({ success: false, message: "Unable to update customer status" });
+    }
+  });
+
+  /*
+   * ============================== T10Y — CUSTOMER CREDIT ==============================
+   * All handlers enforce company isolation; store scoping mirrors the existing
+   * canViewCompanyCustomers / customer_stores model used above.
+   */
+
+  /** Sum of the customer's signed ledger amounts, in minor units (pence).
+   *  The ledger stores NUMERIC(12,2) MAJOR units; ×100 here so all route
+   *  math (checkPayment, available credit) runs in integer pence. */
+  async function outstandingCents(companyId, customerId) {
+    const r = await db(
+      `SELECT COALESCE(SUM(amount * CASE WHEN transaction_type IN ('payment','debit_note') THEN -1 ELSE 1 END), 0) AS outstanding
+       FROM customer_credit_ledger WHERE company_id = $1 AND customer_id = $2`,
+      [companyId, customerId]
+    );
+    return Math.round(Number(r.rows[0]?.outstanding || 0) * 100);
+  }
+
+  /** Shared guard: customer must exist in the caller's company (and, for
+   *  non-company admins, be linked to the caller's store). */
+  async function loadCustomerForCredit(req, res, { needAdmin = false } = {}) {
+    const companyAdmin = await canViewCompanyCustomers(req.user);
+    const result = await db(
+      `SELECT id, name, company_id, credit_enabled, credit_limit FROM customers WHERE id = $1 AND company_id = $2`,
+      [req.params.id, req.user.companyId]
+    );
+    const customer = result.rows[0];
+    if (!customer) {
+      res.status(404).json({ success: false, message: "Customer not found" });
+      return null;
+    }
+    if (!companyAdmin) {
+      const visible = await db(
+        `SELECT 1 FROM customer_stores WHERE customer_id = $1 AND store_id = $2 AND active = true`,
+        [req.params.id, req.user.storeId]
+      );
+      if (!visible.rows.length) {
+        res.status(404).json({ success: false, message: "Customer not found" });
+        return null;
+      }
+    }
+    if (needAdmin && !companyAdmin) {
+      res.status(403).json({ success: false, message: "Company administration permission required" });
+      return null;
+    }
+    return customer;
+  }
+
+  /*
+   * GET /api/customers/:id/credit — credit summary + recent ledger entries.
+   */
+  router.get("/customers/:id/credit", authenticate, authorize("customer.view"), async (req, res) => {
+    try {
+      const customer = await loadCustomerForCredit(req, res);
+      if (!customer) return;
+
+      const ledger = await db(
+        `
+        SELECT l.id, l.transaction_type, l.amount, l.balance_after, l.reference_type,
+          l.reference_id, l.description, l.created_by, u.full_name AS created_by_name, l.created_at
+        FROM customer_credit_ledger l
+        LEFT JOIN users u ON u.id = l.created_by
+        WHERE l.company_id = $1 AND l.customer_id = $2
+        ORDER BY l.created_at DESC, l.id DESC
+        LIMIT 25
+        `,
+        [req.user.companyId, req.params.id]
+      );
+
+      const balanceC = await outstandingCents(req.user.companyId, req.params.id);
+      const credit = {
+        enabled: !!customer.credit_enabled,
+        limit: Number(customer.credit_limit) || 0,
+        balance: fromCents(balanceC),
+        available: Math.max(0, (Number(customer.credit_limit) || 0) - fromCents(balanceC)),
+      };
+
+      res.json({ success: true, data: { customer: { id: customer.id, name: customer.name }, credit, ledger: ledger.rows } });
+    } catch (error) {
+      console.error("Customer credit summary error:", error);
+      res.status(500).json({ success: false, message: "Unable to load customer credit" });
+    }
+  });
+
+  /*
+   * PUT /api/customers/:id/credit — enable/disable credit + set limit (company admin only).
+   */
+  router.put("/customers/:id/credit", authenticate, authorize("customer.edit"), async (req, res) => {
+    try {
+      const customer = await loadCustomerForCredit(req, res, { needAdmin: true });
+      if (!customer) return;
+
+      const enabled = req.body.enabled === true;
+      let limitMajor = null;
+      if (req.body.limit !== undefined && req.body.limit !== null && req.body.limit !== "") {
+        const n = Number(req.body.limit);
+        if (!Number.isFinite(n) || n < 0) {
+          return res.status(400).json({ success: false, message: "Credit limit must be a non-negative amount" });
+        }
+        limitMajor = Math.round(n * 100) / 100;
+      }
+      if (limitMajor === null) {
+        limitMajor = Number(customer.credit_limit) || 0;
+      }
+
+      const result = await db(
+        `UPDATE customers SET credit_enabled = $1, credit_limit = $2, updated_at = NOW() WHERE id = $3 AND company_id = $4 RETURNING credit_enabled, credit_limit`,
+        [enabled, limitMajor, req.params.id, req.user.companyId]
+      );
+      if (!result.rows.length)
+        return res.status(404).json({ success: false, message: "Customer not found" });
+
+      res.json({
+        success: true,
+        message: enabled ? "Customer credit enabled" : "Customer credit disabled",
+        data: {
+          enabled: !!result.rows[0].credit_enabled,
+          limit: Number(result.rows[0].credit_limit) || 0,
+        },
+      });
+    } catch (error) {
+      console.error("Customer credit config error:", error);
+      res.status(500).json({ success: false, message: "Unable to update customer credit" });
+    }
+  });
+
+  /*
+   * POST /api/customers/:id/credit/payments — record a payment against credit.
+   */
+  router.post("/customers/:id/credit/payments", authenticate, authorize("customer.edit"), async (req, res) => {
+    try {
+      const customer = await loadCustomerForCredit(req, res);
+      if (!customer) return;
+      if (!customer.credit_enabled)
+        return res.status(409).json({ success: false, message: "Customer credit is not enabled" });
+
+      const cents = toCents(req.body.amount);
+      if (!Number.isFinite(Number(req.body.amount)) || cents <= 0)
+        return res.status(400).json({ success: false, message: "Payment amount must be greater than zero" });
+
+      const method = String(req.body.method || "cash").trim().toLowerCase();
+      const allowed = ["cash", "card", "bank_transfer", "other"];
+      if (!allowed.includes(method))
+        return res.status(400).json({ success: false, message: "Invalid payment method" });
+
+      const outstanding = await outstandingCents(req.user.companyId, req.params.id);
+      /* Service contract: checkPayment(currentBalanceCents, paymentAmountCents). */
+      const check = checkPayment(outstanding, cents);
+      if (!check.allowed)
+        return res.status(409).json({ success: false, message: "Payment exceeds the outstanding balance" });
+
+      const tx = buildPaymentTransaction({
+        amount: req.body.amount,
+        paymentMethod: method,
+        userId: req.user.id || req.user.userId || null,
+      });
+
+      const inserted = await db(
+        `
+        INSERT INTO customer_credit_ledger
+          (company_id, store_id, customer_id, transaction_type, amount, reference_type, description, payment_method, created_by)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        RETURNING id, created_at
+        `,
+        [
+          req.user.companyId,
+          req.user.storeId || null,
+          req.params.id,
+          tx.transaction_type,
+          tx.amount,
+          tx.reference_type,
+          tx.description,
+          tx.payment_method,
+          tx.created_by,
+        ]
+      );
+
+      res.status(201).json({
+        success: true,
+        message: "Payment recorded",
+        data: {
+          entryId: inserted.rows[0].id,
+          amount: fromCents(cents),
+          method,
+          balance: fromCents(outstanding - cents),
+        },
+      });
+    } catch (error) {
+      console.error("Customer credit payment error:", error);
+      res.status(500).json({ success: false, message: "Unable to record payment" });
+    }
+  });
+
+  /*
+   * POST /api/customers/:id/credit/adjustments — manual debit/credit note.
+   */
+  router.post("/customers/:id/credit/adjustments", authenticate, authorize("customer.edit"), async (req, res) => {
+    try {
+      const customer = await loadCustomerForCredit(req, res, { needAdmin: true });
+      if (!customer) return;
+      if (!customer.credit_enabled)
+        return res.status(409).json({ success: false, message: "Customer credit is not enabled" });
+
+      const cents = toCents(req.body.amount);
+      if (!Number.isFinite(Number(req.body.amount)) || cents <= 0)
+        return res.status(400).json({ success: false, message: "Adjustment amount must be greater than zero" });
+
+      const type = req.body.type === "credit" ? "credit_note" : "debit_note";
+      const notes = typeof req.body.notes === "string" ? req.body.notes.trim().slice(0, 500) : "";
+      if (!notes)
+        return res.status(400).json({ success: false, message: "Adjustment reason is required" });
+
+      const outstanding = await outstandingCents(req.user.companyId, req.params.id);
+      /*
+       * Sign convention (matches txSign + the outstanding SQL): credit_note
+       * INCREASES what the customer owes (must respect the credit limit);
+       * debit_note DECREASES it (cannot exceed the outstanding balance).
+       */
+      if (type === "credit_note") {
+        const limitCents = Math.round((Number(customer.credit_limit) || 0) * 100);
+        const limitCheck = checkCreditLimit(outstanding, cents, limitCents);
+        if (!limitCheck.allowed)
+          return res.status(409).json({ success: false, message: "Credit note would exceed the customer's credit limit" });
+      } else if (cents > outstanding) {
+        return res.status(409).json({ success: false, message: "Debit note exceeds the outstanding balance" });
+      }
+
+      const tx = buildAdjustmentTransaction({
+        adjustmentType: type,
+        amount: req.body.amount,
+        reason: notes,
+        userId: req.user.id || req.user.userId || null,
+      });
+
+      await db(
+        `
+        INSERT INTO customer_credit_ledger
+          (company_id, store_id, customer_id, transaction_type, amount, reference_type, description, created_by)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        `,
+        [
+          req.user.companyId,
+          req.user.storeId || null,
+          req.params.id,
+          tx.transaction_type,
+          tx.amount,
+          tx.reference_type,
+          tx.description,
+          tx.created_by,
+        ]
+      );
+
+      const newOutstanding = await outstandingCents(req.user.companyId, req.params.id);
+      res.status(201).json({
+        success: true,
+        message: type === "credit_note" ? "Credit note applied" : "Debit note applied",
+        data: { type, amount: fromCents(cents), balance: fromCents(newOutstanding) },
+      });
+    } catch (error) {
+      console.error("Customer credit adjustment error:", error);
+      res.status(500).json({ success: false, message: "Unable to record adjustment" });
+    }
+  });
+
+  /*
+   * GET /api/customers/:id/credit/statement?from=&to= — date-range statement.
+   */
+  router.get("/customers/:id/credit/statement", authenticate, authorize("customer.view"), async (req, res) => {
+    try {
+      const customer = await loadCustomerForCredit(req, res);
+      if (!customer) return;
+
+      const result = await db(
+        `
+        SELECT transaction_type, amount, reference_type, reference_id, description, created_at
+        FROM customer_credit_ledger
+        WHERE company_id = $1 AND customer_id = $2
+        ORDER BY created_at ASC, id ASC
+        `,
+        [req.user.companyId, req.params.id]
+      );
+      const statement = generateStatement({
+        transactions: result.rows,
+        fromDate: req.query.from ? String(req.query.from) : null,
+        toDate: req.query.to ? String(req.query.to) : null,
+        customerId: req.params.id,
+        companyId: req.user.companyId,
+      });
+
+      res.json({ success: true, data: { customer: { id: customer.id, name: customer.name }, statement } });
+    } catch (error) {
+      console.error("Customer statement error:", error);
+      res.status(500).json({ success: false, message: "Unable to build statement" });
     }
   });
 

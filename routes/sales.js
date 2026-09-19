@@ -1,4 +1,5 @@
 import express from "express";
+import { checkCreditLimit, buildCreditSaleTransaction } from "../services/customerCredit.js";
 import { dispatchIntegrationEvent } from "../services/integrationDispatcher.js";
 import { dispatchWhatsAppInvoiceDelivery } from "../services/whatsappDelivery.js";
 import { dispatchSmsInvoiceDelivery, dispatchEmailInvoiceDelivery } from "../services/invoiceDelivery.js";
@@ -214,6 +215,7 @@ export default function createSalesRouter({
           total = 0,
           paymentMethod = "cash",
           ageVerified, // T10C: operator confirmation flag, verified against the DB below
+          vatEnabled, // Till Misc Item: the company's global VAT master switch, as applied by the till
         } = req.body;
 
         /*
@@ -230,7 +232,10 @@ export default function createSalesRouter({
           });
         }
 
-        if (!Array.isArray(items) || !items.length) {
+        /* Till Misc Item lines count as sale content (declared properly in
+           the MISC block below; guarded with a body check here). */
+        if ((!Array.isArray(items) || !items.length) &&
+            !(Array.isArray(req.body.miscLines) && req.body.miscLines.length)) {
           await client.query("ROLLBACK");
 
           return res.status(400).json({
@@ -247,6 +252,88 @@ export default function createSalesRouter({
             req.user.companyId,
             new Date()
           );
+        }
+
+        /*
+         * Till Misc Item (manual-price sale line). Lines the cashier typed by
+         * hand — description + price + VAT rate — arrive in `miscLines`. Each
+         * is validated HERE (server-side, never trusting the client math),
+         * then merged into the authoritative line loop below as
+         * item_type='MISC' rows referencing the company's shared invisible
+         * MISC placeholder product. No stock movement is made for them (the
+         * placeholder has track_stock=false and there is no catalogue SKU to
+         * decrement), but they are real sale lines: receipt, sales totals,
+         * VAT and reports include them like any other line.
+         */
+        const miscLines = Array.isArray(req.body.miscLines) ? req.body.miscLines : [];
+        const miscPlaceholderRows = [];
+        if (miscLines.length) {
+          const maxMiscLines = 50;
+          if (miscLines.length > maxMiscLines) {
+            await client.query("ROLLBACK");
+            return res.status(400).json({
+              success: false,
+              message: "Too many misc item lines",
+            });
+          }
+
+          const placeholder = await client.query(
+            `
+            INSERT INTO products (
+              company_id,
+              name,
+              sku,
+              price,
+              cost_price,
+              vat_rate,
+              vat_applicable,
+              track_stock,
+              stock_quantity,
+              active
+            )
+            VALUES ($1, 'Misc Item', 'MISC', 0, 0, 20, false, false, 0, false)
+            ON CONFLICT (company_id) WHERE sku = 'MISC' AND active = false
+            DO UPDATE SET updated_at = NOW()
+            RETURNING id
+            `,
+            [req.user.companyId]
+          );
+          miscPlaceholderRows.push(placeholder.rows[0].id);
+        }
+        for (const [miscIndex, line] of miscLines.entries()) {
+          const desc = typeof line?.description === "string" ? line.description.trim().slice(0, 255) : "";
+          const price = Math.round((Number(line?.price) || 0) * 100) / 100;
+          const quantity = Number(line?.quantity);
+          const vatRate = Math.round((Number(line?.vatRate) || 0) * 100) / 100;
+
+          if (!desc) {
+            await client.query("ROLLBACK");
+            return res.status(400).json({
+              success: false,
+              message: "Misc item description is required",
+            });
+          }
+          if (!Number.isFinite(price) || price <= 0) {
+            await client.query("ROLLBACK");
+            return res.status(400).json({
+              success: false,
+              message: "Misc item price must be greater than zero",
+            });
+          }
+          if (!Number.isFinite(quantity) || quantity <= 0) {
+            await client.query("ROLLBACK");
+            return res.status(400).json({
+              success: false,
+              message: "Misc item quantity must be greater than zero",
+            });
+          }
+          if (!Number.isFinite(vatRate) || vatRate < 0 || vatRate > 1) {
+            await client.query("ROLLBACK");
+            return res.status(400).json({
+              success: false,
+              message: "Misc item VAT rate must be a fraction between 0 and 1 (e.g. 0.2 for 20%)",
+            });
+          }
         }
 
         /*
@@ -309,10 +396,18 @@ export default function createSalesRouter({
             p.track_stock &&
             Number(p.stock_quantity) < Number(item.quantity)
           ) {
-            if (!negativeBillingAllowed) {
-              throw new Error(`Insufficient stock for ${p.name}`);
-            }
-            /* Authoritative numbers only — the client's claim is never trusted. */
+            /*
+             * A paid sale must never be discarded because stock ran out —
+             * the money has already changed hands and the sale is the
+             * authoritative record. The line is recorded here (with
+             * authoritative stock numbers — the client's claim is never
+             * trusted) and the sale proceeds into the normal
+             * checkout/inventory path: the stock is deducted by the
+             * existing SALE inventory movement and the resulting negative
+             * balance is audited fire-and-forget after commit. All other
+             * validation (quantity, product, price, VAT, permissions,
+             * payment) is unchanged.
+             */
             insufficientStockLines.push({
               productId: p.id,
               productName: p.name,
@@ -345,8 +440,35 @@ export default function createSalesRouter({
          * removed. Online-order receipts (terminal_id NULL, platform
          * references) never match the LIKE prefix, so they are neither
          * renumbered nor blocked.
+         *
+         * Configurable prefixes: the company can set per-source invoice
+         * prefixes in Settings (till_invoice_prefix / delivery prefix /
+         * self_checkout_invoice_prefix, defaults TO / DEL / SC). The prefix
+         * is chosen by sale SOURCE: self-checkout mode tokens get the SC
+         * prefix, staff till sales get the TO prefix. The sequence stays
+         * per terminal per day — the prefix is presentation only, so
+         * changing it never resets or collides with existing numbers, and
+         * when no prefix is configured the original terminal-number prefix
+         * applies unchanged.
          */
-        const receiptPrefix = (session.rows[0].terminal_number || "T").trim();
+        const isSelfCheckoutSale = typeof selfCheckoutMode === "function" && selfCheckoutMode(req);
+        let receiptPrefix = (session.rows[0].terminal_number || "T").trim();
+        try {
+          const prefixSettings = await client.query(
+            "SELECT till_invoice_prefix, self_checkout_invoice_prefix FROM company_settings WHERE company_id = $1",
+            [req.user.companyId]
+          );
+          if (prefixSettings.rows.length) {
+            const configured = isSelfCheckoutSale
+              ? prefixSettings.rows[0].self_checkout_invoice_prefix
+              : prefixSettings.rows[0].till_invoice_prefix;
+            if (configured && String(configured).trim()) {
+              receiptPrefix = String(configured).trim();
+            }
+          }
+        } catch {
+          /* Settings row missing/unreadable → original terminal-number prefix. */
+        }
         const receiptDateKey = await client.query(
           "SELECT to_char(timezone($1, NOW()), 'YYYYMMDD') AS date_key",
           [session.rows[0].timezone || "UTC"]
@@ -427,7 +549,9 @@ export default function createSalesRouter({
         const saleId = sale.rows[0].id;
 
         /*
-         * Sale items + stock reduction.
+         * Sale items + stock reduction. Misc lines are appended to the same
+         * insert as ordinary lines, but flagged item_type='MISC' and never
+         * stock-decremented (no catalogue SKU exists to decrement).
          */
         for (const item of items) {
           const product = await client.query(
@@ -473,9 +597,10 @@ export default function createSalesRouter({
             unit_price,
             discount,
             tax,
-            total
+            total,
+            item_type
           )
-          VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'PRODUCT')
           `,
             [
               saleId,
@@ -486,6 +611,48 @@ export default function createSalesRouter({
               Number(item.discount) || 0,
               Number(item.tax) || 0,
               Number(item.total) || 0,
+            ]
+          );
+        }
+
+        /*
+         * Misc lines: same sale_items table, real money values (the client's
+         * maths is never trusted — price/tax are recomputed from the
+         * validated description/quantity/vatRate), flagged item_type='MISC',
+         * referencing the shared placeholder. No stock movement.
+         */
+        for (const line of miscLines) {
+          const desc = typeof line.description === "string" ? line.description.trim().slice(0, 255) : "";
+          const price = Math.round((Number(line.price) || 0) * 100) / 100;
+          const quantity = Number(line.quantity);
+          const vatRate = Math.round((Number(line.vatRate) || 0) * 100) / 100;
+          const gross = Math.round(price * quantity * 100) / 100;
+          const lineTax = vatEnabled === false ? 0 : Math.round(gross * vatRate * 100) / 100;
+          const lineTotal = Math.round((gross + lineTax) * 100) / 100;
+
+          await client.query(
+            `
+          INSERT INTO sale_items (
+            sale_id,
+            product_id,
+            product_name,
+            quantity,
+            unit_price,
+            discount,
+            tax,
+            total,
+            item_type
+          )
+          VALUES ($1,$2,$3,$4,$5,0,$6,$7,'MISC')
+          `,
+            [
+              saleId,
+              miscPlaceholderRows[0],
+              desc,
+              quantity,
+              price,
+              lineTax,
+              lineTotal,
             ]
           );
         }
@@ -505,6 +672,94 @@ export default function createSalesRouter({
           `,
           [saleId, paymentMethod, Number(total) || 0]
         );
+
+        /*
+         * T10Y — Customer credit sale. Runs INSIDE the sale transaction so
+         * the ledger entry commits or rolls back with the sale itself.
+         * Cash/card/other flows are untouched. `amount` stores the unsigned
+         * magnitude (major units); the direction comes from transaction_type.
+         */
+        if (paymentMethod === "customer_credit") {
+          if (!customerId) {
+            await client.query("ROLLBACK");
+            return res.status(400).json({
+              success: false,
+              message: "A customer is required for credit sales",
+            });
+          }
+
+          const creditCustomer = await client.query(
+            `SELECT credit_enabled, credit_limit FROM customers WHERE id = $1 AND company_id = $2 FOR UPDATE`,
+            [customerId, req.user.companyId]
+          );
+          if (!creditCustomer.rows.length) {
+            await client.query("ROLLBACK");
+            return res.status(404).json({ success: false, message: "Customer was not found" });
+          }
+          const cc = creditCustomer.rows[0];
+          if (cc.credit_enabled !== true) {
+            await client.query("ROLLBACK");
+            return res.status(409).json({
+              success: false,
+              message: "Customer credit is not enabled for this customer",
+            });
+          }
+
+          const saleTotalCents = Math.round((Number(total) || 0) * 100);
+          const signedSum = await client.query(
+            `
+            SELECT COALESCE(SUM(amount * CASE WHEN transaction_type IN ('payment','debit_note') THEN -1 ELSE 1 END), 0) AS outstanding
+            FROM customer_credit_ledger
+            WHERE company_id = $1 AND customer_id = $2
+            `,
+            [req.user.companyId, customerId]
+          );
+          const currentOutstandingCents = Math.round(Number(signedSum.rows[0].outstanding || 0) * 100);
+          const limitCents = Math.round((Number(cc.credit_limit) || 0) * 100);
+          const limitCheck = checkCreditLimit(currentOutstandingCents, saleTotalCents, limitCents);
+          if (!limitCheck.allowed) {
+            await client.query("ROLLBACK");
+            return res.status(409).json({
+              success: false,
+              message: `Credit limit exceeded. Available credit: £${((Number(cc.credit_limit) || 0) - currentOutstandingCents / 100).toFixed(2)}`,
+            });
+          }
+
+          const ledgerTx = buildCreditSaleTransaction({
+            saleId,
+            customerId,
+            companyId: req.user.companyId,
+            storeId: req.user.storeId,
+            amount: Number(total) || 0,
+            totalTax: Number(tax) || 0,
+            netAmount: Number(subtotal) || 0,
+            grossAmount: Number(total) || 0,
+            userId: req.user.id,
+            receiptNumber: sale.rows[0].receipt_number,
+          });
+          await client.query(
+            `
+            INSERT INTO customer_credit_ledger
+              (company_id, store_id, customer_id, transaction_type, amount, reference_type, reference_id, description, net_amount, vat_amount, gross_amount, idempotency_key, created_by)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+            `,
+            [
+              ledgerTx.company_id,
+              ledgerTx.store_id,
+              ledgerTx.customer_id,
+              ledgerTx.transaction_type,
+              ledgerTx.amount,
+              ledgerTx.reference_type,
+              ledgerTx.reference_id,
+              ledgerTx.description,
+              ledgerTx.net_amount,
+              ledgerTx.vat_amount,
+              ledgerTx.gross_amount,
+              clientRequestId ? `credit_sale:${clientRequestId.toLowerCase()}` : null,
+              ledgerTx.created_by,
+            ]
+          );
+        }
 
         await client.query("COMMIT");
 

@@ -86,9 +86,22 @@ export async function createSaleForCompletedOrder(client, { order, items, user }
 
   /*
    * Receipt number carries the platform's own order reference so staff can
-   * match a Sales row to the Uber Eats / Deliveroo order.
+   * match a Sales row to the Uber Eats / Deliveroo order. The prefix is the
+   * company's configurable delivery invoice prefix (Settings, default DEL);
+   * when unavailable, the legacy platform-name prefix applies unchanged.
    */
-  const receiptPrefix = paymentMethod.toUpperCase().replace(/\s+/g, "-");
+  let receiptPrefix = paymentMethod.toUpperCase().replace(/\s+/g, "-");
+  try {
+    const prefixSettings = await client.query(
+      "SELECT delivery_invoice_prefix FROM company_settings WHERE company_id = $1",
+      [order.company_id]
+    );
+    if (prefixSettings.rows.length && prefixSettings.rows[0].delivery_invoice_prefix) {
+      receiptPrefix = String(prefixSettings.rows[0].delivery_invoice_prefix).trim();
+    }
+  } catch {
+    /* Settings row missing/unreadable → legacy platform-name prefix. */
+  }
   const receiptNumber = `${receiptPrefix}-${order.external_order_id}`.slice(0, 100);
 
   const saleResult = await client.query(

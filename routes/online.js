@@ -919,6 +919,107 @@ export default function createOnlineRouter({
   }
 
   /*
+   * POST /api/online/uber/sync-menu            (T10-UBER-MENU)
+   *
+   * OnePOS -> Uber Eats menu synchronisation. The EXISTING Product Master is
+   * the source of truth; this endpoint only READS products (company-scoped,
+   * only products offered on Uber) and hands them to the Uber service to PUT
+   * the menu on the Uber store configured for this company. It NEVER writes
+   * to products, inventory, VAT or any POS data, and it never stores a second
+   * menu master - the Uber item id is the existing products.uber_item_id
+   * (or the product UUID when not yet set), so repeated syncs are idempotent
+   * updates, never duplicates.
+   *
+   * On success the returned per-item mapping (product -> uber item id) is
+   * echoed for transparency; saving/refreshing products.uber_item_id happens
+   * only for products whose mapped id differs from their UUID (i.e. the id
+   * came from a previous explicit mapping) - those are left untouched, so a
+   * sync cannot overwrite an operator's explicit mapping.
+   */
+  router.post("/online/uber/sync-menu", authenticate, authorize("online_orders.configure"), async (req, res) => {
+    try {
+      const runtime = await loadPlatformConfig(db, req.user.companyId, "uber");
+
+      if (runtime.enabled !== true) {
+        return res.status(409).json({
+          success: false,
+          code: "PLATFORM_DISABLED",
+          message: "Uber Eats integration is disabled in Settings - Online Platforms",
+        });
+      }
+
+      /* Read-only, company-scoped product fetch: the Product Master stays
+       * untouched - the direction of authority is strictly onePOS -> Uber. */
+      const productResult = await db(
+        `
+        SELECT p.id, p.name, p.description, p.price, p.vat_rate, p.active,
+               p.uber_item_id, p.available_on_uber, c.name AS category_name
+        FROM products p
+        LEFT JOIN categories c ON c.id = p.category_id
+        WHERE p.company_id = $1
+          AND (p.available_on_uber = true OR p.uber_item_id IS NOT NULL)
+        ORDER BY c.display_order, c.name, p.name
+        `,
+        [req.user.companyId]
+      );
+
+      const products = productResult.rows;
+
+      if (!products.length) {
+        return res.json({
+          success: false,
+          code: "NOTHING_TO_SYNC",
+          message: "No products are marked 'Available on Uber Eats' in the Product Master",
+          data: { published: 0, skipped: products.length },
+        });
+      }
+
+      const service = getPlatformService("uber");
+      const syncResult = await service.syncMenu(products, runtime);
+
+      /* Persist the sync outcome on the integration configuration for the
+       * Settings status display (last successful sync / last error). */
+      try {
+        await db(
+          `UPDATE integrations
+           SET configuration = configuration || $2::jsonb, updated_at = NOW()
+           WHERE company_id = $1 AND provider = 'uber'`,
+          [
+            req.user.companyId,
+            JSON.stringify({
+              menu_sync_last_attempt: new Date().toISOString(),
+              menu_sync_last_success: syncResult.success === true ? new Date().toISOString() : null,
+              menu_sync_last_error: syncResult.success === true ? null : String(syncResult.message || syncResult.code || "failed").slice(0, 300),
+              menu_sync_last_count: syncResult.meta ? syncResult.meta.publishedCount : null,
+            }),
+          ]
+        );
+      } catch (statusError) {
+        console.error("Uber menu sync status write failed:", statusError.message);
+      }
+
+      return res.json({
+        success: syncResult.success === true,
+        code: syncResult.code || null,
+        message: syncResult.success
+          ? `Menu synced to Uber (${syncResult.meta.publishedCount} item(s), ${syncResult.meta.categoryCount} categor${syncResult.meta.categoryCount === 1 ? "y" : "ies"})`
+          : syncResult.message || "Uber menu sync failed",
+        data: {
+          httpStatus: syncResult.httpStatus ?? null,
+          published: syncResult.meta ? syncResult.meta.publishedCount : 0,
+          skippedInactive: syncResult.meta ? syncResult.meta.skippedInactiveCount : 0,
+          categories: syncResult.meta ? syncResult.meta.categoryCount : 0,
+          itemIds: syncResult.meta ? syncResult.meta.publishedItemIds : [],
+          uberResponse: syncResult.data ?? null,
+        },
+      });
+    } catch (error) {
+      console.error("Uber menu sync error:", error);
+      res.status(500).json({ success: false, message: "Uber menu sync failed" });
+    }
+  });
+
+  /*
    * GET /api/online/uber/test-connection
    *
    * Minimum Uber Sandbox connection/test flow: calls the official Uber Eats

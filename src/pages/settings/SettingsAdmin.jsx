@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { SETTINGS_TAB_SLUGS } from "../../utils/adminRoutes.js";
-import { Edit, Plus, RefreshCw, Save, X } from "lucide-react";
+import { ArrowDown, ArrowUp, Edit, LayoutGrid, Plus, RefreshCw, Save, X } from "lucide-react";
 import { apiRequest } from "../../services/api.js";
 import WhatsAppSettings from "./whatsapp/WhatsAppSettings.jsx";
 import InvoiceDeliverySettings from "./invoiceDeliverySettings.jsx";
@@ -18,16 +18,31 @@ const SETTING_GROUPS = [
   { label: "General", sections: ["General", "Company", "Store & Till"] },
   { label: "Sales & Tax", sections: ["Tax / VAT", "Receipts", "Payment Terminals", "Customer Loyalty"] },
   { label: "Hardware", sections: ["Hardware"] },
-  { label: "Users", sections: ["Users & Permissions"] },
-  { label: "Integrations", sections: ["Integrations", "Online Platforms", "WhatsApp"] },
+  { label: "Users", sections: ["Users", "Roles & Permissions"] },
+  { label: "Integrations", sections: ["Connections", "Uber Eats", "Deliveroo", "WhatsApp"] },
   { label: "Communications", sections: ["SMS Delivery", "Email Delivery"] },
 ];
 
+/*
+ * Legacy section names (pre left-panel navigation) still arrive via deep
+ * links and the profile menu; each is redirected to its new section.
+ */
+const LEGACY_TAB_REDIRECT = {
+  "Users & Permissions": "Users",
+  "Online Platforms": "Uber Eats",
+  Integrations: "Connections",
+};
+
 function SettingsAdmin({ initialTab = "General" }) {
   const tabs = SETTING_GROUPS.flatMap((group) => group.sections);
-  const [tab, setTab] = useState(
-    tabs.includes(initialTab) ? initialTab : "General"
-  );
+  /* Legacy deep links/profile-menu tabs redirect to their new sections. */
+  const resolveInitialTab = (rawTab) => {
+    const legacy = LEGACY_TAB_REDIRECT[rawTab];
+    const mapped = legacy || rawTab;
+    /* Deep-link support (legacy tabs included). */
+    return tabs.includes(initialTab) || tabs.includes(mapped) ? mapped : "General";
+  };
+  const [tab, setTab] = useState(resolveInitialTab(initialTab));
   /*
    * T10V: the active section is mirrored into the URL
    * (/app/settings/<section-slug>) so refresh, direct links and
@@ -43,8 +58,6 @@ function SettingsAdmin({ initialTab = "General" }) {
       window.history.replaceState({}, "", target);
     }
   }, [tab]);
-  const activeGroup =
-    SETTING_GROUPS.find((group) => group.sections.includes(tab)) || SETTING_GROUPS[0];
   const [settings, setSettings] = useState(null);
   const [terminals, setTerminals] = useState([]);
   const [hardware, setHardware] = useState([]);
@@ -79,6 +92,7 @@ setForm({
           defaultVatRate: settingsResponse.data.tax.defaultVatRate,
           loyaltyEnabled: settingsResponse.data.loyalty?.enabled || false,
           loyaltyEarningRate: settingsResponse.data.loyalty?.earningRate || 0.01,
+          scanGoEnabled: settingsResponse.data.scanGo?.enabled || false,
         });
       }
       if (terminalsResponse.success) setTerminals(terminalsResponse.data || []);
@@ -126,75 +140,133 @@ setForm({
 
   if (!settings || !form) return <div className="bg-white border border-slate-200 rounded-xl p-8 max-w-2xl"><h2 className="font-semibold text-red-700">Settings are unavailable</h2><p className="text-sm text-slate-600 mt-2">No settings data was returned by the server.</p><button onClick={load} className="mt-5 h-10 px-4 bg-blue-600 text-white rounded-lg text-sm font-medium flex items-center gap-2"><RefreshCw size={16} /> Retry</button></div>;
 
-  return <div><div className="mb-5"><h1 className="text-2xl font-bold">Settings</h1><p className="text-sm text-slate-500 mt-1">Company, till, tax, hardware and integration configuration.</p></div><div className="mb-3"><div className="flex gap-1 overflow-x-auto">{SETTING_GROUPS.map((group) => { const groupActive = group === activeGroup; return <button key={group.label} onClick={() => { setTab(group.sections[0]); setMessage(""); setError(""); }} className={`px-3 h-8 text-sm whitespace-nowrap rounded-md transition-colors ${groupActive ? "bg-blue-600 text-white font-medium" : "text-slate-600 hover:bg-slate-100"}`}>{group.label}</button>; })}</div><div className="flex gap-1 border-b border-slate-200 overflow-x-auto">{activeGroup.sections.map((item) => <button key={item} onClick={() => { setTab(item); setMessage(""); setError(""); }} className={`px-3 py-2 text-sm whitespace-nowrap border-b-2 -mb-px ${tab === item ? "border-blue-600 text-blue-700 font-medium" : "border-transparent text-slate-500 hover:text-slate-800"}`}>{item}</button>)}</div></div>{message && <div className="mb-4 px-4 py-3 bg-emerald-50 border border-emerald-200 text-emerald-700 rounded-lg text-sm">{message}</div>}{error && <div className="mb-4 px-4 py-3 bg-red-50 border border-red-200 text-red-700 rounded-lg text-sm">{error}</div>}{["General", "Company", "Tax / VAT"].includes(tab) && <SettingsForm tab={tab} form={form} setForm={setForm} onSave={saveSettings} />}{tab === "Store & Till" && <StoreTillSettings settings={settings} onMessage={setMessage} onError={setError} />}{tab === "Payment Terminals" && <PaymentTerminalSettings terminals={terminals} onSaved={load} onMessage={setMessage} onError={setError} />}{tab === "Hardware" && <HardwareSettings hardware={hardware} onSave={saveHardware} onTest={testHardware} />}{tab === "Integrations" && <IntegrationHealth health={health} />}{tab === "Online Platforms" && <OnlinePlatformSettings onMessage={setMessage} onError={setError} />}{tab === "WhatsApp" && <WhatsAppSettings onMessage={setMessage} onError={setError} />}{tab === "Customer Loyalty" && <LoyaltySettings settings={settings} form={form} setForm={setForm} onSave={saveSettings} />}{tab === "SMS Delivery" && <InvoiceDeliverySettings channel="sms" onMessage={setMessage} onError={setError} />}{tab === "Email Delivery" && <InvoiceDeliverySettings channel="email" onMessage={setMessage} onError={setError} />}{tab === "Users & Permissions" && <UsersPermissionsSettings onMessage={setMessage} onError={setError} />}{tab === "Receipts" && <ReceiptSettings settings={settings} form={form} setForm={setForm} onSave={saveSettings} />}</div>;
+  return (
+    <div className="flex gap-6 items-start">
+      {/* Left settings navigation: groups with sub-items; each section opens
+          separately in the content pane. */}
+      <aside className="w-52 shrink-0 bg-white border border-slate-200 rounded-xl p-3 space-y-4">
+        {SETTING_GROUPS.map((group) => (
+          <div key={group.label}>
+            <p className="px-2 mb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-400">{group.label}</p>
+            <div className="space-y-0.5">
+              {group.sections.map((item) => (
+                <button
+                  key={item}
+                  onClick={() => { setTab(item); setMessage(""); setError(""); }}
+                  className={`w-full text-left px-2 h-8 rounded-md text-sm transition-colors ${tab === item ? "bg-blue-600 text-white font-medium" : "text-slate-600 hover:bg-slate-100"}`}
+                >
+                  {item}
+                </button>
+              ))}
+            </div>
+          </div>
+        ))}
+      </aside>
+
+      <div className="flex-1 min-w-0">
+        <div className="mb-4">
+          <h1 className="text-2xl font-bold">Settings</h1>
+          <p className="text-sm text-slate-500 mt-1">{tab}</p>
+        </div>
+        {message && <div className="mb-4 px-4 py-3 bg-emerald-50 border border-emerald-200 text-emerald-700 rounded-lg text-sm">{message}</div>}
+        {error && <div className="mb-4 px-4 py-3 bg-red-50 border border-red-200 text-red-700 rounded-lg text-sm">{error}</div>}
+        {["General", "Company", "Tax / VAT"].includes(tab) && <SettingsForm tab={tab} form={form} setForm={setForm} onSave={saveSettings} />}
+        {tab === "Store & Till" && <StoreTillSettings settings={settings} onMessage={setMessage} onError={setError} />}
+        {tab === "Store & Till" && <InvoicePrefixesSetting form={form} onMessage={setMessage} onError={setError} />}
+        {tab === "Store & Till" && <NegativeInventoryBillingSetting onError={setError} />}
+        {tab === "Store & Till" && <DockQuickAccessSetting form={form} onMessage={setMessage} onError={setError} />}
+        {tab === "Store & Till" && <CustomerDisplaySetting form={form} onMessage={setMessage} onError={setError} />}
+        {tab === "Store & Till" && <SelfCheckoutKeysSetting onMessage={setMessage} onError={setError} />}
+        {tab === "Payment Terminals" && <PaymentTerminalSettings terminals={terminals} onSaved={load} onMessage={setMessage} onError={setError} />}
+        {tab === "Hardware" && <HardwareSettings hardware={hardware} onSave={saveHardware} onTest={testHardware} />}
+        {tab === "Connections" && <IntegrationHealth health={health} />}
+        {tab === "Integrations" && <IntegrationHealth health={health} />}
+        {tab === "Uber Eats" && <OnlinePlatformSettings onMessage={setMessage} onError={setError} onlyPlatform="uber" />}
+        {tab === "Deliveroo" && <OnlinePlatformSettings onMessage={setMessage} onError={setError} onlyPlatform="deliveroo" />}
+        {tab === "Online Platforms" && <OnlinePlatformSettings onMessage={setMessage} onError={setError} />}
+        {tab === "WhatsApp" && <WhatsAppSettings onMessage={setMessage} onError={setError} />}
+        {tab === "Customer Loyalty" && <LoyaltySettings settings={settings} form={form} setForm={setForm} onSave={saveSettings} />}
+        {tab === "SMS Delivery" && <InvoiceDeliverySettings channel="sms" onMessage={setMessage} onError={setError} />}
+        {tab === "Email Delivery" && <InvoiceDeliverySettings channel="email" onMessage={setMessage} onError={setError} />}
+        {tab === "Users" && <UsersSettings onMessage={setMessage} onError={setError} />}
+        {tab === "Roles & Permissions" && <RolesSettings onMessage={setMessage} onError={setError} />}
+        {tab === "Users & Permissions" && <UsersPermissionsSettings onMessage={setMessage} onError={setError} />}
+        {tab === "Receipts" && <ReceiptSettings settings={settings} form={form} setForm={setForm} onSave={saveSettings} />}
+      </div>
+    </div>
+  );
 }
 
-function UsersPermissionsSettings({ onMessage, onError }) {
-  const [users, setUsers] = useState([]); 
-  const [roles, setRoles] = useState([]); 
-  const [stores, setStores] = useState([]); 
-  const [form, setForm] = useState(null); 
+/*
+ * Users section (left-panel navigation): user list only. Roles and the
+ * permission matrix live in the separate "Roles & Permissions" section.
+ */
+function UsersSettings({ onMessage, onError }) {
+  const [users, setUsers] = useState([]);
+  const [roles, setRoles] = useState([]);
+  const [stores, setStores] = useState([]);
+  const [form, setForm] = useState(null);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   const [error, setError] = useState("");
   const [permissions, setPermissions] = useState([]);
   const [isAdmin, setIsAdmin] = useState(false);
-  
-  const load = async () => { 
-    try { 
-      setLoading(true); 
+
+  const load = async () => {
+    try {
+      setLoading(true);
       setError("");
       const [u, r, s, p] = await Promise.all([
-        apiRequest("/api/admin/users"), 
-        apiRequest("/api/admin/roles"), 
+        apiRequest("/api/admin/users"),
+        apiRequest("/api/admin/roles"),
         apiRequest("/api/admin/stores"),
         apiRequest("/api/auth/me/permissions")
-      ]); 
-      if (!u.success) throw new Error(u.message); 
-      setUsers(u.data || []); 
-      setRoles(r.data || []); 
+      ]);
+      if (!u.success) throw new Error(u.message);
+      setUsers(u.data || []);
+      setRoles(r.data || []);
       setStores(s.data || []);
       if (p.success) {
         setPermissions(p.data.permissions || []);
         setIsAdmin(p.data.isAdmin || false);
       }
-    } catch (err) { 
-      setError(err.message || "Unable to load users"); 
+    } catch (err) {
+      setError(err.message || "Unable to load users");
       onError(err.message || "Unable to load users");
-    } finally { 
-      setLoading(false); 
-    } 
+    } finally {
+      setLoading(false);
+    }
   };
-  
+
   useEffect(() => { load(); }, []);
-  
-  const save = async (value) => { 
-    const data = await apiRequest(value.id ? `/api/admin/users/${value.id}` : "/api/admin/users", { method: value.id ? "PUT" : "POST", body: JSON.stringify(value) }); 
-    if (!data.success) throw new Error(data.message); 
-    await load(); 
-    setForm(null); 
-    onMessage("User saved."); 
+
+  const save = async (value) => {
+    const data = await apiRequest(value.id ? `/api/admin/users/${value.id}` : "/api/admin/users", { method: value.id ? "PUT" : "POST", body: JSON.stringify(value) });
+    if (!data.success) throw new Error(data.message);
+    await load();
+    setForm(null);
+    onMessage("User saved.");
   };
-  
-  const toggle = async (user) => { 
-    try { 
-      await save({ id: user.id, fullName: user.full_name, email: user.email, roleId: user.role_id, storeId: user.store_id, active: !user.active }); 
-    } catch (err) { 
-      onError(err.message || "Unable to update user"); 
-    } 
+
+  const toggle = async (user) => {
+    try {
+      await save({ id: user.id, fullName: user.full_name, email: user.email, roleId: user.role_id, storeId: user.store_id, active: !user.active });
+    } catch (err) {
+      onError(err.message || "Unable to update user");
+    }
   };
 
   const filteredUsers = users.filter(user => {
-    const matchesSearch = 
+    const matchesSearch =
       user.full_name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
       user.username?.toLowerCase().includes(searchQuery.toLowerCase()) ||
       user.email?.toLowerCase().includes(searchQuery.toLowerCase());
-    
-    const matchesStatus = statusFilter === "all" || 
+
+    const matchesStatus = statusFilter === "all" ||
                           (statusFilter === "active" && user.active) ||
                           (statusFilter === "inactive" && !user.active);
-    
+
     return matchesSearch && matchesStatus;
   });
 
@@ -204,17 +276,16 @@ function UsersPermissionsSettings({ onMessage, onError }) {
   const canDeleteUsers = isAdmin || permissions.includes("user.delete");
 
   if (loading) return <div className="p-8 text-center text-slate-400">Loading users...</div>;
-  
+
   if (error) return <div className="p-8 text-center text-red-500">{error}</div>;
-  
+
   if (!canViewUsers) return <div className="p-8 text-center text-slate-400">You don't have permission to view users</div>;
-  
+
   return (
     <div className="space-y-6">
-      <ChangePasswordCard />
       <div className="bg-white border rounded-xl overflow-hidden">
         <div className="p-4 border-b flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
-          <h2 className="font-semibold">Users & Permissions</h2>
+          <h2 className="font-semibold">Users</h2>
           {canCreateUsers && (
             <button onClick={() => setForm({})} className="h-9 px-3 bg-blue-600 text-white rounded text-sm">
               <Plus size={15} className="inline mr-1" />Add user
@@ -301,9 +372,53 @@ function UsersPermissionsSettings({ onMessage, onError }) {
         )}
         {form && <UserFormModal form={form} roles={roles} stores={stores} onClose={() => setForm(null)} onSave={save} />}
       </div>
-      <NegativeInventoryBillingSetting isAdmin={isAdmin} onError={onError} />
+    </div>
+  );
+}
+
+/*
+ * Roles & Permissions section (left-panel navigation): role list plus the
+ * per-role permission matrix, each previously stacked under the users list.
+ */
+function RolesSettings({ onMessage, onError }) {
+  const [roles, setRoles] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  const load = async () => {
+    try {
+      setLoading(true);
+      const r = await apiRequest("/api/admin/roles");
+      if (!r.success) throw new Error(r.message || "Unable to load roles");
+      setRoles(r.data || []);
+    } catch (err) {
+      onError(err.message || "Unable to load roles");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { load(); }, []);
+
+  if (loading) return <div className="p-8 text-center text-slate-400">Loading roles...</div>;
+
+  return (
+    <div className="space-y-6">
       <RoleListManager roles={roles} onChanged={load} onMessage={onMessage} onError={onError} />
       <RolePermissionsManager roles={roles} onMessage={onMessage} onError={onError} onChanged={load} />
+    </div>
+  );
+}
+
+/*
+ * Legacy combined view (users + roles on one page). No longer linked from
+ * the left navigation, but kept for the legacy "Users & Permissions"
+ * deep link / render contract.
+ */
+function UsersPermissionsSettings({ onMessage, onError }) {
+  return (
+    <div className="space-y-6">
+      <UsersSettings onMessage={onMessage} onError={onError} />
+      <RolesSettings onMessage={onMessage} onError={onError} />
     </div>
   );
 }
@@ -318,17 +433,22 @@ function UsersPermissionsSettings({ onMessage, onError }) {
  * Turning it OFF needs no confirmation and never deletes anything; the
  * setting is company-wide and every change is audited server-side.
  */
-function NegativeInventoryBillingSetting({ isAdmin, onError }) {
+function NegativeInventoryBillingSetting({ onError }) {
   const [enabled, setEnabled] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [isAdmin, setIsAdmin] = useState(false);
 
   const load = useCallback(async () => {
     try {
-      const data = await apiRequest("/api/settings");
-      if (data.success) {
-        setEnabled(data.data?.inventory?.allowNegativeInventoryBilling === true);
+      const [settingsData, permData] = await Promise.all([
+        apiRequest("/api/settings"),
+        apiRequest("/api/auth/me/permissions"),
+      ]);
+      if (settingsData.success) {
+        setEnabled(settingsData.data?.inventory?.allowNegativeInventoryBilling === true);
       }
+      if (permData.success) setIsAdmin(permData.data?.isAdmin === true || (permData.data?.permissions || []).includes("settings.manage"));
       setLoaded(true);
     } catch (err) {
       onError(err.message || "Unable to load the negative-inventory setting");
@@ -394,44 +514,6 @@ function NegativeInventoryBillingSetting({ isAdmin, onError }) {
           OFF — the till blocks sales where recorded stock is insufficient (default, recommended).
         </div>
       )}
-    </div>
-  );
-}
-
-function ChangePasswordCard() {
-  const [form, setForm] = useState({ currentPassword: "", newPassword: "", confirmPassword: "" });
-  const [error, setError] = useState("");
-  const [success, setSuccess] = useState("");
-  const [saving, setSaving] = useState(false);
-  const update = (field, value) => setForm((current) => ({ ...current, [field]: value }));
-  const reset = () => { setForm({ currentPassword: "", newPassword: "", confirmPassword: "" }); setError(""); setSuccess(""); };
-  const submit = async (event) => {
-    event.preventDefault();
-    setError(""); setSuccess("");
-    if (form.newPassword !== form.confirmPassword) { setError("New password and confirmation do not match"); return; }
-    if (form.newPassword.length < 8) { setError("New password must be at least 8 characters"); return; }
-    try {
-      setSaving(true);
-      const data = await apiRequest("/api/auth/change-password", { method: "POST", body: JSON.stringify({ currentPassword: form.currentPassword, newPassword: form.newPassword }) });
-      if (!data.success) throw new Error(data.message || "Unable to change password");
-      setSuccess("Password changed successfully.");
-      setForm({ currentPassword: "", newPassword: "", confirmPassword: "" });
-    } catch (err) { setError(err.message || "Unable to change password"); } finally { setSaving(false); }
-  };
-  return (
-    <div className="bg-white border rounded-xl overflow-hidden">
-      <div className="p-4 border-b"><h2 className="font-semibold">Change Password</h2></div>
-      <form onSubmit={submit} className="p-4 max-w-md space-y-3">
-        {error && <div className="p-2 bg-red-50 text-red-700 rounded text-sm">{error}</div>}
-        {success && <div className="p-2 bg-green-50 text-green-700 rounded text-sm">{success}</div>}
-        <label className="block text-sm text-slate-600"><span className="block mb-1 font-medium">Current password</span><input type="password" required value={form.currentPassword} onChange={(e) => update("currentPassword", e.target.value)} className="w-full h-9 px-2 border rounded" autoComplete="current-password" /></label>
-        <label className="block text-sm text-slate-600"><span className="block mb-1 font-medium">New password</span><input type="password" required value={form.newPassword} onChange={(e) => update("newPassword", e.target.value)} className="w-full h-9 px-2 border rounded" autoComplete="new-password" /></label>
-        <label className="block text-sm text-slate-600"><span className="block mb-1 font-medium">Confirm new password</span><input type="password" required value={form.confirmPassword} onChange={(e) => update("confirmPassword", e.target.value)} className="w-full h-9 px-2 border rounded" autoComplete="new-password" /></label>
-        <div className="flex gap-2 pt-2">
-          <button type="submit" disabled={saving} className="h-9 px-4 bg-blue-600 text-white rounded text-sm disabled:opacity-50">{saving ? "Saving…" : "Save Password"}</button>
-          <button type="button" onClick={reset} className="h-9 px-3 border rounded text-sm">Cancel</button>
-        </div>
-      </form>
     </div>
   );
 }
@@ -908,6 +990,527 @@ function StoreTillSettings({ settings, onMessage, onError }) {
   return <div className="space-y-4"><div className="text-sm text-slate-500 mb-3">Current user store: {settings.store.name || "Unassigned"} · Current till: {settings.till.name || "Unassigned"}</div>{stores.map((store) => <div key={store.id} className="bg-white border rounded-xl p-4"><StoreEditRow store={store} onSave={updateStore} />{(store.tills || []).map((till) => <TillEditRow key={till.id} till={till} onSave={updateTill} />)}</div>)}</div>;
 }
 
+/*
+ * Invoice Prefixes (Store & Till): configurable receipt prefixes per sale
+ * source — Till (TO), Delivery/online orders (DEL), Self-Checkout (SC).
+ * Self-saving through the existing whole-form settings PUT; blank/unchanged
+ * fields keep the stored value. Numbering sequences are untouched: the
+ * prefix is presentation only.
+ */
+function InvoicePrefixesSetting({ form, onMessage, onError }) {
+  const [prefixes, setPrefixes] = useState({ till: "TO", delivery: "DEL", selfCheckout: "SC" });
+  const [loaded, setLoaded] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  const load = useCallback(async () => {
+    try {
+      const data = await apiRequest("/api/settings");
+      if (data.success && data.data?.invoicePrefixes) {
+        setPrefixes({
+          till: data.data.invoicePrefixes.till || "TO",
+          delivery: data.data.invoicePrefixes.delivery || "DEL",
+          selfCheckout: data.data.invoicePrefixes.selfCheckout || "SC",
+        });
+      }
+      setLoaded(true);
+    } catch (err) {
+      onError(err.message || "Unable to load the invoice prefixes");
+    }
+  }, [onError]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const save = async () => {
+    if (!form || !form.companyName) return; /* parent form not ready yet */
+    try {
+      setSaving(true);
+      const data = await apiRequest("/api/settings", {
+        method: "PUT",
+        body: JSON.stringify({ ...form, invoicePrefixes: prefixes }),
+      });
+      if (!data.success) throw new Error(data.message || "Unable to save the invoice prefixes");
+      onMessage("Invoice prefixes saved. New sales use the updated prefixes; existing receipt numbers are unchanged.");
+    } catch (err) {
+      onError(err.message || "Unable to save the invoice prefixes");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (!loaded || !form) return null;
+
+  const fields = [
+    { key: "till", label: "Till invoice prefix", hint: "e.g. TO-20260919-0001" },
+    { key: "delivery", label: "Delivery invoice prefix", hint: "e.g. DEL-<order ref>" },
+    { key: "selfCheckout", label: "Self-checkout invoice prefix", hint: "e.g. SC-20260919-0001" },
+  ];
+
+  return (
+    <div className="bg-white border border-slate-200 rounded-xl p-4" data-testid="invoice-prefixes-setting">
+      <div className="font-semibold mb-1">Invoice Prefixes</div>
+      <div className="text-xs text-slate-500 mb-3">
+        Receipt number prefixes per sale source. Existing sale numbers keep their original prefix and sequence.
+      </div>
+      <div className="grid grid-cols-3 gap-3">
+        {fields.map((field) => (
+          <div key={field.key}>
+            <label className="text-sm text-slate-600" htmlFor={`invoice-prefix-${field.key}`}>{field.label}</label>
+            <input
+              id={`invoice-prefix-${field.key}`}
+              type="text"
+              data-testid={`invoice-prefix-${field.key}`}
+              value={prefixes[field.key]}
+              maxLength={10}
+              onChange={(e) => setPrefixes((current) => ({ ...current, [field.key]: e.target.value.toUpperCase() }))}
+              className="w-full h-10 px-3 border border-slate-200 rounded outline-none focus:ring-2 focus:ring-blue-500 font-mono"
+            />
+            <div className="text-[11px] text-slate-400 mt-1">{field.hint}</div>
+          </div>
+        ))}
+      </div>
+      <div className="flex justify-end mt-3">
+        <button
+          type="button"
+          data-testid="invoice-prefixes-save"
+          onClick={save}
+          disabled={saving}
+          className="h-10 px-4 bg-blue-600 hover:bg-blue-700 disabled:opacity-60 text-white rounded text-sm font-medium"
+        >
+          {saving ? "Saving…" : "Save Prefixes"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function TillProductViewSetting({ form, onMessage, onError }) {
+  const [view, setView] = useState("image");
+  const [loaded, setLoaded] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  const load = useCallback(async () => {
+    try {
+      const data = await apiRequest("/api/settings");
+      if (data.success) {
+        setView(data.data?.till?.productView === "compact" ? "compact" : "image");
+      }
+      setLoaded(true);
+    } catch (err) {
+      onError(err.message || "Unable to load the till product view setting");
+    }
+  }, [onError]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const save = async (next) => {
+    if (!form || !form.companyName) return; // parent form not ready yet
+    try {
+      setSaving(true);
+      const previous = view;
+      setView(next);
+      /* The settings PUT is whole-form (companyName required): send the
+         parent's currently-loaded form values plus the changed productView. */
+      const data = await apiRequest("/api/settings", {
+        method: "PUT",
+        body: JSON.stringify({ ...form, productView: next }),
+      });
+      if (!data.success) throw new Error(data.message || "Unable to save the till product view");
+      onMessage(next === "compact" ? "Till switched to Compact View. Reload the Till to apply." : "Till switched to Image View. Reload the Till to apply.");
+    } catch (err) {
+      onError(err.message || "Unable to save the till product view");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (!loaded || !form) return null;
+
+  return (
+    <div className="bg-white border rounded-xl p-4 mt-4">
+      <div className="font-semibold mb-1">Till Product View</div>
+      <p className="text-xs text-slate-500 mb-3">
+        Choose how products are displayed on the Till. Image View shows photo cards; Compact View is a dense list without images.
+      </p>
+      <div className="flex flex-col gap-2 max-w-md">
+        {[
+          { value: "image", label: "Image View", hint: "Visual product cards with photos (default)" },
+          { value: "compact", label: "Compact View", hint: "Dense list, no images — fits many more products" },
+        ].map((option) => (
+          <label
+            key={option.value}
+            className={`flex items-center gap-3 border rounded-lg px-3 py-2.5 cursor-pointer transition ${
+              view === option.value ? "border-blue-500 bg-blue-50" : "border-slate-200 hover:bg-slate-50"
+            }`}
+          >
+            <input
+              type="radio"
+              name="till-product-view"
+              value={option.value}
+              checked={view === option.value}
+              onChange={() => save(option.value)}
+              disabled={saving}
+              className="w-4 h-4 accent-blue-600"
+            />
+            <span>
+              <span className="block text-sm font-medium text-slate-800">{option.label}</span>
+              <span className="block text-xs text-slate-500">{option.hint}</span>
+            </span>
+          </label>
+        ))}
+      </div>
+      {saving && <div className="text-xs text-slate-400 mt-2">Saving…</div>}
+    </div>
+  );
+}
+
+/*
+ * T10W — Dock Quick Access picker.
+ *
+ * Lets the store choose which admin pages sit directly on the bottom dock
+ * (in order), alongside the always-centred launcher and permanent Open Till
+ * button. Up to 8 pages; saves through the existing whole-form settings PUT.
+ * Changes apply after the admin page is reloaded.
+ */
+const DOCK_PAGE_OPTIONS = [
+  "Dashboard", "Sales", "Returns", "Supplier Returns", "Order Prep", "Payments",
+  "Products", "Global Products", "Categories", "Purchases", "Suppliers", "Inventory",
+  "Replenishment", "Customers", "Employees", "Stores", "Reports", "Integrations",
+  "Accounting", "Settings",
+];
+const DOCK_MAX = 8;
+
+function DockQuickAccessSetting({ form, onMessage, onError }) {
+  const [selected, setSelected] = useState([]);
+  const [loaded, setLoaded] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  const load = useCallback(async () => {
+    try {
+      const data = await apiRequest("/api/settings");
+      if (data.success && Array.isArray(data.data?.dock?.quickAccess)) {
+        setSelected(data.data.dock.quickAccess.slice(0, DOCK_MAX));
+      }
+      setLoaded(true);
+    } catch (err) {
+      onError(err.message || "Unable to load the dock quick access setting");
+    }
+  }, [onError]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const save = async (next) => {
+    if (!form || !form.companyName) return; /* parent form not ready yet */
+    try {
+      setSaving(true);
+      /* Whole-form contract: parent's loaded values + the changed dock list. */
+      const data = await apiRequest("/api/settings", {
+        method: "PUT",
+        body: JSON.stringify({ ...form, dockQuickAccess: next }),
+      });
+      if (!data.success) throw new Error(data.message || "Unable to save the dock quick access");
+      setSelected(next);
+      onMessage("Dock updated. Reload the admin page (F5) to apply the new bottom bar.");
+    } catch (err) {
+      onError(err.message || "Unable to save the dock quick access");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const move = (index, dir) => {
+    const next = [...selected];
+    const [item] = next.splice(index, 1);
+    next.splice(index + dir, 0, item);
+    save(next);
+  };
+
+  const toggle = (page) => {
+    if (selected.includes(page)) {
+      save(selected.filter((p) => p !== page));
+    } else if (selected.length < DOCK_MAX) {
+      save([...selected, page]);
+    }
+  };
+
+  if (!loaded || !form) return null;
+
+  return (
+    <div className="bg-white border rounded-xl p-4 mt-4">
+      <div className="flex items-center gap-2 font-semibold mb-1">
+        <LayoutGrid size={16} className="text-teal-700" />
+        Dock Quick Access
+      </div>
+      <p className="text-xs text-slate-500 mb-3">
+        Choose which pages sit directly on the bottom navigation bar (max {DOCK_MAX}).
+        The “All pages” launcher in the middle always gives access to everything, and Open Till stays fixed at the end.
+      </p>
+
+      {/* currently on the dock — ordered, removable, reorderable */}
+      <div className="text-xs font-semibold text-slate-600 mb-1.5">On the dock ({selected.length}/{DOCK_MAX})</div>
+      {selected.length === 0 ? (
+        <div className="text-xs text-slate-400 border border-dashed rounded-lg px-3 py-2.5 mb-3">
+          Nothing pinned — the dock shows its default layout.
+        </div>
+      ) : (
+        <div className="flex flex-wrap gap-2 mb-3">
+          {selected.map((page, i) => (
+            <span key={page} className="inline-flex items-center gap-1 border rounded-lg pl-2.5 pr-1 py-1 text-sm bg-slate-50">
+              {page}
+              <button
+                onClick={() => move(i, -1)}
+                disabled={saving || i === 0}
+                aria-label={`Move ${page} earlier`}
+                className="p-1 rounded hover:bg-slate-200 disabled:opacity-30"
+              >
+                <ArrowUp size={13} />
+              </button>
+              <button
+                onClick={() => move(i, 1)}
+                disabled={saving || i === selected.length - 1}
+                aria-label={`Move ${page} later`}
+                className="p-1 rounded hover:bg-slate-200 disabled:opacity-30"
+              >
+                <ArrowDown size={13} />
+              </button>
+              <button
+                onClick={() => toggle(page)}
+                disabled={saving}
+                aria-label={`Remove ${page} from the dock`}
+                className="p-1 rounded hover:bg-red-100 text-slate-400 hover:text-red-600"
+              >
+                <X size={13} />
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
+
+      {/* available pages — one-tap add */}
+      <div className="text-xs font-semibold text-slate-600 mb-1.5">Available pages</div>
+      <div className="flex flex-wrap gap-1.5">
+        {DOCK_PAGE_OPTIONS.filter((p) => !selected.includes(p)).map((page) => (
+          <button
+            key={page}
+            onClick={() => toggle(page)}
+            disabled={saving || selected.length >= DOCK_MAX}
+            className="px-2.5 py-1 border rounded-lg text-sm text-slate-700 hover:bg-slate-50 disabled:opacity-40"
+          >
+            + {page}
+          </button>
+        ))}
+      </div>
+      {saving && <div className="text-xs text-slate-400 mt-2">Saving…</div>}
+    </div>
+  );
+}
+
+/*
+ * Customer Display (second monitor) — company-level switch plus the
+ * open/close action for the cashier. The till header has no button; this
+ * card is the only entry point.
+ */
+function CustomerDisplaySetting({ form, onMessage, onError }) {
+  const [enabled, setEnabled] = useState(false);
+  const [loaded, setLoaded] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [open, setOpen] = useState(false); /* is a display window broadcasting? */
+
+  const load = useCallback(async () => {
+    try {
+      const data = await apiRequest("/api/settings");
+      if (data.success) {
+        setEnabled(data.data?.customerDisplay?.enabled === true);
+      }
+      setLoaded(true);
+    } catch (err) {
+      onError(err.message || "Unable to load the customer display setting");
+    }
+  }, [onError]);
+
+  useEffect(() => { load(); }, [load]);
+
+  /* Is a customer-display window already open on this browser? The till
+   * broadcasts its bill continuously, so "BILL" traffic means the mirror
+   * is live; a silent channel for 3s means no active till/window. */
+  useEffect(() => {
+    if (typeof BroadcastChannel !== "function") return undefined;
+    const channel = new BroadcastChannel("onepos-customer-display");
+    let timer = null;
+    channel.onmessage = () => {
+      setOpen(true);
+      if (timer) window.clearTimeout(timer);
+      timer = window.setTimeout(() => setOpen(false), 3000);
+    };
+    return () => {
+      if (timer) window.clearTimeout(timer);
+      try { channel.close(); } catch { /* ignore */ }
+    };
+  }, []);
+
+  const save = async (next) => {
+    if (!form || !form.companyName) return; /* parent form not ready yet */
+    try {
+      setSaving(true);
+      const previous = enabled;
+      setEnabled(next);
+      const data = await apiRequest("/api/settings", {
+        method: "PUT",
+        body: JSON.stringify({ ...form, customerDisplayEnabled: next }),
+      });
+      if (!data.success) throw new Error(data.message || "Unable to save the customer display setting");
+      onMessage(next
+        ? "Customer Display is ON — open it below and place the window on the second monitor."
+        : "Customer Display is OFF — any open display window will show the standby screen.");
+    } catch (err) {
+      setEnabled(previous);
+      onError(err.message || "Unable to save the customer display setting");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  /* Opens /customer-display in its own window (drag onto the second
+     monitor). The window itself is read-only and needs no login. */
+  const openDisplay = () => {
+    const win = window.open(
+      "/customer-display",
+      "onepos-customer-display-window",
+      "popup=yes,width=720,height=1080"
+    );
+    if (!win) {
+      onError("The browser blocked the window — allow pop-ups for this site and try again.");
+    }
+  };
+
+  if (!loaded || !form) return null;
+
+  return (
+    <div className="bg-white border rounded-xl p-4 mt-4">
+      <div className="font-semibold mb-1">Customer Display</div>
+      <p className="text-xs text-slate-500 mb-3">
+        Shows the current bill on a second monitor for the customer. The till is
+        always the source of truth; the customer window is read-only.
+      </p>
+      <div className="flex items-center gap-3">
+        <Toggle checked={enabled} onChange={(v) => save(v)} disabled={saving} />
+        <span className="text-sm text-slate-700">
+          {enabled ? "ON — the till offers the Open Customer Display action" : "OFF — Customer Display is disabled"}
+        </span>
+      </div>
+      {enabled && (
+        <div className="mt-3 flex items-center gap-3">
+          <button
+            onClick={openDisplay}
+            className="h-9 px-4 bg-teal-700 text-white rounded-lg text-sm font-medium hover:bg-teal-800"
+          >
+            Open Customer Display
+          </button>
+          <span className="text-xs text-slate-500">
+            {open
+              ? "The till is mirroring its bill — a display window shows it live (offline too)."
+              : "No till is mirroring yet — open the till; a display window picks up its bill automatically."}
+          </span>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/*
+ * Self-Checkout device pairing — per store. Generate/clear the device key
+ * that the login screen's Self-Checkout entry asks for. Only a bcrypt hash
+ * is stored; the raw key is displayed once.
+ */
+function SelfCheckoutKeysSetting({ onMessage, onError }) {
+  const [stores, setStores] = useState([]);
+  const [loaded, setLoaded] = useState(false);
+  const [busy, setBusy] = useState(""); /* store id being worked on */
+  const [keys, setKeys] = useState({}); /* store id -> raw key (shown once) */
+  const [revealed, setRevealed] = useState({});
+
+  const load = useCallback(async () => {
+    try {
+      const data = await apiRequest("/api/admin/stores");
+      if (data.success) setStores(data.data || []);
+      setLoaded(true);
+    } catch (err) {
+      onError(err.message || "Unable to load stores");
+    }
+  }, [onError]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const generate = async (store) => {
+    try {
+      setBusy(store.id);
+      const data = await apiRequest(`/api/admin/stores/${store.id}/self-checkout-key`, { method: "POST", body: JSON.stringify({}) });
+      if (!data.success) throw new Error(data.message || "Unable to generate the device key");
+      setKeys((k) => ({ ...k, [store.id]: data.data.deviceKey }));
+      setRevealed((r) => ({ ...r, [store.id]: true }));
+      onMessage("Device key generated — copy it now, it is shown only once.");
+    } catch (err) {
+      onError(err.message || "Unable to generate the device key");
+    } finally {
+      setBusy("");
+    }
+  };
+
+  const clear = async (store) => {
+    try {
+      setBusy(store.id);
+      const data = await apiRequest(`/api/admin/stores/${store.id}/self-checkout-key`, { method: "POST", body: JSON.stringify({ clear: true }) });
+      if (!data.success) throw new Error(data.message || "Unable to clear the device key");
+      setKeys((k) => ({ ...k, [store.id]: null }));
+      onMessage("Self-Checkout pairing cleared — existing device sessions end when their token expires.");
+    } catch (err) {
+      onError(err.message || "Unable to clear the device key");
+    } finally {
+      setBusy("");
+    }
+  };
+
+  if (!loaded) return null;
+
+  return (
+    <div className="bg-white border rounded-xl p-4 mt-4">
+      <div className="font-semibold mb-1">Self-Checkout device pairing</div>
+      <p className="text-xs text-slate-500 mb-3">
+        Self-Checkout is started from the login screen (no staff login needed on
+        that device). Generate a key per store, enter it once on the device's
+        login screen, and customers get the card-only till with Guest / Sign-in
+        options. The key is stored hashed and shown only once.
+      </p>
+      {stores.map((store) => (
+        <div key={store.id} className="flex items-center gap-3 py-2 border-t border-slate-100 first:border-t-0">
+          <span className="text-sm font-medium text-slate-700 flex-1 truncate">{store.name}</span>
+          {keys[store.id] ? (
+            <code className="text-xs bg-slate-100 border rounded px-2 py-1 tracking-wider">
+              {revealed[store.id] ? keys[store.id] : "•••• •••• •••• ••••"}
+            </code>
+          ) : null}
+          <button
+            onClick={() => generate(store)}
+            disabled={busy === store.id}
+            className="h-8 px-3 bg-teal-700 text-white rounded-lg text-sm hover:bg-teal-800 disabled:opacity-50"
+          >
+            {busy === store.id ? "Generating…" : keys[store.id] ? "Regenerate" : "Generate key"}
+          </button>
+          {keys[store.id] ? (
+            <button
+              onClick={() => clear(store)}
+              disabled={busy === store.id}
+              className="h-8 px-3 border rounded-lg text-sm text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+            >
+              Clear pairing
+            </button>
+          ) : null}
+        </div>
+      ))}
+      {stores.length === 0 && <div className="text-sm text-slate-400">No stores found.</div>}
+    </div>
+  );
+}
+
 function StoreEditRow({ store, onSave }) { const [form,setForm]=useState({name:store.name,code:store.code||"",addressLine1:store.address_line1||"",city:store.city||"",postcode:store.postcode||"",phone:store.phone||"",active:store.active}); return <div><div className="font-semibold mb-3">Store</div><div className="grid grid-cols-3 gap-2"><input value={form.name} onChange={(e)=>setForm({...form,name:e.target.value})} className="h-9 border rounded px-2 text-sm" /><input value={form.code} onChange={(e)=>setForm({...form,code:e.target.value})} className="h-9 border rounded px-2 text-sm" placeholder="Code" /><input value={form.city} onChange={(e)=>setForm({...form,city:e.target.value})} className="h-9 border rounded px-2 text-sm" placeholder="City" /></div><label className="inline-flex items-center gap-2 mt-3 text-sm text-slate-600"><Toggle checked={form.active} onChange={(e)=>setForm({...form,active:e.target.checked})} /> Active</label><button onClick={()=>onSave({id:store.id,...form})} className="ml-3 h-8 px-3 bg-blue-600 text-white rounded text-sm">Save store</button></div>; }
 function TillEditRow({ till, onSave }) { const [form,setForm]=useState({name:till.name,terminalNumber:till.terminalNumber||"",active:till.active}); return <div className="mt-4 pl-4 border-l-2 border-slate-200"><div className="font-medium text-sm mb-2">Till</div><div className="flex gap-2 items-center"><input value={form.name} onChange={(e)=>setForm({...form,name:e.target.value})} className="h-9 border rounded px-2 text-sm" /><input value={form.terminalNumber} onChange={(e)=>setForm({...form,terminalNumber:e.target.value})} className="h-9 border rounded px-2 text-sm" placeholder="Terminal number" /><label className="inline-flex items-center gap-2 text-sm text-slate-600"><Toggle checked={form.active} onChange={(e)=>setForm({...form,active:e.target.checked})} /> Active</label><button onClick={()=>onSave({id:till.id,...form})} className="h-9 px-3 bg-blue-600 text-white rounded text-sm">Save till</button></div></div>; }
 
@@ -981,7 +1584,7 @@ function SettingsForm({ tab, form, setForm, onSave }) {
   const field = (name, label, type = "text") => <label className="text-sm text-slate-600"><span className="block mb-1 font-medium">{label}</span><input type={type} value={form[name] ?? ""} onChange={(event) => setForm((current) => ({ ...current, [name]: event.target.value }))} className="w-full h-10 px-3 border border-slate-200 rounded-lg" /></label>;
 const companyFields = <>{field("companyName", "Company name")}{field("legalName", "Legal / business name")}{field("companyEmail", "Email", "email")}{field("companyPhone", "Phone")}{field("currency", "Currency")}{field("timezone", "Timezone")}<LogoUploader logoUrl={form.logoUrl || ""} onChange={(value) => setForm((current) => ({ ...current, logoUrl: value }))} /></>;
 
-  return <form onSubmit={onSave} className="bg-white border border-slate-200 rounded-xl p-5 max-w-2xl"><h2 className="font-semibold mb-4">{tab}</h2><div className="grid grid-cols-2 gap-4">{tab === "Company" ? companyFields : <>{field("dateFormat", "Date format")}{field("currency", "Currency")}{field("timezone", "Timezone")}{tab === "Tax / VAT" && <><label className="flex items-center gap-2 text-sm text-slate-600 pt-6"><Toggle checked={form.vatEnabled} onChange={(event) => setForm((current) => ({ ...current, vatEnabled: event.target.checked }))} /> VAT enabled</label>{field("defaultVatRate", "Default VAT rate %", "number")}</>}</>}</div><button type="submit" className="mt-5 h-10 px-5 bg-blue-600 text-white rounded-lg text-sm font-medium">Save settings</button></form>;
+  return <form onSubmit={onSave} className="bg-white border border-slate-200 rounded-xl p-5 max-w-2xl"><h2 className="font-semibold mb-4">{tab}</h2><div className="grid grid-cols-2 gap-4">{tab === "Company" ? companyFields : <>{field("dateFormat", "Date format")}{field("currency", "Currency")}{field("timezone", "Timezone")}{tab === "Tax / VAT" && <><label className="flex items-center gap-2 text-sm text-slate-600 pt-6"><Toggle checked={form.vatEnabled} onChange={(event) => setForm((current) => ({ ...current, vatEnabled: event.target.checked }))} /> VAT enabled</label>{field("defaultVatRate", "Default VAT rate %", "number")}</>}{tab === "General" && <label className="flex items-center gap-2 text-sm text-slate-600 pt-6"><Toggle checked={form.scanGoEnabled === true} onChange={(event) => setForm((current) => ({ ...current, scanGoEnabled: event.target.checked }))} /> Scan &amp; Go — customers scan products on their phone</label>}</>}</div><button type="submit" className="mt-5 h-10 px-5 bg-blue-600 text-white rounded-lg text-sm font-medium">Save settings</button></form>;
 }
 
 function ReceiptSettings({ settings, form, setForm, onSave }) {
@@ -1107,7 +1710,7 @@ function IntegrationHealth({ health }) {
   return <div className="bg-white border border-slate-200 rounded-xl overflow-hidden max-w-2xl"><div className="p-4 border-b font-semibold">Device and integration health</div>{Object.entries(health || {}).map(([name, value]) => <div key={name} className="flex justify-between px-4 py-3 border-b border-slate-100 text-sm"><span className="capitalize">{name.replace(/([A-Z])/g, " $1")}</span><span className={value === "Connected" || value === "Configured" ? "text-emerald-700" : "text-slate-500"}>{value}</span></div>)}</div>;
 }
 
-function OnlinePlatformSettings({ onMessage, onError }) {
+function OnlinePlatformSettings({ onMessage, onError, onlyPlatform = null }) {
   const [platforms, setPlatforms] = useState([]);
   const [forms, setForms] = useState({});
   const [saving, setSaving] = useState("");
@@ -1123,12 +1726,29 @@ function OnlinePlatformSettings({ onMessage, onError }) {
     }
   };
 
+  /* T10-UBER-MENU: OnePOS -> Uber Eats menu synchronisation. */
+  const [uberMenuSync, setUberMenuSync] = useState({ busy: false, result: null });
+  const runUberMenuSync = async () => {
+    setUberMenuSync({ busy: true, result: null });
+    try {
+      const data = await apiRequest("/api/online/uber/sync-menu", { method: "POST" });
+      setUberMenuSync({ busy: false, result: data });
+      if (data.success) await load();
+    } catch (err) {
+      setUberMenuSync({ busy: false, result: { success: false, message: err.message || "Menu sync failed" } });
+    }
+  };
+
   const load = async () => {
     try {
       setLoading(true);
       const data = await apiRequest("/api/settings/online-platforms");
       if (!data.success) throw new Error(data.message || "Unable to load online platform settings");
-      const list = data.data || [];
+      /* When a specific platform section is open (Uber Eats / Deliveroo),
+         show only that platform. */
+      const list = onlyPlatform
+        ? (data.data || []).filter((platform) => platform.platform === onlyPlatform)
+        : data.data || [];
       setPlatforms(list);
       setForms(Object.fromEntries(list.map((platform) => [platform.platform, {
         enabled: platform.enabled === true,
@@ -1281,14 +1901,34 @@ function OnlinePlatformSettings({ onMessage, onError }) {
       {platform.platform === "uber" && (
         <div className="mt-4 border-t border-slate-200 pt-4">
           <div className="flex items-center gap-3 flex-wrap">
-            <button onClick={runUberConnectionTest} disabled={uberTest.busy} className="h-9 px-4 border border-slate-300 rounded-lg text-sm hover:bg-slate-50 disabled:opacity-50">
+            <button onClick={runUberConnectionTest} disabled={uberTest.busy || uberMenuSync.busy} className="h-9 px-4 border border-slate-300 rounded-lg text-sm hover:bg-slate-50 disabled:opacity-50">
               {uberTest.busy ? "Testing connection..." : "Test connection / Get sandbox IDs"}
+            </button>
+            <button onClick={runUberMenuSync} disabled={uberMenuSync.busy || uberTest.busy} className="h-9 px-4 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50">
+              {uberMenuSync.busy ? "Syncing menu..." : "Sync Menu to Uber"}
             </button>
             <button onClick={runUberConnectionTest} disabled={uberTest.busy} className="h-9 px-4 border border-slate-300 rounded-lg text-sm hover:bg-slate-50 disabled:opacity-50">
               {uberTest.busy ? "Refreshing..." : "Refresh stores"}
             </button>
-            <span className="text-xs text-slate-400">Calls the official Uber Get Stores endpoint (GET /v1/eats/stores) with the stored credentials and returns the real store/brand IDs.</span>
+            <span className="text-xs text-slate-400">Calls the official Uber Get Stores endpoint (GET /v1/eats/stores) with the stored credentials and returns the real store/brand IDs. Sync Menu publishes products marked "Available on Uber Eats" to the configured Uber store (sandbox or production per the Environment above) - onePOS data is never modified.</span>
           </div>
+          {uberMenuSync.result && (
+            <div className={`mt-3 rounded-lg border p-3 text-sm ${uberMenuSync.result.success ? "bg-emerald-50 border-emerald-200" : "bg-amber-50 border-amber-200"}`}>
+              <p className={`font-medium ${uberMenuSync.result.success ? "text-emerald-800" : "text-amber-800"}`}>{uberMenuSync.result.message || (uberMenuSync.result.success ? "Menu synced" : "Menu sync failed")}</p>
+              {uberMenuSync.result.data && (
+                <p className="text-xs text-slate-500 mt-1">
+                  {uberMenuSync.result.data.published} item(s) published across {uberMenuSync.result.data.categories} category/categories
+                  {uberMenuSync.result.data.skippedInactive ? `; ${uberMenuSync.result.data.skippedInactive} inactive product(s) skipped` : ""}
+                  {uberMenuSync.result.data.httpStatus ? ` - HTTP ${uberMenuSync.result.data.httpStatus}` : ""}
+                </p>
+              )}
+            </div>
+          )}
+          {(platform.menu_sync_last_success || platform.menu_sync_last_error) && (
+            <p className="text-xs text-slate-500 mt-2">
+              {platform.menu_sync_last_success ? `Last successful sync: ${new Date(platform.menu_sync_last_success).toLocaleString()}` : `Last sync error: ${platform.menu_sync_last_error}`}
+            </p>
+          )}
           {uberTest.result && (
             <div className={`mt-3 rounded-lg border p-3 text-sm ${uberTest.result.success ? "bg-emerald-50 border-emerald-200" : "bg-amber-50 border-amber-200"}`}>
               <p className={`font-medium ${uberTest.result.success ? "text-emerald-800" : "text-amber-800"}`}>{uberTest.result.message || (uberTest.result.success ? "Connection OK" : "Connection failed")}</p>
@@ -1331,4 +1971,6 @@ function OnlinePlatformSettings({ onMessage, onError }) {
 }
 
 export default SettingsAdmin;
+
+
 

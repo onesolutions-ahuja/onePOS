@@ -306,6 +306,39 @@ export default function createAdminRouter({
   });
 
   /*
+   * POST /api/admin/stores/:id/self-checkout-key
+   *
+   * Generate (or regenerate) the Self-Checkout device key for a store. The
+   * raw key is shown ONCE for pairing the Self-Checkout device; only a
+   * bcrypt hash is stored. Sending { clear: true } un-pairs the store
+   * (existing device sessions simply run out when their short-lived mode
+   * token expires — nothing else is affected).
+   * Admin/Owner only (canViewCompanyCustomers), like till management.
+   */
+  router.post("/admin/stores/:id/self-checkout-key", authenticate, async (req, res) => {
+    if (!(await canViewCompanyCustomers(req.user))) return res.status(403).json({ success: false, message: "Administrator permission required" });
+    try {
+      const store = await db("SELECT id FROM stores WHERE id = $1 AND company_id = $2", [req.params.id, req.user.companyId]);
+      if (!store.rows.length) return res.status(404).json({ success: false, message: "Store not found" });
+
+      if (req.body?.clear === true) {
+        await db("UPDATE stores SET self_checkout_key_hash = NULL, updated_at = NOW() WHERE id = $1", [req.params.id]);
+        return res.json({ success: true, message: "Self-Checkout pairing cleared for this store", data: { cleared: true } });
+      }
+
+      /* Unambiguous pairing key: 6 readable groups, no look-alike chars. */
+      const alphabet = "23456789ABCDEFGHJKMNPQRSTUVWXYZ";
+      const raw = Array.from({ length: 24 }, () => alphabet[Math.floor(Math.random() * alphabet.length)]).join("");
+      const grouped = raw.match(/.{1,4}/g).join("-");
+      const hash = await bcrypt.hash(raw, 10);
+      await db("UPDATE stores SET self_checkout_key_hash = $1, updated_at = NOW() WHERE id = $2", [hash, req.params.id]);
+      res.json({ success: true, message: "Self-Checkout device key generated — it is shown once, store it safely", data: { deviceKey: grouped, cleared: false } });
+    } catch (error) {
+      res.status(500).json({ success: false, message: "Unable to update the Self-Checkout device key" });
+    }
+  });
+
+  /*
    * PUT /api/admin/tills/:id
    */
   router.put("/admin/tills/:id", authenticate, async (req, res) => {

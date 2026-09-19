@@ -1,13 +1,20 @@
-import { Grid3X3, Package, RefreshCw, Search } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { Flame, Grid3X3, Package, RefreshCw, Search } from "lucide-react";
+import { apiRequest } from "../../services/api.js";
 
-const categories = [
-  "All",
-  "Food",
-  "Drinks",
-  "Snacks",
-  "Hot Drinks",
-  "Desserts",
-];
+/*
+ * Till product browser (image + compact views).
+ *
+ * Categories are loaded from the database via GET /api/categories
+ * (company-scoped, display_order preserved) — NOT hardcoded. A "Most
+ * Selling" pseudo-category at the top ranks products by transaction
+ * frequency (COUNT(DISTINCT sale_id), see routes/products.js), not by
+ * quantity. Presentation (image/compact) is driven by the company
+ * product_view setting; both views render the same product objects and
+ * call the same onAddProduct → existing basket flow.
+ */
+
+const MOST_SELLING = "__most_selling__";
 
 function ProductGrid({
   category,
@@ -19,8 +26,75 @@ function ProductGrid({
   onRetry,
   filtered,
   onAddProduct,
+  productView = "image",
   children,
 }) {
+  /* ------------------------------------------------ database categories */
+  const [dbCategories, setDbCategories] = useState([]);
+  const [mostSellingIds, setMostSellingIds] = useState(null); // null = not loaded / not selected
+
+  useEffect(() => {
+    let cancelled = false;
+    apiRequest("/api/categories", { signal: AbortSignal.timeout(10000) })
+      .then((data) => {
+        if (!cancelled && data.success && Array.isArray(data.data)) {
+          setDbCategories(data.data.map((c) => c.name).filter(Boolean));
+        }
+      })
+      .catch(() => {
+        /* Non-fatal: the pane still shows "All"/"Most Selling"; product
+           filtering by category name still works against product data. */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  /* --------------------------------------------- most-selling frequency */
+  useEffect(() => {
+    if (category !== MOST_SELLING || mostSellingIds !== null) return;
+    let cancelled = false;
+    apiRequest("/api/products/most-selling", { signal: AbortSignal.timeout(10000) })
+      .then((data) => {
+        if (cancelled) return;
+        if (data.success && Array.isArray(data.data)) {
+          // Server order = the frequency ranking. Search still narrows on top.
+          setMostSellingIds(data.data.map((p) => p.id));
+        } else {
+          setMostSellingIds([]);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setMostSellingIds([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [category, mostSellingIds]);
+
+  /* Reset the cached ranking when leaving Most Selling so re-entry
+     refetches fresh frequency data. */
+  useEffect(() => {
+    if (category !== MOST_SELLING) setMostSellingIds(null);
+  }, [category]);
+
+  const categoryItems = useMemo(
+    () => ["All", MOST_SELLING, ...dbCategories],
+    [dbCategories]
+  );
+
+  /* Most Selling: present products in ranked order (the filtered list keeps
+     search/active behaviour; ordering comes from the frequency ranking). */
+  const displayProducts = useMemo(() => {
+    if (category !== MOST_SELLING || !Array.isArray(mostSellingIds)) return filtered;
+    const rank = new Map(mostSellingIds.map((id, index) => [id, index]));
+    return [...filtered].sort((a, b) => {
+      const ra = rank.has(a.id) ? rank.get(a.id) : Number.MAX_SAFE_INTEGER;
+      const rb = rank.has(b.id) ? rank.get(b.id) : Number.MAX_SAFE_INTEGER;
+      return ra - rb;
+    });
+  }, [category, mostSellingIds, filtered]);
+
   return (
     <>
       <aside className="w-[150px] bg-white border-r border-slate-200 p-2 shrink-0 overflow-y-auto">
@@ -28,21 +102,23 @@ function ProductGrid({
           CATEGORIES
         </div>
 
-        {categories.map((item) => (
-          <button
-            key={item}
-            onClick={() =>
-              onCategoryChange(item)
-            }
-            className={`w-full text-left px-3 py-3 rounded-md mb-1 text-sm font-medium ${
-              category === item
-                ? "bg-blue-600 text-white"
-                : "text-slate-600 hover:bg-slate-100"
-            }`}
-          >
-            {item}
-          </button>
-        ))}
+        {categoryItems.map((item) => {
+          const label = item === MOST_SELLING ? "Most Selling" : item;
+          return (
+            <button
+              key={item}
+              onClick={() => onCategoryChange(item)}
+              className={`w-full text-left px-3 py-3 rounded-md mb-1 text-sm font-medium flex items-center gap-1.5 ${
+                category === item
+                  ? "bg-blue-600 text-white"
+                  : "text-slate-600 hover:bg-slate-100"
+              }`}
+            >
+              {item === MOST_SELLING && <Flame size={14} className="shrink-0" />}
+              <span className="truncate">{label}</span>
+            </button>
+          );
+        })}
       </aside>
 
       <section className="flex-1 flex flex-col min-w-0 p-3">
@@ -98,7 +174,7 @@ function ProductGrid({
                 </button>
               </div>
             </div>
-          ) : filtered.length === 0 ? (
+          ) : displayProducts.length === 0 ? (
             <div className="h-full flex items-center justify-center text-slate-400">
               <div className="text-center">
                 <Package
@@ -115,49 +191,79 @@ function ProductGrid({
                 </div>
               </div>
             </div>
+          ) : productView === "compact" ? (
+            /* ---------------------------------------- COMPACT VIEW */
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-1.5">
+              {displayProducts.map((product) => (
+                <button
+                  key={product.id}
+                  onClick={() => onAddProduct(product)}
+                  className="bg-white border border-slate-200 rounded-md px-3 h-11 flex items-center justify-between gap-2 text-left hover:border-blue-500 active:scale-[0.99] transition"
+                >
+                  <span className="min-w-0 flex-1">
+                    <span className="block font-medium text-sm truncate leading-tight">
+                      {product.name}
+                    </span>
+                    {product.sku ? (
+                      <span className="block text-[11px] text-slate-400 truncate leading-tight">
+                        {product.sku}
+                      </span>
+                    ) : null}
+                  </span>
+                  <span className="font-bold text-sm whitespace-nowrap">
+                    £{Number(product.price || 0).toFixed(2)}
+                  </span>
+                </button>
+              ))}
+            </div>
           ) : (
-            <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-2">
-              {filtered.map(
+            /* ------------------------------------------ IMAGE VIEW
+               Portrait-ish cards: narrower (5 columns on the till) with a
+               taller image box; images use object-contain so the WHOLE
+               photo compresses into the fixed box (never stretches the
+               box or gets cropped). */
+            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-2">
+              {displayProducts.map(
                 (product) => (
                   <button
                     key={product.id}
                     onClick={() =>
                       onAddProduct(product)
                     }
-                    className="bg-white border border-slate-200 rounded-md p-3 text-left hover:border-blue-500 hover:shadow-sm active:scale-[0.98] transition"
+                    className="bg-white border border-slate-200 rounded-md p-2 text-left hover:border-blue-500 hover:shadow-sm active:scale-[0.98] transition"
                   >
-                    <div className="h-20 bg-slate-100 rounded flex items-center justify-center">
+                    <div className="h-44 bg-slate-100 rounded flex items-center justify-center overflow-hidden">
+                      {product.imageUrl ? (
+                        <img
+                          src={product.imageUrl}
+                          alt={product.name}
+                          className="w-full h-full object-contain"
+                          loading="lazy"
+                          onError={(event) => {
+                            /* Broken/missing image: fall back to the placeholder. */
+                            event.currentTarget.style.display = "none";
+                            if (event.currentTarget.nextElementSibling) {
+                              event.currentTarget.nextElementSibling.style.display = "flex";
+                            }
+                          }}
+                        />
+                      ) : null}
                       <Package
-                        size={28}
+                        size={34}
                         className="text-slate-300"
+                        style={product.imageUrl ? { display: "none" } : undefined}
                       />
                     </div>
 
-                    <div className="font-semibold text-sm mt-2 line-clamp-2">
+                    <div className="font-semibold text-sm mt-2 line-clamp-2 leading-snug">
                       {product.name}
                     </div>
 
-                    <div className="text-xs text-slate-400 mt-1">
-                      {product.category}
-                    </div>
-
-                    {product.sku && (
-                      <div className="text-xs text-slate-400 mt-1">
-                        SKU:{" "}
-                        {product.sku}
-                      </div>
-                    )}
-
-                    <div className="font-bold text-lg mt-2">
+                    <div className="font-bold text-lg mt-1">
                       £
                       {Number(
                         product.price || 0
                       ).toFixed(2)}
-                    </div>
-
-                    <div className="text-xs text-slate-400 mt-1">
-                      Stock:{" "}
-                      {product.stock}
                     </div>
                   </button>
                 )

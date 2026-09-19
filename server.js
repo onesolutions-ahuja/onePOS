@@ -18,6 +18,7 @@ import createPurchasesRouter from "./routes/purchases.js";
 import createInventoryRouter from "./routes/inventory.js";
 import createSalesRouter from "./routes/sales.js";
 import createSelfCheckoutRouter, { createSelfCheckoutModeGate } from "./routes/selfCheckout.js";
+import createScanGoRouter from "./routes/scanAndGo.js";
 import createReturnsRouter from "./routes/returns.js";
 import createReportsRouter from "./routes/reports.js";
 import createSecureInvoiceRouter from "./routes/secureInvoice.js";
@@ -31,6 +32,7 @@ import createGlobalProductsRouter from "./routes/globalProducts.js";
 import createReplenishmentRouter from "./routes/replenishment.js";
 import createOnlineRouter from "./routes/online.js";
 import createCustomerAuthRouter from "./routes/customerAuth.js";
+import createAccountingExportRouter from "./routes/accountingExport.js"; // T10V - accounting integration export
 
 const { Pool } = pg;
 
@@ -102,6 +104,9 @@ const pool = process.env.DATABASE_URL
   : null;
 
 app.locals.pool = pool;
+/* T10P: Scan & Go checkout deducts stock through the SAME inventory ledger
+ * helper the till and online orders use (no second inventory mechanism). */
+app.locals.createInventoryMovement = createInventoryMovement;
 
 /*
  * A backend error on an idle pool connection (network blip, Postgres restart,
@@ -351,7 +356,13 @@ async function createInventoryMovement(client, {
   const currentBalance = Number(product.stock_quantity);
   const newBalance = currentBalance + quantity;
 
-  if (newBalance < 0) {
+  /*
+   * SALE movements may drive the balance negative: a paid sale is the
+   * authoritative record and must never be rolled back because stock ran
+   * out. Every other movement type (adjustments, returns, transfers…)
+   * still keeps the non-negative-balance guard.
+   */
+  if (newBalance < 0 && movementType !== "SALE") {
     throw new Error(`Insufficient stock for ${product.name}`);
   }
 
@@ -767,7 +778,11 @@ app.use(
 app.use("/api", createEanLookupRouter({ authenticate, db }));
 
 /* T10D: Self-Checkout session routes (enter/exit the restricted mode). */
-app.use("/api", createSelfCheckoutRouter({ authenticate, authorize, db, writeAudit }));
+app.use("/api", createSelfCheckoutRouter({ authenticate, authorize, db, bcrypt, writeAudit }));
+
+/* T10P: Scan & Go — customer scan sessions (token-authenticated, store/company
+ * resolved server-side from the session; see routes/scanAndGo.js). */
+app.use("/api", createScanGoRouter({ authenticate, db, pool, writeAudit }));
 
 app.use(
   "/api",
@@ -947,6 +962,21 @@ app.use(
   })
 );
 
+/*
+| T10V - accounting integration export: wires the T10W normalizers + T10X
+| dispatcher to real sale data over the existing T9A connection system.
+| All routes are accounting.export gated and company-scoped.
+*/
+app.use(
+  "/api/accounting",
+  createAccountingExportRouter({
+    authenticate,
+    authorize,
+    db,
+    writeAudit,
+  })
+);
+
 
 app.get("/api/held-sales", authenticate, authorize("sale.hold"), async (req, res) => {
   try {
@@ -962,12 +992,12 @@ app.get("/api/held-sales", authenticate, authorize("sale.hold"), async (req, res
 });
 
 app.post("/api/held-sales", authenticate, authorize("sale.hold"), async (req, res) => {
-  const { items, customerId = null, discountType = null, discountValue = 0, notes = null } = req.body;
+  const { items, miscLines, customerId = null, discountType = null, discountValue = 0, notes = null } = req.body;
   if (!Array.isArray(items) || !items.length) return res.status(400).json({ success: false, message: "Cannot hold an empty sale" });
   try {
     const result = await db(
       `INSERT INTO held_sales (company_id,store_id,user_id,customer_id,items,discount_type,discount_value,notes) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id,created_at`,
-      [req.user.companyId, req.user.storeId, req.user.id, customerId, JSON.stringify(items), discountType, Number(discountValue) || 0, notes || null]
+      [req.user.companyId, req.user.storeId, req.user.id, customerId, JSON.stringify({ items, miscLines: Array.isArray(miscLines) ? miscLines : [] }), discountType, Number(discountValue) || 0, notes || null]
     );
     res.status(201).json({ success: true, message: "Sale held", data: result.rows[0] });
   } catch (error) {
@@ -1379,7 +1409,21 @@ const distPath = path.join(__dirname, "dist");
  * entry point. These routes are registered after every API and secure invoice
  * route, so neither can be intercepted by the frontend fallback.
  */
-app.get(["/login", "/app", "/app/*"], (req, res) => {
+/*
+ * T10V: the offline service worker must be reachable as a real script.
+ * The app-shell route below answers every /app/* path with index.html and its
+ * extension guard 404s asset-like paths; both would break
+ * navigator.serviceWorker.register("/app/offline-sw.js"). Serve the worker
+ * itself first, uncached, so a rebuilt shell can always replace an older
+ * worker and purge that worker's stale shell cache.
+ */
+app.get("/app/offline-sw.js", (req, res) => {
+  res.set("Cache-Control", "no-store");
+  res.type("application/javascript");
+  res.sendFile(path.join(distPath, "app", "offline-sw.js"));
+});
+
+app.get(["/login", "/app", "/app/*", "/customer-display"], (req, res) => {
   /* T10V: never satisfy a missing static asset with HTML. A stale cached
      index.html can reference a hashed bundle that a rebuild replaced; serving
      HTML for the .js request turns the page blank. Return 404 instead so the

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Edit, Eye, Gift, Plus, RefreshCw, Search, UserPlus, Users, X } from "lucide-react";
+import { BookOpen, Edit, Eye, Gift, Plus, RefreshCw, Search, UserPlus, Users, X } from "lucide-react";
 import { apiRequest } from "../../services/api.js";
 import {
   Alert,
@@ -13,6 +13,7 @@ import {
   PageHeader,
 } from "../../components/ui.jsx";
 import CustomerLoyaltyModal from "./CustomerLoyaltyModal.jsx";
+import CustomerCreditModal from "./CustomerCreditModal.jsx";
 
 function CustomersAdmin() {
   const [customers, setCustomers] = useState([]);
@@ -23,6 +24,7 @@ function CustomersAdmin() {
   const [formCustomer, setFormCustomer] = useState(null);
   const [detailCustomer, setDetailCustomer] = useState(null);
   const [showLoyaltyModal, setShowLoyaltyModal] = useState(false);
+  const [showCreditModal, setShowCreditModal] = useState(false);
 
   const loadCustomers = async (value = search) => {
     try {
@@ -283,6 +285,15 @@ function CustomersAdmin() {
                         <Button
                           variant="ghost"
                           size="sm"
+                          onClick={() => { setDetailCustomer(customer); setShowCreditModal(true); }}
+                          className="px-2"
+                          title="Customer credit"
+                        >
+                          <BookOpen size={14} />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
                           onClick={() => setFormCustomer(customer)}
                           className="px-2"
                           title="Edit customer"
@@ -330,6 +341,12 @@ function CustomersAdmin() {
         <CustomerLoyaltyModal
           customer={detailCustomer}
           onClose={() => setShowLoyaltyModal(false)}
+        />
+      )}
+      {showCreditModal && (
+        <CustomerCreditModal
+          customer={detailCustomer}
+          onClose={() => setShowCreditModal(false)}
         />
       )}
     </div>

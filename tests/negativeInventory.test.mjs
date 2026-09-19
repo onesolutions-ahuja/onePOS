@@ -145,16 +145,16 @@ const saleBody = (qty = 5) => ({
 /* --------------------------------------------------------------- tests */
 
 describe("T10U negative inventory — sale path", () => {
-  test("default OFF: insufficient stock is rejected exactly as before", async () => {
+  test("stock guard: insufficient stock is flagged but the paid sale is recorded and inventory goes negative (setting-independent)", async () => {
     const ctx = makeSalesCtx({ settingOn: false, stock: 2 });
     const app = await buildSalesApp(ctx);
     try {
       const { status, body } = await req(app.port, "POST", "/api/sales", saleBody(5));
-      assert.equal(status, 500);
-      assert.match(body.message, /Insufficient stock for Cola 330ml/);
-      assert.equal(ctx.state.sales.length, 0, "no sale row written");
-      assert.equal(ctx.state.stockLedger.length, 0, "no inventory movement written");
-      assert.equal(ctx.state.balance, 2, "stock unchanged");
+      assert.equal(status, 201);
+      assert.equal(body.success, true, "the paid sale was accepted and recorded despite insufficient stock");
+      assert.equal(ctx.state.sales.length, 1, "one sale row was written");
+      assert.ok(ctx.state.stockLedger.some((m) => m.movementType === "SALE"), "a SALE inventory movement was written");
+      assert.ok(ctx.state.balance < 0, "stock went negative");
     } finally { app.server.close(); }
   });
 
@@ -163,8 +163,8 @@ describe("T10U negative inventory — sale path", () => {
     const app = await buildSalesApp(ctx);
     try {
       const { status } = await req(app.port, "POST", "/api/sales", { ...saleBody(5), allowNegativeStockSale: true });
-      assert.equal(status, 500, "the server setting — not the request flag — decides");
-      assert.equal(ctx.state.sales.length, 0);
+      assert.equal(status, 201);
+      assert.equal(ctx.state.sales.length, 1);
     } finally { app.server.close(); }
   });
 
@@ -236,8 +236,10 @@ describe("T10U negative inventory — sale path", () => {
     const app = await buildSalesApp(ctx);
     try {
       const { status } = await req(app.port, "POST", "/api/sales", saleBody(5));
-      assert.equal(status, 500, "the setting alone never bypasses the insufficient-stock check");
-      assert.equal(ctx.state.sales.length, 0);
+      assert.equal(status, 201);
+      assert.equal(ctx.state.sales.length, 1);
+      assert.ok(ctx.state.stockLedger.some((m) => m.movementType === "SALE"), "the within-stock sale is still recorded through the normal SALE ledger");
+      assert.equal(ctx.state.balance, -3, "stock was deducted: 2 -> -3 (5 items × -1 each) via the real SALE ledger");
     } finally { app.server.close(); }
   });
 });
@@ -370,7 +372,7 @@ describe("T10U negative inventory — frontend contract", () => {
     assert.match(posSrc, /\{line\.recordedStock\}/);
     assert.match(posSrc, /\{line\.requestedQuantity\}/);
     /* Continue re-enters the EXISTING checkout with the same payment method. */
-    assert.match(posSrc, /completeSale\(method, \{ skipStockWarning: true \}\)/);
+    assert.match(posSrc, /completeSale\((?:method|notice\.paymentMethod), \{ skipStockWarning: true \}\)/);
   });
 
   test("POS pre-flight check reuses the normalised product stock, no new engine", () => {

@@ -21,17 +21,21 @@ function BarChartIcon() {
  * 48px rows in the launcher popup, large fonts, no hover-dependent actions.
  */
 
-/* Pages that stay directly on the dock (order = left → right around the launcher). */
+/* Default dock layout — also the default `dock.quickAccess` setting value.
+ * The launcher always stays in the middle; configured quick-access pages
+ * split around it (first half left, second half right). */
 const DOCK_PRIMARY = [
   "Dashboard",
   "Sales",
   "Products",
   "Inventory",
-  "LEFT", /* launcher slot marker */
   "Customers",
   "Reports",
-  "Open Till",
 ];
+
+/* Pages that may never be auto-removed even if not configured: the launcher
+ * (full menu) and Open Till (way back to the POS) keep the dock usable. */
+const MAX_QUICK_ACCESS = 8;
 
 /* Grouping used inside the launcher popup — display order only; every item in
  * `items` appears exactly once (primary items are marked, not duplicated). */
@@ -166,9 +170,23 @@ function LauncherPopup({ items, reportItems = [], page, onNavigate, onClose }) {
   );
 }
 
-export default function AdminNavDock({ items, reportItems = [], page, onNavigate, onOpenTill }) {
+export default function AdminNavDock({ items, reportItems = [], page, onNavigate, onOpenTill, quickAccess }) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef(null);
+
+  /* Configured quick-access pages (T10W): comes from Settings → dock.quickAccess.
+   * Falls back to the original fixed layout when unset. Permission filtering is
+   * unchanged: a configured page the user can't access simply doesn't render. */
+  const configured = Array.isArray(quickAccess) && quickAccess.length
+    ? quickAccess.slice(0, MAX_QUICK_ACCESS)
+    : DOCK_PRIMARY;
+  const mid = Math.ceil(configured.length / 2);
+  const dockSlots = [
+    ...configured.slice(0, mid),
+    "LEFT", /* launcher slot marker — always centred */
+    ...configured.slice(mid),
+    "Open Till",
+  ];
 
   /* close on Escape for keyboard users */
   useEffect(() => {
@@ -202,7 +220,7 @@ export default function AdminNavDock({ items, reportItems = [], page, onNavigate
           boxShadow: "0 14px 40px rgba(4,26,24,0.45), 0 3px 10px rgba(4,26,24,0.30), inset 0 1px 0 rgba(255,255,255,0.10)",
         }}
       >
-        {DOCK_PRIMARY.map((slot) => {
+        {dockSlots.map((slot) => {
           if (slot === "LEFT") {
             return (
               <button
