@@ -3,10 +3,15 @@ import { AlertTriangle, Percent, ShoppingBag, X } from "lucide-react";
 import { apiRequest } from "../../services/api.js";
 import {
   isNetworkError,
-  onNetworkChange,
   isOnline,
   reportConnection,
 } from "../../services/networkStatus.js";
+import {
+  checkNow,
+  startConnectivityMonitoring,
+  stopConnectivityMonitoring,
+  subscribeConnectivity,
+} from "../../services/connectivity.js";
 import QueueDetailsModal from "./QueueDetailsModal.jsx";
 import {
   getTenantFromToken,
@@ -39,6 +44,7 @@ import TillSessionModal from "./TillSessionModal.jsx";
 import POSHeader from "./POSHeader.jsx";
 import CartPanel from "./CartPanel.jsx";
 import ProductGrid from "./ProductGrid.jsx";
+import MobileCartSheet from "./MobileCartSheet.jsx";
 import PaymentModal from "./PaymentModal.jsx";
 import CustomerSelectorModal from "./CustomerSelectorModal.jsx";
 import { MiscItemModal, PettyCashModal, PrintReceiptModal } from "./TillActionsModals.jsx";
@@ -530,15 +536,24 @@ function POS({
       applySnapshot
     );
 
-    const removeNetworkListener =
-      onNetworkChange(setOnline);
+    /* ONE authoritative connectivity source: POS state, the header icon and
+     * the offline-queue engine all follow services/connectivity.js. Its
+     * health probe feeds the queue's binary contract via reportConnection,
+     * so a reachable server can never show as OFFLINE just because the
+     * browser's navigator.onLine momentarily reports false. */
+    const unsubscribeConnectivity = subscribeConnectivity((snapshot) => {
+      setOnline(snapshot.server === "connected");
+    });
+    startConnectivityMonitoring({ intervalMs: 30000 });
+    void checkNow();
 
     const stopSync = startAutoSync();
 
     return () => {
       stopSync();
       unsubscribe();
-      removeNetworkListener();
+      unsubscribeConnectivity();
+      stopConnectivityMonitoring();
     };
   }, []);
 
