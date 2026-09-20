@@ -296,11 +296,17 @@ export default function createSettingsRouter({
         `UPDATE companies SET name = $1, legal_name = $2, email = $3, phone = $4, currency = $5, timezone = $6, logo_url = $7, updated_at = NOW() WHERE id = $8`,
         [String(companyName).trim(), legalName || null, companyEmail || null, companyPhone || null, currency || "GBP", timezone || "Europe/London", logoUrl || null, req.user.companyId]
       );
+      /* COALESCE($6/$9/$10) in VALUES: those columns are NOT NULL with row
+         defaults, and an INSERT ... VALUES clause may not reference existing
+         row columns — that is what made every settings save fail with
+         "column \"dock_quick_access\" does not exist" (HTTP 500). Omitted
+         fields fall back to the column default on insert; the ON CONFLICT
+         arm below keeps the stored value on update. */
       await client.query(
         `
         INSERT INTO company_settings (company_id, date_format, vat_enabled, default_vat_rate, loyalty_enabled, loyalty_earning_rate, scan_go_enabled, product_view, dock_quick_access, customer_display_enabled, online_ordering_enabled, online_payment_methods, till_invoice_prefix, delivery_invoice_prefix, self_checkout_invoice_prefix, updated_by, updated_at)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,COALESCE($8, 'image'),COALESCE($9::jsonb, dock_quick_access, '["Dashboard", "Sales", "Products", "Inventory", "Customers", "Reports"]'::jsonb),$10,$11,COALESCE($12::jsonb, '["card", "cash", "cod"]'::jsonb),COALESCE($13,'TO'),COALESCE($14,'DEL'),COALESCE($15,'SC'),$16,NOW())
-        ON CONFLICT (company_id) DO UPDATE SET date_format=$2, vat_enabled=$3, default_vat_rate=$4, loyalty_enabled=$5, loyalty_earning_rate=$6, scan_go_enabled=$7, product_view=COALESCE($8, company_settings.product_view), dock_quick_access=COALESCE($9::jsonb, company_settings.dock_quick_access), customer_display_enabled=COALESCE($10, company_settings.customer_display_enabled), online_ordering_enabled=$11, online_payment_methods=COALESCE($12::jsonb, company_settings.online_payment_methods), till_invoice_prefix=COALESCE($13, company_settings.till_invoice_prefix), delivery_invoice_prefix=COALESCE($14, company_settings.delivery_invoice_prefix), self_checkout_invoice_prefix=COALESCE($15, company_settings.self_checkout_invoice_prefix), updated_by=$16, updated_at=NOW()
+        VALUES ($1,$2,$3,$4,$5,COALESCE($6, 0.0100),$7,COALESCE($8, 'image'),COALESCE($9::jsonb, '["Dashboard", "Sales", "Products", "Inventory", "Customers", "Reports"]'::jsonb),COALESCE($10, false),$11,COALESCE($12::jsonb, '["card", "cash", "cod"]'::jsonb),COALESCE($13,'TO'),COALESCE($14,'DEL'),COALESCE($15,'SC'),$16,NOW())
+        ON CONFLICT (company_id) DO UPDATE SET date_format=$2, vat_enabled=$3, default_vat_rate=$4, loyalty_enabled=$5, loyalty_earning_rate=COALESCE($6, company_settings.loyalty_earning_rate), scan_go_enabled=$7, product_view=COALESCE($8, company_settings.product_view), dock_quick_access=COALESCE($9::jsonb, company_settings.dock_quick_access), customer_display_enabled=COALESCE($10, company_settings.customer_display_enabled), online_ordering_enabled=$11, online_payment_methods=COALESCE($12::jsonb, company_settings.online_payment_methods), till_invoice_prefix=COALESCE($13, company_settings.till_invoice_prefix), delivery_invoice_prefix=COALESCE($14, company_settings.delivery_invoice_prefix), self_checkout_invoice_prefix=COALESCE($15, company_settings.self_checkout_invoice_prefix), updated_by=$16, updated_at=NOW()
         `,
         [
           req.user.companyId,

@@ -128,6 +128,19 @@ function makeDb() {
       return { rows: [{ company_id: params[0], company_name: "Co", product_view: view, dock_quick_access: dock, customer_display_enabled: cd === undefined ? null : cd, store_id: STORE_1, store_name: "London", till_id: null, till_name: null, terminal_number: null }] };
     }
     if (/INSERT INTO company_settings \(company_id, date_format/.test(s)) {
+      /* SQL-shape guards — reproduce the real Postgres failures the fake rows()
+         cannot otherwise see. T10W regression: the PUT once referenced the bare
+         column dock_quick_access inside INSERT ... VALUES (illegal — Postgres
+         answers `column "dock_quick_access" does not exist`), so every whole-form
+         settings save 500'd and the dock picker never persisted. It also passed
+         a raw null for NOT NULL customer_display_enabled. */
+      const valuesPart = s.split(/ON CONFLICT/)[0].replace(/^[\s\S]*?VALUES\s*\(/, "");
+      if (/\bdock_quick_access\b/.test(valuesPart)) {
+        throw new Error('column "dock_quick_access" does not exist');
+      }
+      if (params[9] == null && !/COALESCE\(\$10/.test(valuesPart)) {
+        throw new Error('null value in column "customer_display_enabled" of relation "company_settings" violates not-null constraint');
+      }
       /* Mirror the route's COALESCE: null keeps the stored value. */
       const next = params[7] == null ? (state.settings.get(params[0]) || "image") : params[7];
       state.settings.set(params[0], next);
@@ -529,6 +542,28 @@ describe("T10W dock quick-access setting (backend)", () => {
     } finally {
       server.close();
     }
+  });
+
+  test("PUT upsert SQL is valid Postgres: INSERT ... VALUES never references row columns (T10W regression)", () => {
+    /* The whole-form settings PUT once COALESCed the bare column
+       dock_quick_access inside INSERT ... VALUES — illegal in Postgres
+       (`column "dock_quick_access" does not exist`) — and inserted a raw
+       null into NOT NULL customer_display_enabled. Every settings save,
+       including every Dock Quick Access change, failed with 500 and the
+       picker showed its error instead of persisting. */
+    const src = fs.readFileSync(new URL("../routes/settings.js", import.meta.url), "utf8");
+    const match = src.match(/INSERT INTO company_settings \(company_id, date_format[\s\S]*?`/);
+    assert.ok(match, "the settings PUT upsert statement exists");
+    const sql = match[0];
+    const valuesPart = sql.split(/ON CONFLICT/)[0].replace(/^[\s\S]*?VALUES\s*\(/, "");
+    assert.ok(!/\bdock_quick_access\b/.test(valuesPart),
+      "VALUES clause must not reference the dock_quick_access column (only ON CONFLICT may)");
+    assert.ok(/COALESCE\(\$10, false\)/.test(valuesPart),
+      "NOT NULL customer_display_enabled falls back to its column default in VALUES");
+    assert.ok(/COALESCE\(\$6, 0\.0100\)/.test(valuesPart),
+      "NOT NULL loyalty_earning_rate falls back to its column default in VALUES");
+    assert.ok(/dock_quick_access=COALESCE\(\$9::jsonb, company_settings\.dock_quick_access\)/.test(sql),
+      "ON CONFLICT arm keeps the stored dock list when dockQuickAccess is omitted");
   });
 
   test("company isolation: company B never sees company A's dock list", async () => {
