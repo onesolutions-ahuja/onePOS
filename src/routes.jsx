@@ -113,8 +113,10 @@ export function MarketingRoutes() {
         <Route path="resources" element={<ResourcesPage />} />
         <Route path="faq" element={<FAQPage />} />
 
-        {/* Diagnostics */}
-        <Route path="offline-queue" element={<LoginGate element={<OfflineQueueDebug />} />} />
+        {/* Diagnostics — OfflineQueueDebug is read-only and device-local; it
+            renders "(empty or not logged in)" when no session token exists,
+            so the marketing bundle must never reference an auth gate here. */}
+        <Route path="offline-queue" element={<OfflineQueueDebug />} />
         <Route path="product" element={<LegacyRedirect to="/pos" />} />
         <Route path="product/:feature" element={<LegacyFeatureRedirect />} />
         <Route path="online-delivery" element={<LegacyRedirect to="/online-orders" />} />

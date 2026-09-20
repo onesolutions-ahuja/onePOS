@@ -149,7 +149,7 @@ export default function createProductsRouter({ authenticate, authorize, db, pool
         INNER JOIN products p ON p.id = si.product_id
           AND p.company_id = $1
           AND p.active = true
-          AND p.sku <> 'MISC' /* Misc Item lines are not a product ranking */
+          AND p.sku IS DISTINCT FROM 'MISC' /* Misc Item lines are not a product ranking. IS DISTINCT FROM is NULL-safe: a plain "sku <> 'MISC'" comparison evaluates to NULL for SKU-less rows and silently drops them from the ranking. */
         LEFT JOIN categories c ON c.id = p.category_id
         GROUP BY p.id, c.name
         ORDER BY
@@ -355,7 +355,12 @@ export default function createProductsRouter({ authenticate, authorize, db, pool
           ON c.id = p.category_id
         WHERE p.company_id = $1
           AND p.active = true
-          AND p.sku <> 'MISC'
+          /* Exclude only the MISC placeholder. The legacy "sku <> 'MISC'" form is NOT NULL-safe:
+           * for a row with sku IS NULL (e.g. every product added from the
+           * Global Product Master, which has no SKU) the comparison yields
+           * NULL and the row silently disappears from the Products page and
+           * the till grid even though the create returned 201. */
+          AND p.sku IS DISTINCT FROM 'MISC'
         ORDER BY p.name
         `,
         [req.user.companyId]

@@ -200,7 +200,16 @@ describe("T10V wiring — SettingsAdmin + server", () => {
   });
 
   test("server serves the SPA shell for every /app/* deep link (direct URL load works)", () => {
-    assert.match(serverSrc, /app\.get\(\["\/login", "\/app", "\/app\/\*"\]/, "existing catch-all serves deep links");
+    /* The app-shell route array also carries /customer-display (the standalone
+       second-screen page), so pin the three operational paths as the array
+       prefix instead of freezing the whole literal — a new shell route must
+       not break an unrelated routing contract. */
+    assert.match(
+      serverSrc,
+      /app\.get\(\["\/login", "\/app", "\/app\/\*"(?:,\s*"[^"]+")*\]/,
+      "existing catch-all serves deep links"
+    );
+    assert.match(serverSrc, /"\/customer-display"/, "customer display is an app-shell route");
     assert.match(serverSrc, /distPath, "app", "index\.html"\)/);
   });
 });

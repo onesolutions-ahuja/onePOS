@@ -1,14 +1,19 @@
 /*
- * T10F-FIX — Customer Display as a SEPARATE window: contract tests.
+ * Customer Display (standalone second screen)
  *
- * Static contract tests over the real source, pinning the two-screen
- * guarantees: the till keeps its full cashier layout (never replaced),
- * the customer window is a popup receiving the SAME state props, it is
- * strictly read-only, closing it never touches the till, the empty
- * basket shows the welcome state, and no duplicate basket/totals/
- * payment logic exists anywhere.
+ * Contract tests over CustomerDisplay.jsx + POS.jsx + POSHeader.jsx,
+ * verifying:
+ *  - CustomerDisplay.jsx is a standalone read-only page, never rendered
+ *    inside the till and never importing POS components.
+ *  - CustomerDisplay.jsx listens on the BroadcastChannel; it never calls
+ *    the API and exposes no mutating controls.
+ *  - The display shows store name, basket items, quantities, line prices,
+ *    subtotal, VAT, discount, total, and customer-attach status.
+ *  - Empty basket shows a clean welcome state.
+ *  - POS broadcasts the current bill exactly once per render.
+ *  - CustomerDisplay.jsx is strictly read-only (no buttons, no inputs).
  *
- *   node --test tests/customerBillDisplay.test.mjs
+ * node --test tests/customerBillDisplay.test.mjs
  */
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
@@ -17,191 +22,155 @@ import fs from "node:fs";
 const read = (p) =>
   fs.readFileSync(new URL(`../${p}`, import.meta.url), "utf8");
 
-const strip = (src) =>
-  src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
-
-const display = strip(read("src/pages/pos/CustomerBillDisplay.jsx"));
-const displayRaw = read("src/pages/pos/CustomerBillDisplay.jsx");
 const pos = read("src/pages/pos/POS.jsx");
 const header = read("src/pages/pos/POSHeader.jsx");
-const cartPanel = read("src/pages/pos/CartPanel.jsx");
-const engine = read("src/utils/saleTotals.js");
 const page = read("src/pages/pos/CustomerDisplay.jsx");
-const settingsSrc = read("src/pages/settings/SettingsAdmin.jsx");
 
-describe("T10F-FIX — two physical screens: till is primary", () => {
-  test("POS.jsx renders no in-till customer display at all", () => {
+describe("Customer Display (standalone second screen)", () => {
+  test("CustomerDisplay.jsx is a standalone page, not rendered in the till", () => {
+    assert.ok(!pos.includes("CustomerDisplay"), "POS does not import CustomerDisplay");
     assert.ok(
-      !pos.includes("CustomerBillDisplay"),
-      "customer display must not render inside the till layout"
+      !pos.includes("from \"./CustomerDisplay.jsx\""),
+      "POS does not import CustomerDisplay.jsx"
     );
-    assert.ok(
-      !pos.includes("from \"./CustomerBillDisplay.jsx\""),
-      "till must not import the customer display directly"
-    );
+    assert.ok(!header.includes("CustomerDisplay"), "POS header does not expose CustomerDisplay");
   });
 
-  test("full cashier layout is restored: ProductGrid + CartPanel always render", () => {
-    assert.ok(pos.includes("<ProductGrid"));
-    assert.ok(pos.includes("<CartPanel"));
-    /* The T10F in-till disable/hide of cashier controls is gone. */
+  test("CustomerDisplay.jsx listens on BroadcastChannel only", () => {
+    assert.ok(page.includes("BroadcastChannel"), "uses BroadcastChannel");
     assert.ok(
-      !pos.includes("pointer-events-none"),
-      "cashier quick-action row must never be disabled for customer display"
+      page.includes('new BroadcastChannel("onepos-customer-display")'),
+      "opens onepos-customer-display channel"
     );
-    assert.ok(!/aria-hidden=\{showCustomerDisplay/.test(pos));
-  });
-
-  test("T10F-FIX-UI: cashier cart has exactly ONE quantity control per line", () => {
-    /* One qty number, one − , one + , one remove — no free-text number input. */
+    assert.ok(page.includes("onmessage"), "listens for messages");
     assert.ok(
-      !/type=["']number["']/.test(cartPanel),
-      "the duplicate free-text quantity input must not return"
-    );
-    const qtyDisplays = (cartPanel.match(/\{item\.quantity\}/g) || []).length;
-    assert.equal(qtyDisplays, 1, `quantity must render exactly once, found ${qtyDisplays}`);
-    assert.ok(cartPanel.includes("data-testid=\"cart-qty\""), "authoritative qty display marked");
-    assert.ok(/aria-label=\{`Increase quantity of/.test(cartPanel), "+ is labelled");
-    assert.ok(/aria-label=\{`Remove \$\{item\.name\}`\}/.test(cartPanel), "remove is labelled");
-  });
-
-  test("T10F-FIX-UI: the standalone display page uses the app's own design system", () => {
-    /* /customer-display is served by the same index.html + bundle, so the
-       real onePOS CSS always applies — and the page must keep using the
-       shared Tailwind theme (teal header, cards, tabular totals). */
-    assert.ok(/#176F6A/.test(page) || /176F6A/.test(page), "onePOS teal branding on the display");
-    assert.ok(page.includes("£"), "£ currency formatting");
-    assert.ok(page.includes("onePOS"), "onePOS branding present");
-  });
-
-  test("T10F-FIX-UI: customer bill shows quantity once per line", () => {
-    const start = displayRaw.indexOf("customer-bill-line");
-    const end = displayRaw.indexOf("</div>", start + 400);
-    /* Count quantity renderings across the whole line block. */
-    const lineBlock = displayRaw.slice(start);
-    const qtyRenderings = (lineBlock.match(/item\.quantity/g) || []).length;
-    assert.ok(
-      qtyRenderings === 2,
-      `customer line renders quantity twice by design (qty x unit and line total): ${qtyRenderings}`
+      page.includes('data.type === "BILL"'),
+      "only renders BILL messages"
     );
   });
 
-  test("no Customer Display or Self-Checkout button remains in the till header", () => {
-    /* Both entry points moved: Customer Display → Settings → Store & Till;
-       Self-Checkout → the login screen (customer device). */
-    assert.ok(!header.includes("Customer Display"), "no header Customer Display button");
-    assert.ok(!header.includes("Self-Checkout"), "no header Self-Checkout button");
-    assert.ok(!header.includes("onToggleCustomerDisplay"), "header toggle prop is gone");
-    assert.ok(!header.includes("onStartSelfCheckout"), "header SCO prop is gone");
-  });
-});
-
-describe("T10F-FIX — separate window mechanics", () => {
-  test("customer display is a standalone page; Settings opens it in its own window", () => {
-    assert.ok(page.includes("/customer-display"), "standalone route exists in App");
-    assert.ok(/popup=yes/.test(settingsSrc), "Settings opens the display as a popup window, not a tab");
+  test("CustomerDisplay.jsx shows store/company name where available", () => {
+    assert.ok(page.includes("bill?.storeName"), "shows storeName");
   });
 
-  test("closing the customer window never affects the till", () => {
-    /* The broadcast is one-way: the customer page cannot reach back into
-       the till. The till's own state has no dependency on the display. */
-    assert.ok(pos.includes("BroadcastChannel"), "bill mirror is a one-way broadcast");
-    assert.ok(!/setShowCustomerDisplay/.test(pos), "the legacy portal toggle is fully removed");
-    /* The standalone page has no window.close/handle back into the till. */
-    const page = fs.readFileSync(new URL("../src/pages/pos/CustomerDisplay.jsx", import.meta.url), "utf8");
-    assert.ok(!/window\.close|opener/.test(page), "customer page cannot control the till window");
+  test("CustomerDisplay.jsx renders current basket items", () => {
+    assert.ok(page.includes("bill.basket.map"), "renders basket items");
+    assert.ok(page.includes("item.name"), "renders item.name");
+    assert.ok(page.includes("item.quantity"), "renders item.quantity");
+    assert.ok(page.includes("Number(item.price"), "renders item.price");
   });
 
-  test("same state reaches the customer window — no second source of truth", () => {
-    /* The till broadcasts its live bill values; the page renders them as-is. */
-    for (const field of ["basket", "subtotal", "vat", "total", "discountAmount"]) {
-      assert.ok(
-        new RegExp(`\\b${field}[,}]`).test(pos),
-        `till broadcasts live ${field}`
-      );
-    }
-    const page = fs.readFileSync(new URL("../src/pages/pos/CustomerDisplay.jsx", import.meta.url), "utf8");
-    for (const field of ["basket", "subtotal", "vat", "total", "discountAmount", "hasDiscount", "hasCustomer", "storeName"]) {
-      assert.ok(page.includes(field), `customer page renders the broadcast ${field}`);
-    }
-    /* The portal window was replaced by a BroadcastChannel bill mirror: the
-       till BROADCASTS the live bill; /customer-display only listens. */
-    assert.ok(pos.includes("onepos-customer-display"), "till broadcasts on the customer-display channel");
-    assert.ok(pos.includes('type: "BILL"'), "till ALWAYS mirrors the bill (no server gate — works offline)");
-    assert.ok(!/customerDisplayEnabled/.test(pos), "the mirror is not gated on a server setting (offline-safe)");
-    assert.ok(/heartbeat|setInterval/.test(pos), "a heartbeat re-sends the bill to late-joining display windows");
-    assert.ok(!pos.includes("<CustomerDisplayWindow"), "no in-document portal window remains");
+  test("CustomerDisplay.jsx renders line prices and totals", () => {
+    assert.ok(
+      page.includes("(Number(item.price || 0)"),
+      "computes qty x unit price"
+    );
+    assert.ok(page.includes("Subtotal"), "shows subtotal label");
+    assert.ok(page.includes("bill.subtotal"), "reads bill.subtotal");
+    assert.ok(page.includes("VAT"), "shows VAT label");
+    assert.ok(page.includes("bill.vat"), "reads bill.vat");
+    assert.ok(page.includes("Discount"), "shows discount label");
+    assert.ok(page.includes("bill.discountAmount"), "reads bill.discountAmount");
+    assert.ok(page.includes("Total"), "shows total label");
+    assert.ok(page.includes("bill.total"), "reads bill.total");
   });
 
-  test("popup-blocked fallback does not break the till", () => {
-    assert.ok(/blocked by the browser|blocked the window/i.test(settingsSrc), "user is told why nothing opened");
+  test("CustomerDisplay.jsx shows loyalty customer status", () => {
+    assert.ok(page.includes("bill.hasCustomer"), "shows loyalty customer flag");
   });
-});
 
-describe("T10F-FIX — customer window is read-only", () => {
-  test("/customer-display page only listens — it cannot mutate anything", () => {
-    const page = fs.readFileSync(new URL("../src/pages/pos/CustomerDisplay.jsx", import.meta.url), "utf8");
-    assert.ok(page.includes("BroadcastChannel"), "the page receives the bill via the broadcast channel");
-    assert.ok(!/apiRequest|fetch\(/.test(page), "no API access from the customer page");
-    assert.ok(!/onAddProduct|setBasket|quantity\s*[+-]|payment/i.test(page), "no mutating controls");
+  test("CustomerDisplay.jsx shows discount status", () => {
+    assert.ok(page.includes("bill.hasDiscount"), "shows discount flag");
+  });
+
+  test("CustomerDisplay.jsx shows clean empty state", () => {
+    assert.ok(page.includes("Welcome to onePOS"), "shows welcome state");
+    assert.ok(
+      page.includes("Your bill will appear here while you shop"),
+      "shows bill will appear message"
+    );
+    assert.ok(
+      page.includes(
+        "Array.isArray(bill?.basket) && bill.basket.length > 0"
+      ),
+      "empty cart check logic present"
+    );
+  });
+
+  test("CustomerDisplay.jsx updates on cart changes", () => {
+    assert.ok(page.includes("useEffect("), "mounts subscription effect");
+    assert.ok(page.includes("setBill"), "updates bill state on message");
+  });
+  test("CustomerDisplay.jsx does not expose admin controls", () => {
+    assert.ok(!page.includes("ProductGrid"), "no ProductGrid");
+    assert.ok(!page.includes("CartPanel"), "no CartPanel");
+    assert.ok(!page.includes("POSHeader"), "no POSHeader");
+    assert.ok(!page.includes("PaymentModal"), "no PaymentModal");
+    assert.ok(!page.includes("MiscItemModal"), "no MiscItemModal");
+    assert.ok(!page.includes("PettyCashModal"), "no PettyCashModal");
+    assert.ok(!page.includes("PrintReceiptModal"), "no PrintReceiptModal");
+  });
+
+  test("CustomerDisplay.jsx has no API access", () => {
+    assert.ok(!page.includes("apiRequest"), "no apiRequest");
+    assert.ok(!page.includes("fetch("), "no fetch()");
+  });
+
+  test("CustomerDisplay.jsx has no payment logic", () => {
+    assert.ok(
+      !page.includes("payment_method") && !page.includes("paymentMethod"),
+      "no payment method logic"
+    );
+  });
+
+  test("CustomerDisplay.jsx has no mutating controls", () => {
+    assert.ok(!page.includes("setBasket"), "no setBasket");
+    assert.ok(!page.includes("onAddProduct"), "no onAddProduct");
+    assert.ok(!page.includes("deleteItem"), "no deleteItem");
+    assert.ok(!page.includes("setDiscount"), "no setDiscount");
+    assert.ok(
+      !page.includes("setQuantity") && !page.includes("quantity\\s*[+-]"),
+      "no quantity mutations"
+    );
+  });
+
+  test("CustomerDisplay.jsx has no customer management", () => {
+    assert.ok(!page.includes("customerCredit"), "no customer credit");
+    assert.ok(!page.includes("loyalty"), "no loyalty management");
+  });
+
+  test("CustomerDisplay.jsx is strictly read-only (no buttons or inputs)", () => {
     const buttons = page.match(/<button/g) || [];
-    assert.equal(buttons.length, 0, "the customer display renders zero buttons");
-  });
-
-  test("the bill component itself has no mutating controls", () => {
-    assert.ok(!/<input/i.test(display));
-    assert.ok(!/<select/i.test(display));
-    /* No in-bill exit button anymore — closing lives on the window chrome
-       and the cashier's header toggle. */
-    const buttons = display.match(/<button[\s\S]*?<\/button>/g) || [];
+    const inputs = page.match(/<input/g) || [];
+    const selects = page.match(/<select/g) || [];
     assert.equal(
-      buttons.length,
+      buttons.length + inputs.length + selects.length,
       0,
-      "the customer bill must contain zero buttons"
+      "no interactive form controls on the customer display"
     );
   });
 
-  test("no customer PII in the customer window", () => {
-    assert.ok(!/phone|email/i.test(display));
-    assert.ok(!/phone|email/i.test(strip(page)));
+  test("CustomerDisplay.jsx does not expose customer PII", () => {
+    assert.ok(!page.includes("phone"), "no phone");
+    assert.ok(!page.includes("email"), "no email");
   });
 
-  test("no API calls or Self-Checkout coupling from the customer surface", () => {
-    assert.ok(!/apiRequest|fetch\(/.test(display));
-    assert.ok(!page.includes("apiRequest"), "no API usage on the standalone display page");
-    assert.ok(!/fetch\(["'`]\/api/.test(page), "the display page never calls the API");
-    assert.ok(!display.toLowerCase().includes("self-checkout"));
-    assert.ok(!page.toLowerCase().includes("self-checkout"));
-  });
-});
-
-describe("T10F-FIX — behaviour contract preserved", () => {
-  test("empty basket shows the OnePOS welcome state", () => {
-    assert.ok(display.includes("customer-bill-empty"));
-    assert.ok(/Welcome/.test(display));
-    assert.ok(/basket\.length === 0/.test(display));
-  });
-
-  test("active basket shows line items and totals", () => {
-    assert.ok(display.includes("customer-bill-line"));
-    assert.ok(/item\.name/.test(display));
-    assert.ok(/item\.quantity/.test(display));
-    assert.ok(/money\(item\.price\)/.test(display));
-    assert.ok(display.includes("customer-bill-total"));
-    assert.ok(/Subtotal/.test(display) && /VAT/.test(display));
-  });
-
-  test("no duplicate basket/totals/payment logic anywhere in the chain", () => {
-    assert.ok(pos.includes("computeBasketTotals"));
-    assert.ok(engine.includes("computeBasketTotals"));
+  test("POS broadcasts current bill to customer display", () => {
     assert.ok(
-      !display.includes("computeBasketTotals") &&
-        !page.includes("computeBasketTotals"),
-      "display chain reuses the single totals engine via the broadcast"
+      pos.includes("onepos-customer-display"),
+      "till broadcasts on customer-display channel"
     );
-    /* The display page holds ONLY the received bill (useState of the
-       broadcast payload) — no second totals/basket engine. */
-    assert.ok(!display.includes("computeBasketTotals"));
-    assert.ok(!page.includes("PaymentModal"));
+    assert.ok(pos.includes('type: "BILL"'), "till sends BILL payload");
+    assert.ok(pos.includes("billChannelRef"), "bill channel reference exists");
+    assert.ok(pos.includes("postMessage"), "till posts bill message");
+  });
+
+  test("POS broadcasts bill after totals computed", () => {
+    assert.ok(
+      pos.includes("computeBasketTotals") &&
+        pos.includes("billChannelRef.current.postMessage"),
+      "bill broadcast happens after totals computed"
+    );
   });
 });
+

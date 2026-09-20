@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">onePOS</string>
+    <string name="title_activity_main">onePOS</string>
+    <string name="package_name">com.onesolutions.onepos</string>
+    <string name="custom_url_scheme">com.onesolutions.onepos</string>
+</resources>

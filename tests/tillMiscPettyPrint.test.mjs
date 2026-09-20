@@ -225,15 +225,20 @@ function makeDb() {
     }
 
     /* ---- GET /api/products (till list) ---- */
+    /* Mock mirrors Postgres three-valued logic: with the OLD `sku <> 'MISC'
+     * shape a NULL sku row was silently dropped (NULL <> 'MISC' -> NULL);
+     * with the NULL-safe `sku IS DISTINCT FROM 'MISC'` shape it is kept. */
     if (/FROM products p LEFT JOIN categories c ON c\.id = p\.category_id/.test(s)) {
       const active = /p\.active = true/.test(s);
-      const excludeMisc = /p\.sku <> 'MISC'/.test(s);
-      const list = state.products.filter(
-        (p) =>
-          p.company_id === params[0] &&
-          (!active || p.active) &&
-          (!excludeMisc || p.sku !== "MISC")
-      );
+      const nullSafeMisc = /p\.sku\s+IS\s+DISTINCT\s+FROM\s+'MISC'/.test(s);
+      const excludeMiscLegacy = /p\.sku\s*<>\s*'MISC'/.test(s);
+      const list = state.products.filter((p) => {
+        if (p.company_id !== params[0]) return false;
+        if (active && !p.active) return false;
+        if (nullSafeMisc) return p.sku !== "MISC";
+        if (excludeMiscLegacy) return p.sku != null && p.sku !== "MISC";
+        return true;
+      });
       return { rows: list };
     }
 

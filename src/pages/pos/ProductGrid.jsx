@@ -97,7 +97,7 @@ function ProductGrid({
 
   return (
     <>
-      <aside className="w-[150px] bg-white border-r border-slate-200 p-2 shrink-0 overflow-y-auto">
+      <aside className="hidden md:flex md:w-[120px] xl:w-[150px] bg-white border-r border-slate-200 p-2 shrink-0 overflow-y-auto">
         <div className="text-[10px] font-bold text-slate-400 px-2 py-2">
           CATEGORIES
         </div>
@@ -122,6 +122,30 @@ function ProductGrid({
       </aside>
 
       <section className="flex-1 flex flex-col min-w-0 p-3">
+        {/* Phone tier (<md): the 150px fixed category rail becomes a
+            horizontally scrollable chip row — same onCategoryChange
+            contract, purely presentational. Hidden at md+, where the
+            vertical rail above takes over. */}
+        <div className="md:hidden -mx-1 mb-2 flex items-center gap-1.5 overflow-x-auto pb-1">
+          {categoryItems.map((item) => {
+            const label = item === MOST_SELLING ? "Most Selling" : item;
+            return (
+              <button
+                key={item}
+                onClick={() => onCategoryChange(item)}
+                className={`shrink-0 whitespace-nowrap px-3 py-2 rounded-full text-xs font-medium border ${
+                  category === item
+                    ? "bg-blue-600 text-white border-blue-600"
+                    : "bg-white text-slate-600 border-slate-200"
+                }`}
+              >
+                {item === MOST_SELLING && <Flame size={12} className="inline mr-1 -mt-0.5" />}
+                {label}
+              </button>
+            );
+          })}
+        </div>
+
         <div className="flex gap-2 mb-3">
           <div className="relative flex-1">
             <Search
@@ -147,10 +171,10 @@ function ProductGrid({
 
           <button
             onClick={onRetry}
-            className="px-4 h-12 bg-white border border-slate-200 rounded-md text-sm hover:bg-slate-50 flex items-center gap-2"
+            className="shrink-0 px-3 sm:px-4 h-12 bg-white border border-slate-200 rounded-md text-sm hover:bg-slate-50 flex items-center gap-2"
           >
             <RefreshCw size={16} />
-            Refresh
+            <span className="hidden sm:inline">Refresh</span>
           </button>
         </div>
 
@@ -222,7 +246,7 @@ function ProductGrid({
                taller image box; images use object-contain so the WHOLE
                photo compresses into the fixed box (never stretches the
                box or gets cropped). */
-            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-2">
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-2">
               {displayProducts.map(
                 (product) => (
                   <button

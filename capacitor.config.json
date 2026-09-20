@@ -1,0 +1,8 @@
+{
+  "appId": "com.onesolutions.onepos",
+  "appName": "onePOS",
+  "webDir": "dist",
+  "android": {
+    "allowMixedContent": true
+  }
+}

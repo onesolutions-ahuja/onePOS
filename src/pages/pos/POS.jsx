@@ -1541,7 +1541,7 @@ function POS({
   ========================================================= */
 
   return (
-    <div className="h-screen bg-slate-100 flex flex-col overflow-hidden">
+    <div className="h-[100dvh] bg-slate-100 flex flex-col overflow-hidden">
 
       <POSHeader
         loadingTill={loadingTill}
@@ -1668,7 +1668,10 @@ function POS({
           onAddProduct={add}
           productView={productView}
         >
-          <div className="h-[58px] bg-white border border-slate-200 rounded-md mt-3 flex items-center gap-2 px-2">
+          {/* Till action bar — 8 buttons do not fit side by side below the
+              till tier, so the row wraps on tablet/phone instead of being
+              clipped by the root overflow-hidden. Same handlers, same order. */}
+          <div className="min-h-[58px] bg-white border border-slate-200 rounded-md mt-3 px-2 py-1.5 flex flex-wrap items-center gap-2">
 
             <button
               onClick={holdSale}
@@ -1761,8 +1764,14 @@ function POS({
           </div>
         </ProductGrid>
 
-        <CartPanel
-          basket={basket}
+        {/* Cart tier: the 350px fixed column survives only from md/768px up.
+            Below it the identical cart contract renders as a bottom summary
+            bar + expandable sheet (MobileCartSheet) so the till fits a phone
+            viewport without a second fixed pane. Business logic, handlers
+            and sale flow are shared — only the container differs. */}
+        <div className="hidden md:flex h-full min-h-0">
+          <CartPanel
+            basket={basket}
           miscLines={miscLines}
           onRemoveMiscLine={removeMiscLine}
           selectedCustomer={
@@ -1798,8 +1807,39 @@ function POS({
 
             openPayment();
           }}
-        />
+          />
+        </div>
       </div>
+
+      {/* Phone tier (<md): same cart contract as the desktop CartPanel —
+          identical handlers, line markup and checkout flow — as a bottom
+          summary bar + expandable sheet. POS renders exactly one cart per
+          viewport tier, so no duplicated state or behaviour. */}
+      <MobileCartSheet
+        basket={basket}
+        miscLines={miscLines}
+        onRemoveMiscLine={removeMiscLine}
+        selectedCustomer={selectedCustomer}
+        onCustomerClick={() => setShowCustomerSelector(true)}
+        onCustomerRemove={() => setSelectedCustomer(null)}
+        saleError={saleError}
+        saleMessage={saleMessage}
+        onIncrease={add}
+        onDecrease={decrease}
+        onUpdateQuantity={updateQuantity}
+        onRemoveItem={removeItem}
+        subtotal={subtotal}
+        vat={vat}
+        total={total}
+        itemCount={basket.length + miscLines.length}
+        onCheckout={() => {
+          if (basketHasAgeRestricted && !ageVerifiedThisSale) {
+            setShowAgeModal(true);
+            return;
+          }
+          openPayment();
+        }}
+      />
 
       {showAgeModal && (
         <AgeVerificationModal

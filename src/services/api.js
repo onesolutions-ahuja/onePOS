@@ -1,6 +1,8 @@
+import { resolveApiUrl } from "./serverAddress.js";
+
 export async function apiRequest(url, options = {}) {
   const token = localStorage.getItem("onepos_token");
-  const response = await fetch(url, {
+  const response = await fetch(resolveApiUrl(url), {
     ...options,
     headers: {
       Accept: "application/json",

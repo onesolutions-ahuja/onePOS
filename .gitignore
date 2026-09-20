@@ -1,6 +1,14 @@
 node_modules/
 .env
-dist/data/product-master/openfoodfacts_official_starter_raw.tsv 
+dist/data/product-master/openfoodfacts_official_starter_raw.tsv
+
+# Local build / test scratch output (never shipped)
+*.out
+server_*.log
+npm-build.out
+
+# Android Studio per-machine project state
+android/.idea/ 
 
 .forge-permissions.json
 bash_events/
