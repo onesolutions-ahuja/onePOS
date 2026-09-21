@@ -29,13 +29,38 @@ export const SALES_REPORT_PERMISSIONS = Object.freeze(["reports.summary.view", "
 export const SALES_TODAY_TOOL_NAME = "todays_sales";
 
 /*
- * Conservative trigger phrases, evaluated SERVER-SIDE (Gemini is never asked
- * to choose tools). A miss simply falls back to the general assistant - a
- * false negative is safe; a false positive only grounds the model with data
- * the caller is already entitled to see.
+ * Server-side sales-today intent, evaluated BEFORE any AI call (Gemini never
+ * chooses tools). One matcher, one tool - never one file per phrasing.
+ *
+ * Matches when the question is about TODAY's takings, e.g.:
+ *   "How much have I sold today?" / "How much sales today?" /
+ *   "What are today's sales?" / "How much have we sold today?" /
+ *   "Today's sales" / "What did we sell today?" /
+ *   "How much did we make today?"
+ *
+ * Design: a TODAY signal AND a money/sales signal must both be present, so
+ * "What time do we close today?" or "How do I add a product?" never match.
+ * Legacy report phrases ("daily sales", "sales summary", "how much did we
+ * sell", "how many sales") still match even without the word "today".
+ * A miss safely falls back to the general assistant; a false positive only
+ * grounds the model with data the caller is already entitled to see.
  */
-const SALES_TODAY_PATTERN =
-  /(today'?s? sales|sales (for |so far )?today|how much did we sell|how many sales|today'?s? (sales )?(summary|total|totals|figures|numbers|turnover)|daily sales|sales summary)/i;
+const HAS_TODAY = /today/i;
+const SALES_WORD = /sales?|\bsold\b|\bsell\b|\bselling\b|revenue|turnover|takings?|\btill\b|transactions?/i;
+const MONEY_MAKE_PHRASE =
+  /how\s+much[^?]*\b(made|make|earn(?:ed|ings?)?|took|take|taken|brought|bring|turnover|revenue|till)\b/i;
+const LEGACY_SALES_PHRASE =
+  /(daily sales|sales summary|how much did we sell|how many sales)/i;
+
+function isSalesTodayQuestion(text) {
+  const question = String(text || "");
+  if (!question.trim()) return false;
+  if (LEGACY_SALES_PHRASE.test(question)) return true;
+  if (!HAS_TODAY.test(question)) return false;
+  if (SALES_WORD.test(question)) return true;
+  if (MONEY_MAKE_PHRASE.test(question)) return true;
+  return false;
+}
 
 /** Resolve Sales visibility via the EXISTING permission model + admin bypass. */
 async function canViewSales(context, { canViewCompanyCustomers } = {}) {
@@ -144,7 +169,7 @@ export function createJarvisTools({ db, canViewCompanyCustomers = null } = {}) {
    */
   function matchTool(question) {
     const text = String(question || "");
-    if (SALES_TODAY_PATTERN.test(text)) return { name: SALES_TODAY_TOOL_NAME };
+    if (isSalesTodayQuestion(text)) return { name: SALES_TODAY_TOOL_NAME };
     return null;
   }
 

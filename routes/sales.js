@@ -855,8 +855,9 @@ export default function createSalesRouter({
          * Sale items + stock reduction. Misc lines are appended to the same
          * insert as ordinary lines, but flagged item_type='MISC' and never
          * stock-decremented (no catalogue SKU exists to decrement).
-         */
-        for (const item of items) {
+          */
+         const saleItemIds = [];
+         for (const item of items) {
           const product = await client.query(
             `
           SELECT
@@ -890,7 +891,7 @@ export default function createSalesRouter({
             p.stock_quantity = movement.balance;
           }
 
-          await client.query(
+          const itemInsert = await client.query(
             `
           INSERT INTO sale_items (
             sale_id,
@@ -901,9 +902,16 @@ export default function createSalesRouter({
             discount,
             tax,
             total,
-            item_type
+            item_type,
+            discount_type,
+            discount_value,
+            original_unit_price,
+            original_tax,
+            original_total,
+            discounted_by
           )
-          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'PRODUCT')
+          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'PRODUCT',$9,$10,$11,$12,$13,$14)
+          RETURNING id
           `,
             [
               saleId,
@@ -914,8 +922,15 @@ export default function createSalesRouter({
               Number(item.discount) || 0,
               Number(item.tax) || 0,
               Number(item.total) || 0,
+              item.discountType || null,
+              Number(item.discountValue) || 0,
+              Number(p.price) || 0,
+              Number(p.vat_rate || 0) / 100,
+              roundCurrency((Number(item.unitPrice) || Number(p.price) || 0) * (Number(item.quantity) || 1)),
+              item.discountedBy || null,
             ]
           );
+          saleItemIds.push(itemInsert.rows[0].id);
         }
 
         /*
@@ -957,11 +972,28 @@ export default function createSalesRouter({
               lineTax,
               lineTotal,
             ]
-          );
-        }
+           );
+         }
+
+         /*
+          * T10-DISCOUNT: audit trail for every discount applied to this sale.
+          * Per-line entries reference the sale_items row; order-level entries
+          * have item_id NULL. Persisted atomically with the sale.
+          */
+         for (const entry of saleDiscountAudit) {
+           const itemId = entry.itemIndex != null ? saleItemIds[entry.itemIndex] : null;
+           await client.query(
+             `
+             INSERT INTO sale_discounts
+               (sale_id, item_id, user_id, type, value, amount)
+             VALUES ($1, $2, $3, $4, $5, $6)
+             `,
+             [saleId, itemId || null, entry.userId, entry.discountType, entry.discountValue, entry.amount]
+           );
+         }
 
         /*
-         * Payment records — one row per tender.
+          * Payment records — one row per tender.
          *
          * With a validated split (`payments` array) every line is persisted
          * with its own method and amount (reconciliation already enforced

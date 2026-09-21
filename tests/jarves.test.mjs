@@ -248,6 +248,114 @@ describe("JARVES licence control", () => {
   });
 });
 
+describe("JARVES sales-today intent (natural language -> todays_sales)", () => {
+  const SALES_QUESTIONS = [
+    "How much have I sold today?",
+    "How much sales today?",
+    "What are today's sales?",
+    "How much have we sold today?",
+    "Today's sales",
+    "What did we sell today?",
+    "How much did we make today?",
+    "How much did we sell today?",
+  ];
+
+  test("every natural-language sales wording resolves to the same todays_sales tool", () => {
+    const tools = createJarvisTools({ db: mockDb([]) });
+    for (const question of SALES_QUESTIONS) {
+      const match = tools.matchTool(question);
+      assert.deepEqual(match, { name: SALES_TODAY_TOOL_NAME }, `expected todays_sales for: ${question}`);
+    }
+  });
+
+  test("every sales wording end-to-end grounds the provider with REAL tool figures", async () => {
+    for (const question of SALES_QUESTIONS) {
+      const db = mockDb([TIMEZONE_HANDLER, SALES_HANDLER]);
+      const tools = createJarvisTools({ db, canViewCompanyCustomers: null });
+      const seen = {};
+      const provider = {
+        name: "gemini",
+        model: "test",
+        isConfigured: () => true,
+        async generateAnswer({ systemInstruction }) {
+          seen.instruction = systemInstruction;
+          return { text: "Today's sales are 150.50 across 3 transactions.", provider: "gemini", model: "test" };
+        },
+      };
+      const service = createJarvisService({ provider, tools });
+      const result = await service.ask({
+        message: question,
+        context: { companyId: "c-1", storeId: "s-1", permissions: ["reports.summary.view"] },
+      });
+      assert.ok(result.answer.length > 0, `expected an answer for: ${question}`);
+      assert.match(seen.instruction, /TOOL RESULT/, `expected grounding for: ${question}`);
+      assert.match(seen.instruction, /150\.50/, `expected figures for: ${question}`);
+    }
+  });
+
+  test("non-sales questions never trigger the sales tool", () => {
+    const tools = createJarvisTools({ db: mockDb([]) });
+    for (const question of [
+      "How do I add a product?",
+      "What time do we close today?",
+      "How do I process a refund?",
+      "Show me my settings",
+    ]) {
+      assert.equal(tools.matchTool(question), null, `must not match: ${question}`);
+    }
+  });
+
+  test("zero sales return a clear zero grounding (never 'cannot access')", async () => {
+    const zeroSales = (query) => (/sales_total AS/i.test(query)
+      ? { rows: [{ gross_sales: "0", transactions: 0, vat: "0", discounts: "0", returned_value: "0" }] }
+      : undefined);
+    const db = mockDb([TIMEZONE_HANDLER, zeroSales]);
+    const tools = createJarvisTools({ db, canViewCompanyCustomers: null });
+    const result = await tools.executeTool(SALES_TODAY_TOOL_NAME, {
+      companyId: "c-1", storeId: "s-1", permissions: ["reports.summary.view"],
+    });
+    assert.equal(result.summary.grossSales, 0);
+    assert.equal(result.summary.transactions, 0);
+    const block = formatToolResultBlock(result);
+    assert.match(block, /Gross sales: 0\.00/);
+    assert.match(block, /transactions: 0/);
+  });
+
+  test("REGRESSION: an unauthorised user cannot retrieve sales through JARVIS (403, no data read)", async () => {
+    const db = mockDb([TIMEZONE_HANDLER, SALES_HANDLER]);
+    const tools = createJarvisTools({ db, canViewCompanyCustomers: null });
+    const seen = {};
+    const provider = {
+      name: "gemini",
+      model: "test",
+      isConfigured: () => true,
+      async generateAnswer({ systemInstruction }) {
+        seen.instruction = systemInstruction;
+        return { text: "general help", provider: "gemini", model: "test" };
+      },
+    };
+    const service = createJarvisService({ provider, tools });
+    await assert.rejects(
+      () => service.ask({
+        message: "How much have I sold today?",
+        context: { companyId: "c-1", storeId: "s-1", permissions: ["product.view"] },
+      }),
+      (error) => {
+        assert.ok(error instanceof JarvisError);
+        assert.equal(error.code, JARVIS_ERROR_CODES.TOOL_PERMISSION_DENIED);
+        assert.equal(error.httpStatus, 403);
+        return true;
+      }
+    );
+    assert.equal(db.queries.some((q) => /sales_total AS/i.test(q.query)), false, "no sales data may be read");
+    assert.equal(seen.instruction, undefined, "the provider must never be called on denial");
+    assert.equal(
+      jarvisPublicMessage(JARVIS_ERROR_CODES.TOOL_PERMISSION_DENIED).includes("Sales"),
+      true
+    );
+  });
+});
+
 describe("JARVES service integration (tool grounding)", () => {
   const PROVIDER = {
     name: "gemini",
