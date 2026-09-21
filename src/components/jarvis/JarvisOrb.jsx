@@ -1,10 +1,13 @@
 /*
  * JARVIS Orb - the assistant's presence in the till UI.
  *
- * Deliberately NOT a microphone button: it is a layered "presence" orb (core
- * gradient + rotating sheen + breathing halo) in the onePOS teal ramp, with a
- * quiet JARVIS label so staff can find it. Microphone control lives INSIDE
- * the panel; this orb only opens/closes JARVIS.
+ * Deliberately NOT a microphone button: it is a living "energy core" — teal
+ * plasma layers orbit and drift inside the core, a light sweep rotates, a
+ * glint slides across the surface, the aura breathes and a spark occasionally
+ * flares on its own orbit. It is always moving, even at idle, but every
+ * animation is transform/opacity only so it is cheap enough for an all-day
+ * POS terminal. Microphone control lives INSIDE the panel; this orb only
+ * opens/closes JARVIS.
  *
  * Placement: fixed above the bottom status bar (z-40 - below the z-50 modals
  * and the mobile cart sheet), so it never sits on top of till controls.
@@ -46,9 +49,16 @@ export default function JarvisOrb({ state = ORB_STATES.IDLE, open = false, onCli
         className={`jarvis-orb jarvis-orb--${state} rounded-full outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-blue-600`}
       >
         <span className="jarvis-orb-halo" aria-hidden="true" />
-        <span className="jarvis-orb-spark" aria-hidden="true" />
-        <span className="jarvis-orb-sheen" aria-hidden="true" />
-        <span className="jarvis-orb-core" aria-hidden="true" />
+        <span className="jarvis-orb-ring" aria-hidden="true" />
+        <span className="jarvis-orb-core" aria-hidden="true">
+          <span className="jarvis-orb-flow" aria-hidden="true" />
+          <span className="jarvis-orb-flow2" aria-hidden="true" />
+          <span className="jarvis-orb-sheen" aria-hidden="true" />
+          <span className="jarvis-orb-glint" aria-hidden="true" />
+        </span>
+        <span className="jarvis-orb-spark-orbit" aria-hidden="true">
+          <span className="jarvis-orb-spark" aria-hidden="true" />
+        </span>
       </button>
       <span
         className="text-[10px] font-semibold tracking-[0.18em] text-blue-800 bg-white/85 px-1.5 py-0.5 rounded-full shadow-sm select-none"
