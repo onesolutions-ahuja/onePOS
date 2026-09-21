@@ -33,6 +33,8 @@ import createReplenishmentRouter from "./routes/replenishment.js";
 import createOnlineRouter from "./routes/online.js";
 import createCustomerAuthRouter from "./routes/customerAuth.js";
 import createAccountingExportRouter from "./routes/accountingExport.js"; // T10V - accounting integration export
+import createJarvisRouter from "./routes/jarvis.js"; // JARVIS V1 - authenticated AI assistant questions
+import { createJarvis } from "./services/jarvis/index.js";
 
 const { Pool } = pg;
 
@@ -173,6 +175,22 @@ const writeAudit = createAuditWriter({ db });
 
 const createToken = createSessionToken;
 const authenticate = createAuthenticate();
+
+/*
+|--------------------------------------------------------------------------
+| JARVIS AI assistant (V1 - authenticated text questions)
+|--------------------------------------------------------------------------
+|
+| Built once at boot from the environment. GEMINI_API_KEY is read here,
+| server-side only: it is never sent to the browser and never returned in a
+| response. The AI provider sits behind a service abstraction
+| (services/jarvis/*) so a future OpenAI / local model does not change this
+| endpoint. See JARVIS.md.
+|
+| This changes NO existing behaviour - it only adds the JARVIS service used
+| by the dedicated routes/jarvis.js router registered further below.
+*/
+const jarvis = createJarvis();
 
 /*
 |--------------------------------------------------------------------------
@@ -790,6 +808,21 @@ app.use(
 );
 
 app.use("/api", createDashboardRouter({ authenticate, db }));
+
+/*
+ * JARVIS AI assistant (V1) - POST /api/jarvis, GET /api/jarvis/status.
+ * Authenticated with the existing session middleware; the caller's company,
+ * store, role and permission codes come from the verified session claims and
+ * the existing role_permissions lookup (read-only).
+ */
+app.use(
+  "/api",
+  createJarvisRouter({
+    authenticate,
+    jarvis,
+    getRolePermissionCodes,
+  })
+);
 
 app.use("/api", createSettingsRouter({ authenticate, authorize, db, pool, writeAudit, testPaymentTerminal }));
 app.use("/api", createCustomerAuthRouter); /* routes/customerAuth.js exports a router instance (self-contained) */
