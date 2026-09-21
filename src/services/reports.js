@@ -71,6 +71,10 @@ export function getTill(from, to) {
   return apiRequest(`/api/reports/till${buildDateQuery(from, to)}`);
 }
 
+export function getTillSession(sessionId) {
+  return apiRequest(`/api/reports/till/${encodeURIComponent(sessionId)}`);
+}
+
 export function getVat(from, to) {
   return apiRequest(`/api/reports/vat${buildDateQuery(from, to)}`);
 }

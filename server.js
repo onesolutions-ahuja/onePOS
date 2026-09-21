@@ -1068,6 +1068,7 @@ app.use(
     authenticate,
     authorize,
     db,
+    pool,
     getRolePermissionCodes,
     canViewCompanyCustomers,
   })

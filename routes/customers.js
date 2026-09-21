@@ -295,6 +295,139 @@ export default function createCustomersRouter({
   });
 
   /*
+   * POST /api/customers/:id/loyalty/adjust  (T10R)
+   * Authorised manual/admin loyalty point adjustment.
+   *
+   * Body: { points: number, reason?: string, referenceId?: UUID (sale/invoice) }
+   * - points > 0: credit; points < 0: debit (balance can never go below 0)
+   * - permission: loyalty.adjust (managers/admins), falls back to customer.edit
+   * - writes a ledger row + an adjustments audit row; both company-scoped
+   */
+  router.post("/customers/:id/loyalty/adjust", authenticate, authorize("loyalty.adjust", "customer.edit"), async (req, res) => {
+    try {
+      const companyAdmin = await canViewCompanyCustomers(req.user);
+
+      // Verify customer belongs to user's company
+      const customerCheck = await db(
+        `SELECT id FROM customers WHERE id = $1 AND company_id = $2`,
+        [req.params.id, req.user.companyId]
+      );
+
+      if (!customerCheck.rows.length) {
+        return res.status(404).json({
+          success: false,
+          message: "Customer not found",
+        });
+      }
+
+      // Store access for non-admin users mirrors the loyalty GET route
+      if (!companyAdmin) {
+        const visible = await db(
+          `SELECT 1 FROM customer_stores WHERE customer_id = $1 AND store_id = $2 AND active = true`,
+          [req.params.id, req.user.storeId]
+        );
+        if (!visible.rows.length)
+          return res.status(404).json({
+            success: false,
+            message: "Customer not found",
+          });
+      }
+
+      const points = Number(req.body.points);
+      const reason = req.body.reason ? String(req.body.reason).slice(0, 500) : null;
+      const referenceId = req.body.referenceId ? String(req.body.referenceId) : null;
+
+      if (!Number.isFinite(points) || points === 0) {
+        return res.status(400).json({ success: false, message: "A non-zero points amount is required" });
+      }
+      const pointsNorm = Math.round(points * 10000) / 10000; // 4dp like the ledger
+      if (referenceId && !/^[0-9a-fA-F-]{36}$/.test(referenceId)) {
+        return res.status(400).json({ success: false, message: "referenceId must be a UUID" });
+      }
+
+      const client = await pool.connect();
+      try {
+        await client.query("BEGIN");
+
+        // Read the current balance under a row lock so concurrent
+        // adjustments serialise and no reader sees an intermediate value.
+        const currentRes = await client.query(
+          `SELECT COALESCE(balance, 0) AS balance FROM customer_loyalty_balances WHERE company_id = $1 AND customer_id = $2 FOR UPDATE`,
+          [req.user.companyId, req.params.id]
+        );
+        const currentBalance = Number(currentRes.rows[0]?.balance || 0);
+
+        const newBalance = currentBalance + pointsNorm;
+        if (newBalance < 0) {
+          await client.query("ROLLBACK");
+          return res.status(400).json({
+            success: false,
+            message: `Insufficient points: balance is ${currentBalance}, adjustment of ${pointsNorm} would go negative`,
+          });
+        }
+
+        // Upsert to the new balance (inserts on first-ever adjustment)
+        await client.query(
+          `
+          INSERT INTO customer_loyalty_balances (company_id, customer_id, balance)
+          VALUES ($1, $2, $3)
+          ON CONFLICT (company_id, customer_id) DO UPDATE SET balance = $3
+          `,
+          [req.user.companyId, req.params.id, newBalance]
+        );
+
+        // Ledger row: the audit trail. reference_type is 'sale' when the
+        // adjustment references a sale/invoice, otherwise 'adjustment'.
+        await client.query(
+          `
+          INSERT INTO customer_loyalty_transactions
+            (company_id, customer_id, transaction_type, amount, balance_after, reference_type, description, created_by)
+          VALUES ($1, $2, 'ADJUST', $3, $4, $5, $6, $7)
+          `,
+          [
+            req.user.companyId,
+            req.params.id,
+            pointsNorm,
+            newBalance,
+            referenceId ? "sale" : "adjustment",
+            reason || (pointsNorm > 0 ? "Manual points adjustment (credit)" : "Manual points adjustment (debit)"),
+            req.user.id,
+          ]
+        );
+
+        await client.query(
+          `
+          INSERT INTO customer_loyalty_adjustments
+            (company_id, customer_id, points, reason, reference_id, created_by)
+          VALUES ($1, $2, $3, $4, $5, $6)
+          `,
+          [req.user.companyId, req.params.id, pointsNorm, reason, referenceId, req.user.id]
+        );
+
+        await client.query("COMMIT");
+
+        res.json({
+          success: true,
+          message: "Loyalty points adjusted",
+          data: {
+            customerId: req.params.id,
+            points: pointsNorm,
+            balance: newBalance,
+          },
+        });
+      } finally {
+        client.release();
+      }
+    } catch (error) {
+      console.error("Adjust customer loyalty error:", error);
+      res.status(500).json({
+        success: false,
+        message: "Unable to adjust customer loyalty",
+      });
+    }
+  });
+
+  /*
    * POST /api/customers
    */
   router.post("/customers", authenticate, authorize("customer.create"), async (req, res) => {

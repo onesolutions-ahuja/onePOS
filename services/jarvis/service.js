@@ -65,6 +65,10 @@ export function createJarvisService({
 
   const providerName = provider.name || "unknown";
   const model = provider.model || null;
+  /* The provider's effective request budget when it exposes one. Surfaced by
+     describe() so the status endpoint can answer "which timeout is active?"
+     without ever exposing credentials. */
+  const timeoutMs = Number(provider.timeoutMs) > 0 ? Number(provider.timeoutMs) : null;
 
   function isConfigured() {
     if (typeof provider.isConfigured === "function") return provider.isConfigured() === true;
@@ -72,7 +76,7 @@ export function createJarvisService({
   }
 
   function describe() {
-    return { provider: providerName, model, configured: isConfigured() };
+    return { provider: providerName, model, configured: isConfigured(), timeoutMs };
   }
 
   /**

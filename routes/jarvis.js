@@ -76,7 +76,8 @@ export default function createJarvisRouter({ authenticate, jarvis, getRolePermis
   /*
    * GET /api/jarvis/status
    * Lets the client know whether JARVIS is configured. Returns provider/model
-   * names and a boolean ONLY - never the API key or any configuration value.
+   * names, the effective provider timeout and a boolean ONLY - never the API
+   * key or any configuration value.
    */
   router.get("/jarvis/status", authenticate, (req, res) => {
     const description = typeof jarvis.describe === "function" ? jarvis.describe() : {};
@@ -86,6 +87,7 @@ export default function createJarvisRouter({ authenticate, jarvis, getRolePermis
         available: typeof jarvis.isConfigured === "function" ? jarvis.isConfigured() === true : false,
         provider: description.provider ?? jarvis.provider ?? null,
         model: description.model ?? jarvis.model ?? null,
+        timeoutMs: description.timeoutMs ?? jarvis.timeoutMs ?? null,
       },
     });
   });

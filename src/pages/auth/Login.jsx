@@ -1,7 +1,6 @@
 import { useState } from "react";
-import { Monitor, Calculator, Server } from "lucide-react";
+import { Monitor, Calculator } from "lucide-react";
 import { apiRequest } from "../../services/api.js";
-import { getServerAddress, isNativeApp, setServerAddress } from "../../services/serverAddress.js";
 
 /*
  * Login screen — staff sign-in plus the customer-facing Self-Checkout entry.
@@ -12,34 +11,27 @@ import { getServerAddress, isNativeApp, setServerAddress } from "../../services/
  * starts the restricted card-only Self-Checkout screen with Guest /
  * Sign-in identification for the customer.
  *
- * Server address: only shown inside the packaged native app (Capacitor), where
- * the bundle is served from the device and relative /api URLs therefore need an
- * explicit backend origin — see services/serverAddress.js.
+ * Server configuration is DEVICE configuration, not login information.
+ *
+ *   - onePOS ships with a production server default (the Render deployment,
+ *     DEFAULT_SERVER_ADDRESS in services/serverAddress.js). Normal users are
+ *     NEVER asked to enter a server address — the default keeps the app
+ *     working out of the box on native devices and relative /api URLs keep
+ *     working on the web.
+ *   - A Superadmin can optionally override the server from Settings → Server /
+ *     API Configuration. That is the ONLY place the server can be changed.
+ *   - Changing the server NEVER touches accounts, credentials, customer data,
+ *     products, sales, the offline queue or the current JWT. Logout and user
+ *     switching do not clear the configuration — it belongs to the device.
+ *   - A temporarily unreachable server never erases or re-prompts for the
+ *     configuration.
  */
 export default function Login({ onLogin, sessionMessage = "", onStartSelfCheckout = null, scoStarting = false, scoError = "" }) {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [deviceKey, setDeviceKey] = useState("");
-  const [scoOpen, setScoOpen] = useState(false); /* reveal the device-key panel */
-
-  /*
-   * Native app only: where this device's onePOS backend lives. A freshly
-   * installed till app has no server yet, so the panel opens itself on first
-   * run; the saved address is what services/api.js prefixes onto every
-   * relative /api call. On the web it stays hidden and behaviour is unchanged.
-   */
-  const [serverField, setServerField] = useState(() => getServerAddress());
-  const [serverSaved, setServerSaved] = useState(() => getServerAddress());
-  const [serverMessage, setServerMessage] = useState("");
-  const [serverOpen, setServerOpen] = useState(() => isNativeApp() && !getServerAddress());
-
-  const saveServer = () => {
-    const saved = setServerAddress(serverField);
-    setServerField(saved);
-    setServerSaved(saved);
-    setServerMessage(saved ? `Using ${saved}` : "Enter an address such as 192.168.1.50:10000");
-  };
+  const [scoOpen, setScoOpen] = useState(false);
 
   const login = async () => {
     setError("");
@@ -138,54 +130,6 @@ export default function Login({ onLogin, sessionMessage = "", onStartSelfCheckou
                 Sign in
               </button>
             </form>
-
-            {/* Native app: the backend this device talks to */}
-            {(isNativeApp() || serverSaved) && (
-              <div className="border-t border-slate-200 pt-4" data-testid="server-address-panel">
-                <button
-                  type="button"
-                  onClick={() => setServerOpen((open) => !open)}
-                  className="w-full flex items-center justify-center gap-2 text-sm font-medium text-slate-600 hover:text-slate-800"
-                >
-                  <Server size={16} />
-                  {serverSaved ? `Server: ${serverSaved}` : "Set server address"}
-                </button>
-
-                {serverOpen && (
-                  <div className="space-y-2 mt-3">
-                    <div className="text-xs text-slate-500 text-center">
-                      Address of your onePOS server (IP or host, with port if needed)
-                    </div>
-                    <input
-                      value={serverField}
-                      onChange={(event) => setServerField(event.target.value)}
-                      onKeyDown={(event) => {
-                        if (event.key === "Enter") {
-                          event.preventDefault();
-                          saveServer();
-                        }
-                      }}
-                      placeholder="192.168.1.50:10000"
-                      inputMode="url"
-                      autoComplete="off"
-                      className="w-full h-11 px-3 border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-teal-600"
-                    />
-                    <button
-                      type="button"
-                      onClick={saveServer}
-                      className="w-full h-11 rounded-lg bg-teal-700 hover:bg-teal-800 text-white font-semibold"
-                    >
-                      Save server
-                    </button>
-                    {serverMessage ? (
-                      <div role="status" className="text-xs text-slate-500 text-center">
-                        {serverMessage}
-                      </div>
-                    ) : null}
-                  </div>
-                )}
-              </div>
-            )}
 
             {/* Customer-facing Self-Checkout entry (dedicated device) */}
             {onStartSelfCheckout && (

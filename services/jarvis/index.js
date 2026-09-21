@@ -8,7 +8,7 @@
  *   JARVIS_AI_PROVIDER   provider to use          (default: gemini)
  *   GEMINI_API_KEY       server-side provider key (required for gemini)
  *   JARVIS_GEMINI_MODEL  model override           (default: gemini-flash-latest)
- *   JARVIS_AI_TIMEOUT_MS provider timeout         (default: 20000)
+ *   JARVIS_AI_TIMEOUT_MS provider timeout         (default: 45000)
  *
  * The key is read here (server-side only) and stays inside the provider
  * closure. It is never sent to the browser and never appears in a response.

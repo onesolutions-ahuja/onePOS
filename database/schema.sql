@@ -592,6 +592,29 @@ ON customer_loyalty_transactions(customer_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_loyalty_transactions_reference
 ON customer_loyalty_transactions(reference_type, reference_id);
 
+-- T10R: idempotent earning. At most one EARN per sale, enforced by the
+-- database so a retried/lost-acknowledgement sale can never award points
+-- twice. Balance upserts must be reversed when this fires.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_loyalty_earn_per_sale
+ON customer_loyalty_transactions (company_id, reference_id)
+WHERE transaction_type = 'EARN' AND reference_type = 'sale';
+
+-- T10R: manual/admin point adjustments - permission-controlled,
+-- auditable, referenceable to a sale/invoice.
+CREATE TABLE IF NOT EXISTS customer_loyalty_adjustments (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+    customer_id UUID NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
+    points NUMERIC(12,4) NOT NULL,
+    reason TEXT,
+    reference_id UUID NULL,
+    created_by UUID REFERENCES users(id) ON DELETE SET NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_loyalty_adjustments_customer
+ON customer_loyalty_adjustments(customer_id, created_at DESC);
+
 -- ============================================================
 -- SALES
 -- ============================================================
@@ -775,6 +798,12 @@ CREATE TABLE IF NOT EXISTS till_sessions (
 CREATE INDEX IF NOT EXISTS idx_till_sessions_terminal
 ON till_sessions(terminal_id);
 
+-- T-TILL: at most one open session per till — makes the API's
+-- "no two simultaneously open sessions" rule atomic.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_till_sessions_open_per_terminal
+ON till_sessions(terminal_id)
+WHERE status = 'open';
+
 -- ============================================================
 -- CASH MOVEMENTS
 -- ============================================================
@@ -790,6 +819,12 @@ CREATE TABLE IF NOT EXISTS cash_movements (
 
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+-- T-TILL: who/where recorded the movement (denormalised for audit;
+-- the session row carries till+store via its terminal).
+ALTER TABLE cash_movements
+    ADD COLUMN IF NOT EXISTS store_id UUID REFERENCES stores(id) ON DELETE SET NULL,
+    ADD COLUMN IF NOT EXISTS terminal_id UUID REFERENCES terminals(id) ON DELETE SET NULL;
 
 -- ============================================================
 -- AUDIT LOG

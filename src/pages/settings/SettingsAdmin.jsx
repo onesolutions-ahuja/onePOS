@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { SETTINGS_TAB_SLUGS } from "../../utils/adminRoutes.js";
 import { ArrowDown, ArrowUp, Edit, LayoutGrid, Plus, RefreshCw, Save, X } from "lucide-react";
 import { apiRequest } from "../../services/api.js";
+import ServerApiSettings from "./ServerApiSettings.jsx";
 import WhatsAppSettings from "./whatsapp/WhatsAppSettings.jsx";
 import InvoiceDeliverySettings from "./invoiceDeliverySettings.jsx";
 import { Toggle } from "../../components/ui.jsx";
@@ -21,6 +22,7 @@ const SETTING_GROUPS = [
   { label: "Users", sections: ["Users", "Roles & Permissions"] },
   { label: "Integrations", sections: ["Connections", "Uber Eats", "Deliveroo", "WhatsApp"] },
   { label: "Communications", sections: ["SMS Delivery", "Email Delivery"] },
+  { label: "System", sections: ["Server / API Configuration"] },
 ];
 
 /*
@@ -33,7 +35,7 @@ const LEGACY_TAB_REDIRECT = {
   Integrations: "Connections",
 };
 
-function SettingsAdmin({ initialTab = "General" }) {
+function SettingsAdmin({ initialTab = "General", isAdmin = false }) {
   const tabs = SETTING_GROUPS.flatMap((group) => group.sections);
   /* Legacy deep links/profile-menu tabs redirect to their new sections. */
   const resolveInitialTab = (rawTab) => {
@@ -144,23 +146,28 @@ setForm({
     <div className="flex gap-6 items-start">
       {/* Left settings navigation: groups with sub-items; each section opens
           separately in the content pane. */}
-      <aside className="w-52 shrink-0 bg-white border border-slate-200 rounded-xl p-3 space-y-4">
-        {SETTING_GROUPS.map((group) => (
-          <div key={group.label}>
-            <p className="px-2 mb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-400">{group.label}</p>
-            <div className="space-y-0.5">
-              {group.sections.map((item) => (
-                <button
-                  key={item}
-                  onClick={() => { setTab(item); setMessage(""); setError(""); }}
-                  className={`w-full text-left px-2 h-8 rounded-md text-sm transition-colors ${tab === item ? "bg-blue-600 text-white font-medium" : "text-slate-600 hover:bg-slate-100"}`}
-                >
-                  {item}
-                </button>
-              ))}
+            <aside className="w-52 shrink-0 bg-white border border-slate-200 rounded-xl p-3 space-y-4">
+        {SETTING_GROUPS.map((group) => {
+          const sections = group.sections.filter(
+            (item) => item !== "Server / API Configuration" || isAdmin
+          );
+          return (
+            <div key={group.label}>
+              <p className="px-2 mb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-400">{group.label}</p>
+              <div className="space-y-0.5">
+                {sections.map((item) => (
+                  <button
+                    key={item}
+                    onClick={() => { setTab(item); setMessage(""); setError(""); }}
+                    className={`w-full text-left px-2 h-8 rounded-md text-sm transition-colors ${tab === item ? "bg-blue-600 text-white font-medium" : "text-slate-600 hover:bg-slate-100"}`}
+                  >
+                    {item}
+                  </button>
+                ))}
+              </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
       </aside>
 
       <div className="flex-1 min-w-0">
@@ -192,6 +199,7 @@ setForm({
         {tab === "Roles & Permissions" && <RolesSettings onMessage={setMessage} onError={setError} />}
         {tab === "Users & Permissions" && <UsersPermissionsSettings onMessage={setMessage} onError={setError} />}
         {tab === "Receipts" && <ReceiptSettings settings={settings} form={form} setForm={setForm} onSave={saveSettings} />}
+        {tab === "Server / API Configuration" && isAdmin && <ServerApiSettings onMessage={setMessage} onError={setError} />}
       </div>
     </div>
   );

@@ -34,7 +34,7 @@ import {
   JARVIS_SYSTEM_INSTRUCTION,
   buildJarvisSystemInstruction,
 } from "../services/jarvis/index.js";
-import { createGeminiProvider, GEMINI_DEFAULT_MODEL } from "../services/jarvis/providers/geminiProvider.js";
+import { createGeminiProvider, GEMINI_DEFAULT_MODEL, GEMINI_DEFAULT_TIMEOUT_MS } from "../services/jarvis/providers/geminiProvider.js";
 
 const ROOT = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
 
@@ -207,7 +207,34 @@ describe("JARVIS V1 provider abstraction (services/jarvis/providers)", () => {
   test("JARVIS reports itself unavailable when GEMINI_API_KEY is missing", () => {
     const jarvis = createJarvis({ env: {} });
     assert.equal(jarvis.isConfigured(), false);
-    assert.deepEqual(jarvis.describe(), { provider: "gemini", model: GEMINI_DEFAULT_MODEL, configured: false });
+    assert.deepEqual(jarvis.describe(), {
+      provider: "gemini",
+      model: GEMINI_DEFAULT_MODEL,
+      configured: false,
+      timeoutMs: GEMINI_DEFAULT_TIMEOUT_MS,
+    });
+  });
+
+  test("the default provider timeout leaves room for thinking-model latency and stays overridable", () => {
+    /* Regression guard: 20s was too tight once the gemini-flash-latest alias
+       moved to a thinking-enabled Flash model - a valid question was aborted
+       mid-answer and surfaced to the till as a 504 provider_timeout. */
+    assert.ok(
+      GEMINI_DEFAULT_TIMEOUT_MS >= 30000,
+      `default provider timeout must tolerate thinking-model latency (got ${GEMINI_DEFAULT_TIMEOUT_MS}ms)`
+    );
+
+    const defaulted = createJarvisProvider({ env: { GEMINI_API_KEY: "env-key" } });
+    assert.equal(defaulted.timeoutMs, GEMINI_DEFAULT_TIMEOUT_MS);
+    assert.equal(defaulted.describe().timeoutMs, GEMINI_DEFAULT_TIMEOUT_MS);
+
+    const overridden = createJarvisProvider({ env: { GEMINI_API_KEY: "env-key", JARVIS_AI_TIMEOUT_MS: "1234" } });
+    assert.equal(overridden.timeoutMs, 1234);
+    assert.equal(overridden.describe().timeoutMs, 1234);
+
+    /* A missing / unusable override falls back to the default, never to 0. */
+    const junk = createJarvisProvider({ env: { GEMINI_API_KEY: "env-key", JARVIS_AI_TIMEOUT_MS: "not-a-number" } });
+    assert.equal(junk.timeoutMs, GEMINI_DEFAULT_TIMEOUT_MS);
   });
 
   test("the JARVIS service requires a provider exposing generateAnswer()", () => {
@@ -362,6 +389,22 @@ describe("POST /api/jarvis - authenticated question", () => {
     }
   });
 
+  test("GET /api/jarvis/status reports the effective provider timeout, never the key", async () => {
+    const gemini = mockGeminiFetch();
+    const ctx = makeApp({ fetchImpl: gemini.fetchImpl, timeoutMs: 5500 });
+    const { server } = await listen(ctx.app);
+    try {
+      const { status, body } = await request(server, "GET", "/api/jarvis/status", {
+        token: createSessionToken(USER_ROW),
+      });
+      assert.equal(status, 200);
+      assert.equal(body.data.timeoutMs, 5500);
+      assert.ok(!JSON.stringify(body).includes(TEST_API_KEY));
+    } finally {
+      server.close();
+    }
+  });
+
   test("GET /api/jarvis/status reports availability without exposing secrets", async () => {
     const gemini = mockGeminiFetch();
     const ctx = makeApp({ fetchImpl: gemini.fetchImpl });
@@ -373,6 +416,7 @@ describe("POST /api/jarvis - authenticated question", () => {
       assert.equal(available.body.data.available, true);
       assert.equal(available.body.data.provider, "gemini");
       assert.equal(available.body.data.model, GEMINI_DEFAULT_MODEL);
+      assert.equal(available.body.data.timeoutMs, GEMINI_DEFAULT_TIMEOUT_MS);
       assert.ok(!JSON.stringify(available.body).includes(TEST_API_KEY));
 
       const noKey = makeApp({ apiKey: "" });

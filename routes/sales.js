@@ -1,5 +1,6 @@
 import express from "express";
 import { checkCreditLimit, buildCreditSaleTransaction } from "../services/customerCredit.js";
+import { validateRedeemConfig, validateRedeemablePoints } from "../src/utils/loyaltyPoints.js";
 import { dispatchIntegrationEvent } from "../services/integrationDispatcher.js";
 import { dispatchWhatsAppInvoiceDelivery } from "../services/whatsappDelivery.js";
 import { dispatchSmsInvoiceDelivery, dispatchEmailInvoiceDelivery } from "../services/invoiceDelivery.js";
@@ -214,6 +215,7 @@ export default function createSalesRouter({
           discount = 0,
           total = 0,
           paymentMethod = "cash",
+          giftCardCode = null,
           ageVerified, // T10C: operator confirmation flag, verified against the DB below
           vatEnabled, // Till Misc Item: the company's global VAT master switch, as applied by the till
         } = req.body;
@@ -242,6 +244,83 @@ export default function createSalesRouter({
             success: false,
             message: "Sale contains no items",
           });
+        }
+
+        /*
+         * T10R: loyalty points redemption (authoritative, pre-commit).
+         * Validated against the programme config and the row-locked balance;
+         * the debit + REDEEM ledger row commit atomically WITH the sale, so
+         * a failed sale never redeems and a committed sale always redeems.
+         */
+        const redeemPoints = Number(req.body.redeemPoints ?? 0);
+        const loyaltyTenderApplied = redeemPoints > 0;
+        let loyaltyRedeemValue = 0; // currency value redeemed (0 when none)
+        if (redeemPoints > 0) {
+          if (!customerId) {
+            await client.query("ROLLBACK");
+            return res.status(400).json({
+              success: false,
+              message: "A customer must be selected to redeem loyalty points.",
+            });
+          }
+          const settings = await db(
+            `SELECT loyalty_enabled, loyalty_earning_rate, loyalty_min_sale_total, loyalty_redeem_value_per_point, loyalty_min_points_redeem FROM company_settings WHERE company_id = $1`,
+            [req.user.companyId]
+          );
+          const programme = settings.rows[0] ?? null;
+          let valuePerPoint = null;
+          try {
+            ({ valuePerPoint } = validateRedeemConfig(programme));
+          } catch (validationError) {
+            await client.query("ROLLBACK");
+            return res.status(400).json({ success: false, message: validationError.message });
+          }
+
+          // Lock the balance row for the duration of the sale transaction
+          const balanceRes = await client.query(
+            `SELECT balance FROM customer_loyalty_balances WHERE company_id = $1 AND customer_id = $2 FOR UPDATE`,
+            [req.user.companyId, customerId]
+          );
+          const currentBalance = Number(balanceRes.rows[0]?.balance || 0);
+          let pointsToRedeem;
+          try {
+            pointsToRedeem = validateRedeemablePoints(currentBalance, redeemPoints, programme).points;
+          } catch (validationError) {
+            await client.query("ROLLBACK");
+            return res.status(400).json({ success: false, message: validationError.message });
+          }
+
+          const redeemValue = Math.round(pointsToRedeem * valuePerPoint * 100) / 100;
+          loyaltyRedeemValue = redeemValue;
+          if (redeemValue > Number(total) + 0.01) {
+            await client.query("ROLLBACK");
+            return res.status(400).json({
+              success: false,
+              message: "Points redemption exceeds the sale total.",
+            });
+          }
+
+          const newBalance = currentBalance - pointsToRedeem;
+          await client.query(
+            `UPDATE customer_loyalty_balances SET balance = $1, updated_at = NOW() WHERE company_id = $2 AND customer_id = $3`,
+            [newBalance, req.user.companyId, customerId]
+          );
+          await client.query(
+            `
+            INSERT INTO customer_loyalty_transactions
+              (company_id, customer_id, transaction_type, amount, balance_after, reference_type, description, created_by)
+            VALUES ($1, $2, 'REDEEM', $3, $4, $5, $6, $7)
+            `,
+            [
+              req.user.companyId,
+              customerId,
+              -pointsToRedeem,
+              newBalance,
+              "sale",
+              `Redeemed at the till (sale total ${Number(total).toFixed(2)})`,
+              req.user.id,
+            ]
+          );
         }
 
         if (customerId) {
@@ -498,6 +577,9 @@ export default function createSalesRouter({
         /*
          * Create sale.
          */
+        /* T10R: bound (was inline 'completed') so the loyalty earn guard
+         * reads a real status; only earnable statuses award points. */
+        const saleStatus = "completed";
         const sale = await client.query(
           `
           INSERT INTO sales (
@@ -519,7 +601,7 @@ export default function createSalesRouter({
           )
           VALUES (
             $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,
-            'completed',
+            $12,
             false,
             'synced',
             $11,
@@ -543,6 +625,7 @@ export default function createSalesRouter({
             Number(discount) || 0,
             Number(total) || 0,
             clientRequestId,
+            saleStatus,
           ]
         );
 
@@ -670,7 +753,7 @@ export default function createSalesRouter({
           )
           VALUES ($1,$2,$3,'completed')
           `,
-          [saleId, paymentMethod, Number(total) || 0]
+          [saleId, loyaltyTenderApplied ? "loyalty" : paymentMethod, Number(total) || 0]
         );
 
         /*
@@ -765,48 +848,94 @@ export default function createSalesRouter({
 
         /*
          * T10R: Customer loyalty earning - fire-and-forget after sale commit
-         * Loyalty failures must never block a completed sale.
+         * Loyalty failures must never block a completed sale. The earn base
+         * excludes any redemption applied to this sale (a customer never
+         * earns points on points). Redemption itself is handled pre-commit
+         * above, atomically with the sale.
          */
+        const loyaltyEarnBase = loyaltyTenderApplied ? Math.max(Number(total) - Number(loyaltyRedeemValue), 0) : Number(total);
         if (customerId && typeof writeAudit === "function") {
           Promise.resolve(
             (async () => {
               try {
                 // Check if loyalty is enabled for this company
                 const settings = await db(
-                  `SELECT loyalty_enabled, loyalty_earning_rate FROM company_settings WHERE company_id = $1`,
+                  `SELECT loyalty_enabled, loyalty_earning_rate, loyalty_min_sale_total FROM company_settings WHERE company_id = $1`,
                   [req.user.companyId]
                 );
                 if (!settings.rows.length || !settings.rows[0].loyalty_enabled) return;
 
+                /* Cancelled/void sales must never award points. The earn
+                 * block runs after the sale transaction commits, so the
+                 * sale's CURRENT status is re-read from the database —
+                 * a sale voided between commit and this block (or created
+                 * by a flow that must not award) is skipped here. */
+                const earnableStatuses = ["completed", "paid", "partially_paid"];
+                const saleStatusRow = await db(
+                  `SELECT status FROM sales WHERE id = $1 AND company_id = $2`,
+                  [saleId, req.user.companyId]
+                );
+                if (
+                  !saleStatusRow.rows.length ||
+                  !earnableStatuses.includes(String(saleStatusRow.rows[0].status).toLowerCase())
+                )
+                  return;
+
                 const earningRate = Number(settings.rows[0].loyalty_earning_rate) || 0.01;
-                const loyaltyEarned = Number(total) * earningRate;
+                const minSaleTotal = settings.rows[0].loyalty_min_sale_total;
+                if (minSaleTotal !== null && minSaleTotal !== undefined && loyaltyEarnBase < Number(minSaleTotal)) return;
+
+                const loyaltyEarned = Math.round(loyaltyEarnBase * earningRate * 10000) / 10000;
 
                 if (loyaltyEarned <= 0) return;
 
-                // Insert/update loyalty balance (upsert) and get new balance
-                const balanceResult = await db(
-                  `
-                  INSERT INTO customer_loyalty_balances (company_id, customer_id, balance)
-                  VALUES ($1, $2, $3)
-                  ON CONFLICT (company_id, customer_id) 
-                  DO UPDATE SET balance = customer_loyalty_balances.balance + EXCLUDED.balance,
-                                 updated_at = NOW()
-                  RETURNING balance
-                  `,
-                  [req.user.companyId, customerId, loyaltyEarned]
-                );
+                /* T10R idempotent earn: the unique index
+                 * uq_loyalty_earn_per_sale makes a second EARN for the same
+                 * sale impossible (lost-acknowledgement retry / double
+                 * fire). If the insert hits 23505 the balance upsert is
+                 * reversed so the stored balance stays ledger-true. */
+                let balanceAfter;
+                try {
+                  // Insert/update loyalty balance (upsert) and get new balance
+                  const balanceResult = await db(
+                    `
+                    INSERT INTO customer_loyalty_balances (company_id, customer_id, balance)
+                    VALUES ($1, $2, $3)
+                    ON CONFLICT (company_id, customer_id) 
+                    DO UPDATE SET balance = customer_loyalty_balances.balance + EXCLUDED.balance,
+                                   updated_at = NOW()
+                    RETURNING balance
+                    `,
+                    [req.user.companyId, customerId, loyaltyEarned]
+                  );
 
-                const balanceAfter = Number(balanceResult.rows[0].balance);
+                  balanceAfter = Number(balanceResult.rows[0].balance);
 
-                // Record transaction
-                await db(
-                  `
-                  INSERT INTO customer_loyalty_transactions 
-                    (company_id, customer_id, transaction_type, amount, balance_after, reference_type, reference_id, description, created_by)
-                  VALUES ($1, $2, 'EARN', $3, $4, 'sale', $5, 'Sale completed', $6)
-                  `,
-                  [req.user.companyId, customerId, loyaltyEarned, balanceAfter, saleId, req.user.id]
-                );
+                  // Record transaction
+                  await db(
+                    `
+                    INSERT INTO customer_loyalty_transactions 
+                      (company_id, customer_id, transaction_type, amount, balance_after, reference_type, reference_id, description, created_by)
+                    VALUES ($1, $2, 'EARN', $3, $4, 'sale', $5, 'Sale completed', $6)
+                    `,
+                    [req.user.companyId, customerId, loyaltyEarned, balanceAfter, saleId, req.user.id]
+                  );
+                } catch (earnError) {
+                  if (earnError && earnError.code === "23505") {
+                    /* Already earned for this sale - reverse the balance
+                     * upsert so it matches the ledger, then finish quietly. */
+                    try {
+                      await db(
+                        `UPDATE customer_loyalty_balances SET balance = balance - $3, updated_at = NOW() WHERE company_id = $1 AND customer_id = $2`,
+                        [req.user.companyId, customerId, loyaltyEarned]
+                      );
+                    } catch (revertError) {
+                      console.error("Loyalty balance revert error:", revertError);
+                    }
+                    return;
+                  }
+                  throw earnError;
+                }
 
                 // Audit log for loyalty earning
                 writeAudit(

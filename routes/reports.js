@@ -315,6 +315,7 @@ export default function createReportsRouter({ authenticate, authorize, db }) {
         `
         SELECT ts.id, ts.status, ts.opened_at, ts.closed_at, ts.opening_cash, ts.closing_cash,
                ts.expected_cash, ts.cash_difference,
+               (ts.opened_at AT TIME ZONE c.timezone)::date AS business_date,
                t.name AS terminal_name, u.username AS opened_by_name, cl.username AS closed_by_name,
                COALESCE(SUM(CASE WHEN cm.type = 'cash_in' THEN cm.amount ELSE 0 END), 0) AS cash_in_total,
                COALESCE(SUM(CASE WHEN cm.type = 'cash_out' THEN cm.amount ELSE 0 END), 0) AS cash_out_total,
@@ -328,16 +329,28 @@ export default function createReportsRouter({ authenticate, authorize, db }) {
                    AND pa.payment_method = 'cash'
                    AND sa.status = 'completed'
                    AND sa.created_at BETWEEN ts.opened_at AND COALESCE(ts.closed_at, NOW())
-               ) AS cash_sales
+               ) AS cash_sales,
+               (
+                 SELECT COALESCE(SUM(r.amount), 0)
+                 FROM refunds r
+                 INNER JOIN sales rs ON rs.id = r.sale_id
+                 WHERE rs.company_id = ts.company_id
+                   AND rs.store_id = ts.store_id
+                   AND rs.terminal_id = ts.terminal_id
+                   AND r.payment_method = 'cash'
+                   AND r.created_at BETWEEN ts.opened_at AND COALESCE(ts.closed_at, NOW())
+               ) AS cash_refunds
         FROM till_sessions ts
         INNER JOIN terminals t ON t.id = ts.terminal_id
+        INNER JOIN stores st ON st.id = ts.store_id
+        INNER JOIN companies c ON c.id = st.company_id
         LEFT JOIN users u ON u.id = ts.user_id
         LEFT JOIN users cl ON cl.id = ts.closed_by
         LEFT JOIN cash_movements cm ON cm.till_session_id = ts.id
         WHERE ts.company_id = $1 AND ts.store_id = $2
-          AND ($3::date IS NULL OR ts.opened_at::date >= $3::date)
-          AND ($4::date IS NULL OR ts.opened_at::date <= $4::date)
-        GROUP BY ts.id, t.name, u.username, cl.username
+          AND ($3::date IS NULL OR (ts.opened_at AT TIME ZONE c.timezone)::date >= $3::date)
+          AND ($4::date IS NULL OR (ts.opened_at AT TIME ZONE c.timezone)::date <= $4::date)
+        GROUP BY ts.id, t.name, u.username, cl.username, c.timezone, st.id
         ORDER BY ts.opened_at DESC
         `,
         scopedReportParams(req)
@@ -347,23 +360,35 @@ export default function createReportsRouter({ authenticate, authorize, db }) {
         const cashIn = Number(row.cash_in_total) || 0;
         const cashOut = Number(row.cash_out_total) || 0;
         const cashSales = Number(row.cash_sales) || 0;
+        const cashRefunds = Number(row.cash_refunds) || 0;
         const closed = row.status === "closed";
-        const expected = closed ? Number(row.expected_cash) || 0 : opening + cashIn - cashOut + cashSales;
+        /* Closed sessions report the authoritative values persisted at close
+         * time verbatim — never a recomputation that could disagree. */
+        const expected = closed
+          ? Number(row.expected_cash) || 0
+          : opening + cashIn + cashSales - cashOut - cashRefunds;
+        const difference = closed ? Number(row.cash_difference) || 0 : null;
+        const varianceStatus = closed
+          ? difference < -0.004 ? "short" : difference > 0.004 ? "over" : "exact"
+          : null;
         return {
           id: row.id,
           terminal: row.terminal_name,
           openedBy: row.opened_by_name,
           closedBy: row.closed_by_name,
           status: row.status,
+          businessDate: row.business_date,
           openedAt: row.opened_at,
           closedAt: row.closed_at,
           openingCash: opening,
           cashIn,
           cashOut,
           cashSales,
+          cashRefunds,
           expectedClosing: expected,
           actualClosing: closed ? Number(row.closing_cash) || 0 : null,
-          difference: closed ? Number(row.cash_difference) || 0 : null,
+          difference,
+          varianceStatus,
         };
       });
       const summary = sessions.reduce(
@@ -373,14 +398,120 @@ export default function createReportsRouter({ authenticate, authorize, db }) {
           cashIn: acc.cashIn + s.cashIn,
           cashOut: acc.cashOut + s.cashOut,
           cashSales: acc.cashSales + s.cashSales,
+          cashRefunds: acc.cashRefunds + s.cashRefunds,
           expectedClosing: acc.expectedClosing + s.expectedClosing,
           actualClosing: acc.actualClosing + (s.actualClosing || 0),
           difference: acc.difference + (s.difference || 0),
         }),
-        { sessions: 0, openingCash: 0, cashIn: 0, cashOut: 0, cashSales: 0, expectedClosing: 0, actualClosing: 0, difference: 0 }
+        { sessions: 0, openingCash: 0, cashIn: 0, cashOut: 0, cashSales: 0, cashRefunds: 0, expectedClosing: 0, actualClosing: 0, difference: 0 }
       );
       res.json({ success: true, data: { summary, sessions } });
     } catch (error) { console.error("Till report error:", error); res.status(500).json({ success: false, message: "Unable to load till report" }); }
+  });
+
+  /*
+   * GET /api/reports/till/:sessionId
+   * Daily-till-close session detail: authoritative session reconciliation
+   * (stored expected/actual/variance — never recomputed) plus the session's
+   * cash-movement audit trail. Read-only, company+store scoped, and usable
+   * by report viewers without cash.adjustment/cash.payout permissions.
+   */
+  router.get("/reports/till/:sessionId", authenticate, authorize("reports.till.view"), async (req, res) => {
+    try {
+      const session = await db(
+        `
+        SELECT ts.id, ts.status, ts.opened_at, ts.closed_at, ts.opening_cash, ts.closing_cash,
+               ts.expected_cash, ts.cash_difference,
+               (ts.opened_at AT TIME ZONE c.timezone)::date AS business_date,
+               t.name AS terminal_name, u.username AS opened_by_name, cl.username AS closed_by_name,
+               COALESCE((SELECT SUM(amount) FROM cash_movements cm WHERE cm.till_session_id = ts.id AND cm.type = 'cash_in'), 0) AS cash_in_total,
+               COALESCE((SELECT SUM(amount) FROM cash_movements cm WHERE cm.till_session_id = ts.id AND cm.type = 'cash_out'), 0) AS cash_out_total,
+               (
+                 SELECT COALESCE(SUM(sa.total), 0)
+                 FROM sales sa
+                 INNER JOIN payments pa ON pa.sale_id = sa.id
+                 WHERE sa.company_id = ts.company_id
+                   AND sa.store_id = ts.store_id
+                   AND sa.terminal_id = ts.terminal_id
+                   AND pa.payment_method = 'cash'
+                   AND sa.status = 'completed'
+                   AND sa.created_at BETWEEN ts.opened_at AND COALESCE(ts.closed_at, NOW())
+               ) AS cash_sales,
+               (
+                 SELECT COALESCE(SUM(r.amount), 0)
+                 FROM refunds r
+                 INNER JOIN sales rs ON rs.id = r.sale_id
+                 WHERE rs.company_id = ts.company_id
+                   AND rs.store_id = ts.store_id
+                   AND rs.terminal_id = ts.terminal_id
+                   AND r.payment_method = 'cash'
+                   AND r.created_at BETWEEN ts.opened_at AND COALESCE(ts.closed_at, NOW())
+               ) AS cash_refunds
+        FROM till_sessions ts
+        INNER JOIN terminals t ON t.id = ts.terminal_id
+        INNER JOIN stores st ON st.id = ts.store_id
+        INNER JOIN companies c ON c.id = st.company_id
+        LEFT JOIN users u ON u.id = ts.user_id
+        LEFT JOIN users cl ON cl.id = ts.closed_by
+        WHERE ts.id = $3 AND ts.company_id = $1 AND ts.store_id = $2
+        `,
+        [req.user.companyId, req.user.storeId, req.params.sessionId]
+      );
+      if (!session.rows.length) {
+        return res.status(404).json({ success: false, message: "Till session not found" });
+      }
+      const row = session.rows[0];
+      const opening = Number(row.opening_cash) || 0;
+      const cashIn = Number(row.cash_in_total) || 0;
+      const cashOut = Number(row.cash_out_total) || 0;
+      const cashSales = Number(row.cash_sales) || 0;
+      const cashRefunds = Number(row.cash_refunds) || 0;
+      const closed = row.status === "closed";
+      const difference = closed ? Number(row.cash_difference) || 0 : null;
+      const movements = await db(
+        `SELECT cm.id, cm.type, cm.amount, cm.reason, cm.created_at, u.username
+         FROM cash_movements cm
+         LEFT JOIN users u ON u.id = cm.user_id
+         WHERE cm.till_session_id = $3
+         ORDER BY cm.created_at DESC
+         LIMIT 200`,
+        [req.user.companyId, req.user.storeId, req.params.sessionId]
+      );
+      res.json({
+        success: true,
+        data: {
+          session: {
+            id: row.id,
+            terminal: row.terminal_name,
+            openedBy: row.opened_by_name,
+            closedBy: row.closed_by_name,
+            status: row.status,
+            businessDate: row.business_date,
+            openedAt: row.opened_at,
+            closedAt: row.closed_at,
+            openingCash: opening,
+            cashIn,
+            cashOut,
+            cashSales,
+            cashRefunds,
+            expectedClosing: closed ? Number(row.expected_cash) || 0 : opening + cashIn + cashSales - cashOut - cashRefunds,
+            actualClosing: closed ? Number(row.closing_cash) || 0 : null,
+            difference,
+            varianceStatus: closed
+              ? difference < -0.004 ? "short" : difference > 0.004 ? "over" : "exact"
+              : null,
+          },
+          movements: movements.rows.map((m) => ({
+            id: m.id,
+            type: m.type,
+            amount: Number(m.amount) || 0,
+            reason: m.reason,
+            username: m.username,
+            createdAt: m.created_at,
+          })),
+        },
+      });
+    } catch (error) { console.error("Till session detail error:", error); res.status(500).json({ success: false, message: "Unable to load till session detail" }); }
   });
 
   router.get("/reports/vat", authenticate, authorize("reports.vat.view"), async (req, res) => {

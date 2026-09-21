@@ -48,6 +48,8 @@ import MobileCartSheet from "./MobileCartSheet.jsx";
 import PaymentModal from "./PaymentModal.jsx";
 import CustomerSelectorModal from "./CustomerSelectorModal.jsx";
 import { MiscItemModal, PettyCashModal, PrintReceiptModal } from "./TillActionsModals.jsx";
+import JarvisOrb, { ORB_STATES } from "../../components/jarvis/JarvisOrb.jsx";
+import JarvisPanel from "../../components/jarvis/JarvisPanel.jsx";
 
 /* =========================================================
    POS / TILL
@@ -85,6 +87,15 @@ function POS({
   const [showPettyCash, setShowPettyCash] = useState(false);
   const [showPrint, setShowPrint] = useState(false);
   const [lastSale, setLastSale] = useState(null);
+
+  /*
+   * JARVIS assistant (UI presence only): the orb opens the panel; the panel
+   * reports its activity (listening/thinking) so the orb's animation mirrors
+   * what the assistant is doing. All requests go through services/jarvis.js.
+   */
+  const [showJarvis, setShowJarvis] = useState(false);
+  const [jarvisActivity, setJarvisActivity] = useState(null);
+  const jarvisOrbState = jarvisActivity || ORB_STATES.IDLE;
 
   /*
    * Till Misc Item lines collected via the Misc Item modal. They live in
@@ -2110,6 +2121,23 @@ function POS({
         storeName={storeName}
         till={till}
       />
+
+      {/* JARVIS assistant: presence orb + panel. Rendered last so it can sit
+          above the till layout while staying below the z-50 modals it opens. */}
+      <JarvisOrb
+        state={jarvisOrbState}
+        open={showJarvis}
+        onClick={() => setShowJarvis(true)}
+      />
+      {showJarvis && (
+        <JarvisPanel
+          onClose={() => {
+            setShowJarvis(false);
+            setJarvisActivity(null);
+          }}
+          onActivityChange={setJarvisActivity}
+        />
+      )}
     </div>
   );
 }

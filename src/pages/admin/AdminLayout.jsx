@@ -548,7 +548,7 @@ export default function AdminLayout({
             <OnlineOrdersPrep permissions={onlinePermissions} />
           ) : page ===
             "Settings" ? (
-            <SettingsAdmin key={settingsTab} initialTab={settingsTab} />
+            <SettingsAdmin key={settingsTab} initialTab={settingsTab} isAdmin={onlinePermissions.isAdmin} />
           ) : page ===
             "Reports" ? (
             canViewReports ? (

@@ -70,7 +70,7 @@ export default function createReturnsRouter({
     const storeClause = storeId ? "AND s.store_id = $3" : "";
     const params = storeId ? [saleId, companyId, storeId] : [saleId, companyId];
     const saleResult = await clientOrDb.query(
-      `SELECT s.id, s.company_id, s.store_id, s.receipt_number, s.status,
+      `SELECT s.id, s.company_id, s.store_id, s.customer_id, s.receipt_number, s.status,
               s.subtotal, s.tax, s.discount, s.total, s.created_at, s.completed_at,
               cst.name AS customer_name, cst.phone AS customer_phone, cst.email AS customer_email,
               pay.payment_method, pay.amount AS payment_amount, pay.status AS payment_status

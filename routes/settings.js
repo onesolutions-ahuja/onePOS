@@ -23,6 +23,7 @@ export default function createSettingsRouter({
         SELECT
           c.id AS company_id, c.name AS company_name, c.legal_name, c.email AS company_email, c.phone AS company_phone, c.currency, c.timezone, c.logo_url,
           cs.date_format, cs.vat_enabled, cs.default_vat_rate, cs.loyalty_enabled, cs.loyalty_earning_rate,
+          cs.loyalty_min_sale_total, cs.loyalty_redeem_value_per_point, cs.loyalty_min_points_redeem,
           cs.allow_negative_inventory_billing,
           cs.scan_go_enabled, cs.online_ordering_enabled, cs.online_payment_methods,
           cs.product_view, cs.dock_quick_access,
@@ -72,6 +73,12 @@ export default function createSettingsRouter({
           loyalty: {
             enabled: settings.loyalty_enabled ?? false,
             earningRate: Number(settings.loyalty_earning_rate ?? 0.0100),
+            /* T10R: redemption economics + minimum qualifying sale.
+             * null = feature not configured (redemption UI must treat a
+             * null redeem value as "redemption not configured"). */
+            minSaleTotal: settings.loyalty_min_sale_total == null ? null : Number(settings.loyalty_min_sale_total),
+            redeemValuePerPoint: settings.loyalty_redeem_value_per_point == null ? null : Number(settings.loyalty_redeem_value_per_point),
+            minPointsRedeem: settings.loyalty_min_points_redeem == null ? null : Number(settings.loyalty_min_points_redeem),
           },
           scanGo: {
             enabled: settings.scan_go_enabled ?? false,
@@ -202,6 +209,9 @@ export default function createSettingsRouter({
       defaultVatRate,
       loyaltyEnabled,
       loyaltyEarningRate,
+      loyaltyMinSaleTotal,
+      loyaltyRedeemValuePerPoint,
+      loyaltyMinPointsRedeem,
       scanGoEnabled,
       productView,
       dockQuickAccess,
@@ -227,6 +237,34 @@ export default function createSettingsRouter({
       if (!Number.isFinite(earningRate) || earningRate < 0 || earningRate > 1) {
         return res.status(400).json({ success: false, message: "Loyalty earning rate must be between 0 and 1 (0% to 100%)" });
       }
+    }
+
+    /* T10R: loyalty redemption economics + minimum qualifying sale.
+     * Optional (null/omitted = not configured); normalised to numbers here
+     * so the INSERT binds clean numerics. */
+    let loyaltyMinSaleTotalNorm = null;
+    if (loyaltyMinSaleTotal !== undefined && loyaltyMinSaleTotal !== null) {
+      const minSale = Number(loyaltyMinSaleTotal);
+      if (!Number.isFinite(minSale) || minSale < 0) {
+        return res.status(400).json({ success: false, message: "Loyalty minimum sale total must be a non-negative number" });
+      }
+      loyaltyMinSaleTotalNorm = minSale;
+    }
+    let loyaltyRedeemValueNorm = null;
+    if (loyaltyRedeemValuePerPoint !== undefined && loyaltyRedeemValuePerPoint !== null) {
+      const redeemValue = Number(loyaltyRedeemValuePerPoint);
+      if (!Number.isFinite(redeemValue) || redeemValue < 0) {
+        return res.status(400).json({ success: false, message: "Loyalty redemption value per point must be a non-negative number" });
+      }
+      loyaltyRedeemValueNorm = redeemValue;
+    }
+    let loyaltyMinPointsNorm = null;
+    if (loyaltyMinPointsRedeem !== undefined && loyaltyMinPointsRedeem !== null) {
+      const minPoints = Math.floor(Number(loyaltyMinPointsRedeem));
+      if (!Number.isFinite(minPoints) || minPoints < 0) {
+        return res.status(400).json({ success: false, message: "Loyalty minimum points for redemption must be a non-negative integer" });
+      }
+      loyaltyMinPointsNorm = minPoints;
     }
 
     // Validate till product view (T10Q: image | compact; default image)
@@ -304,9 +342,9 @@ export default function createSettingsRouter({
          arm below keeps the stored value on update. */
       await client.query(
         `
-        INSERT INTO company_settings (company_id, date_format, vat_enabled, default_vat_rate, loyalty_enabled, loyalty_earning_rate, scan_go_enabled, product_view, dock_quick_access, customer_display_enabled, online_ordering_enabled, online_payment_methods, till_invoice_prefix, delivery_invoice_prefix, self_checkout_invoice_prefix, updated_by, updated_at)
-        VALUES ($1,$2,$3,$4,$5,COALESCE($6, 0.0100),$7,COALESCE($8, 'image'),COALESCE($9::jsonb, '["Dashboard", "Sales", "Products", "Inventory", "Customers", "Reports"]'::jsonb),COALESCE($10, false),$11,COALESCE($12::jsonb, '["card", "cash", "cod"]'::jsonb),COALESCE($13,'TO'),COALESCE($14,'DEL'),COALESCE($15,'SC'),$16,NOW())
-        ON CONFLICT (company_id) DO UPDATE SET date_format=$2, vat_enabled=$3, default_vat_rate=$4, loyalty_enabled=$5, loyalty_earning_rate=COALESCE($6, company_settings.loyalty_earning_rate), scan_go_enabled=$7, product_view=COALESCE($8, company_settings.product_view), dock_quick_access=COALESCE($9::jsonb, company_settings.dock_quick_access), customer_display_enabled=COALESCE($10, company_settings.customer_display_enabled), online_ordering_enabled=$11, online_payment_methods=COALESCE($12::jsonb, company_settings.online_payment_methods), till_invoice_prefix=COALESCE($13, company_settings.till_invoice_prefix), delivery_invoice_prefix=COALESCE($14, company_settings.delivery_invoice_prefix), self_checkout_invoice_prefix=COALESCE($15, company_settings.self_checkout_invoice_prefix), updated_by=$16, updated_at=NOW()
+        INSERT INTO company_settings (company_id, date_format, vat_enabled, default_vat_rate, loyalty_enabled, loyalty_earning_rate, loyalty_min_sale_total, loyalty_redeem_value_per_point, loyalty_min_points_redeem, scan_go_enabled, product_view, dock_quick_access, customer_display_enabled, online_ordering_enabled, online_payment_methods, till_invoice_prefix, delivery_invoice_prefix, self_checkout_invoice_prefix, updated_by, updated_at)
+        VALUES ($1,$2,$3,$4,$5,COALESCE($6, 0.0100),$7::numeric,$8::numeric,$9::integer,$10,COALESCE($11, 'image'),COALESCE($12::jsonb, '["Dashboard", "Sales", "Products", "Inventory", "Customers", "Reports"]'::jsonb),COALESCE($13, false),$14,COALESCE($15::jsonb, '["card", "cash", "cod"]'::jsonb),COALESCE($16,'TO'),COALESCE($17,'DEL'),COALESCE($18,'SC'),$19,NOW())
+        ON CONFLICT (company_id) DO UPDATE SET date_format=$2, vat_enabled=$3, default_vat_rate=$4, loyalty_enabled=$5, loyalty_earning_rate=COALESCE($6, company_settings.loyalty_earning_rate), loyalty_min_sale_total=COALESCE($7::numeric, company_settings.loyalty_min_sale_total), loyalty_redeem_value_per_point=COALESCE($8::numeric, company_settings.loyalty_redeem_value_per_point), loyalty_min_points_redeem=COALESCE($9::integer, company_settings.loyalty_min_points_redeem), scan_go_enabled=$10, product_view=COALESCE($11, company_settings.product_view), dock_quick_access=COALESCE($12::jsonb, company_settings.dock_quick_access), customer_display_enabled=COALESCE($13, company_settings.customer_display_enabled), online_ordering_enabled=$14, online_payment_methods=COALESCE($15::jsonb, company_settings.online_payment_methods), till_invoice_prefix=COALESCE($16, company_settings.till_invoice_prefix), delivery_invoice_prefix=COALESCE($17, company_settings.delivery_invoice_prefix), self_checkout_invoice_prefix=COALESCE($18, company_settings.self_checkout_invoice_prefix), updated_by=$19, updated_at=NOW()
         `,
         [
           req.user.companyId,
@@ -315,6 +353,9 @@ export default function createSettingsRouter({
           vatRate,
           loyaltyEnabled !== false,
           loyaltyEarningRate !== undefined ? loyaltyEarningRate : null,
+          loyaltyMinSaleTotalNorm,
+          loyaltyRedeemValueNorm,
+          loyaltyMinPointsNorm,
           scanGoEnabled === true,
           productView === "compact" ? "compact" : productView === "image" ? "image" : null,
           Array.isArray(dockQuickAccess) ? JSON.stringify(dockQuickAccess) : null,

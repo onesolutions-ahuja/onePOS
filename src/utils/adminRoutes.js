@@ -85,6 +85,8 @@ export const SETTINGS_TAB_SLUGS = {
   WhatsApp: "whatsapp",
   "SMS Delivery": "sms-delivery",
   "Email Delivery": "email-delivery",
+  /* System / device-level configuration. */
+  "Server / API Configuration": "server-api",
   /* Legacy sections (pre left-panel navigation) - kept so existing deep
      links still resolve; the Settings page redirects them internally. */
   "Users & Permissions": "users-permissions",

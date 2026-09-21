@@ -27,12 +27,27 @@ export const GEMINI_API_BASE = "https://generativelanguage.googleapis.com";
 /*
  * `gemini-flash-latest` is an alias that always points at the current Flash
  * text model, so the assistant keeps working when a specific version is
- * retired. Pin a version with JARVIS_GEMINI_MODEL (e.g. gemini-2.5-flash)
- * when a fixed model is required.
+ * retired. Pin a version with JARVIS_GEMINI_MODEL (e.g. gemini-3.6-flash or a
+ * Flash-Lite model) when a fixed model is required.
+ *
+ * Latency note: Google documents that Gemini 3 and 2.5 series models "think"
+ * before answering, and thinking is on by default across those series. The
+ * `-latest` alias is hot-swapped to each new Flash release, so the model
+ * behind it (and therefore its latency) can change without any change here.
  */
 export const GEMINI_DEFAULT_MODEL = "gemini-flash-latest";
 
-export const GEMINI_DEFAULT_TIMEOUT_MS = 20000;
+/*
+ * Default request budget in milliseconds.
+ *
+ * A thinking-enabled Flash model can legitimately take longer than the 20s
+ * this originally allowed for a short question, and a request that is aborted
+ * while the model is still thinking surfaces to the user as
+ * `provider_timeout` (504) even though nothing is broken. 45s is a safety
+ * margin, not a target: pin a faster model with JARVIS_GEMINI_MODEL if
+ * answers feel slow, or raise/lower this with JARVIS_AI_TIMEOUT_MS.
+ */
+export const GEMINI_DEFAULT_TIMEOUT_MS = 45000;
 
 /* V1 answers questions; it does not brainstorm. Low temperature + a bounded
  * output keeps answers concise, fast and cheap. */
@@ -205,8 +220,14 @@ export function createGeminiProvider({
   return {
     name: GEMINI_PROVIDER_NAME,
     model: resolvedModel,
+    timeoutMs: resolvedTimeoutMs,
     isConfigured,
-    describe: () => ({ provider: GEMINI_PROVIDER_NAME, model: resolvedModel, configured: isConfigured() }),
+    describe: () => ({
+      provider: GEMINI_PROVIDER_NAME,
+      model: resolvedModel,
+      configured: isConfigured(),
+      timeoutMs: resolvedTimeoutMs,
+    }),
     generateAnswer,
   };
 }

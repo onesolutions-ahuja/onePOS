@@ -195,6 +195,12 @@ export async function initializeDatabase(pool) {
 
     ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS dock_quick_access JSONB NOT NULL DEFAULT '["Dashboard", "Sales", "Products", "Inventory", "Customers", "Reports"]'::jsonb;
     ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS customer_display_enabled BOOLEAN NOT NULL DEFAULT FALSE;
+    /* T10R loyalty programme: redemption economics + minimum qualifying
+     * sale. earning_rate converts currency spent to points; redeem_value
+     * converts points to currency; min points gate redemption. */
+    ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS loyalty_min_sale_total NUMERIC(12,2) NULL;
+    ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS loyalty_redeem_value_per_point NUMERIC(12,4) NULL;
+    ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS loyalty_min_points_redeem INTEGER NULL;
     ALTER TABLE stores ADD COLUMN IF NOT EXISTS self_checkout_key_hash VARCHAR(100);
     ALTER TABLE ean_product_master ADD COLUMN IF NOT EXISTS image_url TEXT NULL;
 
@@ -760,6 +766,29 @@ export async function initializeDatabase(pool) {
     CREATE INDEX IF NOT EXISTS idx_loyalty_transactions_reference
     ON customer_loyalty_transactions(reference_type, reference_id);
 
+    /* T10R: idempotent earning. At most one EARN per sale, enforced by the
+     * database so a retried/lost-acknowledgement sale can never award
+     * points twice. Balance upserts must be reversed when this fires. */
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_loyalty_earn_per_sale
+    ON customer_loyalty_transactions (company_id, reference_id)
+    WHERE transaction_type = 'EARN' AND reference_type = 'sale';
+
+    /* T10R: manual/admin point adjustments - permission-controlled,
+     * auditable, referenceable to a sale/invoice. */
+    CREATE TABLE IF NOT EXISTS customer_loyalty_adjustments (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+      customer_id UUID NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
+      points NUMERIC(12,4) NOT NULL,
+      reason TEXT,
+      reference_id UUID NULL,
+      created_by UUID REFERENCES users(id) ON DELETE SET NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_loyalty_adjustments_customer
+    ON customer_loyalty_adjustments(customer_id, created_at DESC);
+
     CREATE TABLE IF NOT EXISTS sales (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       company_id UUID NOT NULL REFERENCES companies(id),
@@ -907,6 +936,14 @@ export async function initializeDatabase(pool) {
       ADD COLUMN IF NOT EXISTS store_id UUID REFERENCES stores(id) ON DELETE SET NULL,
       ADD COLUMN IF NOT EXISTS closed_by UUID REFERENCES users(id) ON DELETE SET NULL;
 
+    /* Till workflow (T-TILL): a till must not have two simultaneously open
+     * sessions. The partial unique index makes "at most one open session per
+     * terminal" atomic — the API's SELECT-then-INSERT guard alone is racy
+     * under concurrent opens. */
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_till_sessions_open_per_terminal
+    ON till_sessions(terminal_id)
+    WHERE status = 'open';
+
      CREATE TABLE IF NOT EXISTS cash_movements (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       till_session_id UUID NOT NULL REFERENCES till_sessions(id),
@@ -916,6 +953,12 @@ export async function initializeDatabase(pool) {
       reason TEXT,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
+
+    /* T-TILL: who/where recorded a cash movement (session row already
+     * carries till+store via terminal; these denormalise for audit). */
+    ALTER TABLE cash_movements
+      ADD COLUMN IF NOT EXISTS store_id UUID REFERENCES stores(id) ON DELETE SET NULL,
+      ADD COLUMN IF NOT EXISTS terminal_id UUID REFERENCES terminals(id) ON DELETE SET NULL;
 
     CREATE TABLE IF NOT EXISTS audit_logs (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -1005,6 +1048,7 @@ export async function initializeDatabase(pool) {
     ["customer.create", "Create Customer"],
     ["customer.edit", "Edit Customer"],
     ["customer.delete", "Delete Customer"],
+    ["loyalty.adjust", "Adjust Customer Loyalty Points"],
     ["purchase.view", "View Purchases"],
     ["purchase.create", "Create Purchase"],
     ["purchase.edit", "Edit Purchase"],

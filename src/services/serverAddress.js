@@ -14,8 +14,10 @@
 |
 |   - Web (no address stored) -> nothing changes. Relative /api URLs keep
 |     resolving against the page's own origin, exactly as before.
-|   - Native app / paired device -> the cashier's saved server address is
-|     prefixed onto relative API URLs.
+|   - Native app / paired device -> if the cashier has saved a custom server
+|     address it is prefixed onto relative API URLs; otherwise the production
+|     Render default (DEFAULT_SERVER_ADDRESS) is used so the app works
+|     out of the box without any manual configuration.
 |
 | Only the ORIGIN is ever stored. Whatever path or query is typed is
 | dropped, so a stray "/pos" can never silently re-scope every request.
@@ -24,6 +26,17 @@
 */
 
 const SERVER_ADDRESS_KEY = "onepos_server_address";
+
+/*
+ * Default production API — the Render deployment. Sourced from the Vite env
+ * at build time (VITE_DEFAULT_API_URL in .env) so the origin is not hard-coded
+ * in multiple files; the fallback constant keeps tests and non-Vite consumers
+ * working outside the shell. This is the ONLY place the production default is
+ * defined.
+ */
+export const DEFAULT_SERVER_ADDRESS =
+  (import.meta && import.meta.env && import.meta.env.VITE_DEFAULT_API_URL) ||
+  "https://onepos.onrender.com";
 
 /*
  * True when running inside a Capacitor native shell. Reads the injected
@@ -68,13 +81,20 @@ export function normaliseServerAddress(value) {
   }
 }
 
-/* The saved server origin for this device, or "" when none is configured. */
+/*
+ * The server origin for this device. A saved custom address always wins; on a
+ * native device with no custom address saved, the production Render default
+ * is returned so the app works out of the box. On the web with no address
+ * saved, "" is returned so relative /api URLs resolve against the page origin.
+ */
 export function getServerAddress() {
   try {
-    return normaliseServerAddress(localStorage.getItem(SERVER_ADDRESS_KEY));
+    const stored = normaliseServerAddress(localStorage.getItem(SERVER_ADDRESS_KEY));
+    if (stored) return stored;
   } catch {
-    return "";
+    // Storage disabled/private mode: fall through to defaults below.
   }
+  return isNativeApp() ? DEFAULT_SERVER_ADDRESS : "";
 }
 
 /*

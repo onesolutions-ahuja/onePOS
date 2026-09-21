@@ -94,11 +94,15 @@ function TillSessionModal({ onClose, onUpdate }) {
     }
   };
 
+  /* T-TILL: the backend computes the cash position (current_cash) — the
+   * client only displays it, it never guesses. Falls back to 0 while loading. */
   const expectedCash = session
-    ? (Number(session.opening_cash) || 0)
-      + (Number(session.cash_in_total) || 0)
-      - (Number(session.cash_out_total) || 0)
-      + (Number(session.cash_sales) || 0)
+    ? (Number(session.current_cash) ||
+       (Number(session.opening_cash) || 0) +
+       (Number(session.cash_in_total) || 0) -
+       (Number(session.cash_out_total) || 0) +
+       (Number(session.cash_sales) || 0) -
+       (Number(session.cash_refunds) || 0))
     : 0;
 
   const isClosed = session ? session.status === "closed" : false;
