@@ -97,7 +97,7 @@ function ProductGrid({
 
   return (
     <>
-      <aside className="hidden md:flex md:w-[120px] xl:w-[150px] bg-white border-r border-slate-200 p-2 shrink-0 overflow-y-auto">
+      <aside className="hidden md:flex md:flex-col md:w-[120px] xl:w-[150px] bg-white border-r border-slate-200 p-2 shrink-0 overflow-y-auto md:overflow-x-hidden">
         <div className="text-[10px] font-bold text-slate-400 px-2 py-2">
           CATEGORIES
         </div>

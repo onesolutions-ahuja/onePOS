@@ -1,6 +1,7 @@
 import express from "express";
 import { checkCreditLimit, buildCreditSaleTransaction } from "../services/customerCredit.js";
 import { validateRedeemConfig, validateRedeemablePoints } from "../src/utils/loyaltyPoints.js";
+import { computeBasketTotals, roundCurrency } from "../src/utils/saleTotals.js";
 import { dispatchIntegrationEvent } from "../services/integrationDispatcher.js";
 import { dispatchWhatsAppInvoiceDelivery } from "../services/whatsappDelivery.js";
 import { dispatchSmsInvoiceDelivery, dispatchEmailInvoiceDelivery } from "../services/invoiceDelivery.js";
@@ -14,6 +15,8 @@ export default function createSalesRouter({
   associateCustomerWithStore,
   writeAudit = null,
   selfCheckoutMode = null,
+  getRolePermissionCodes = null,
+  canViewCompanyCustomers = null,
 }) {
   const router = express.Router();
 
@@ -234,6 +237,125 @@ export default function createSalesRouter({
           });
         }
 
+        /*
+          * T10-DISCOUNT: server-side discount authority.
+          *
+          * The till client MAY propose per-line and order discounts, but the
+          * server is the authority on whether a discount is allowed and how
+          * much it is worth. Order discounts require the `sale.discount`
+          * permission; without it the proposed order discount is dropped to 0.
+          * Authoritative totals are recomputed below from catalogue prices, so
+          * a non-privileged till cannot inflate a discount or fabricate prices.
+          */
+        const isAdmin = typeof canViewCompanyCustomers === "function"
+          ? await canViewCompanyCustomers(req.user)
+          : false;
+        let allowedOrderDiscountType = null;
+        let allowedOrderDiscountValue = 0;
+        if (typeof getRolePermissionCodes === "function") {
+          const roleCodes = await getRolePermissionCodes(req.user.roleId);
+          const canDiscount = isAdmin || roleCodes.includes("sale.discount");
+          if (canDiscount) {
+            const dt = req.body.discountType ?? null;
+            const dv = Number(req.body.discountValue ?? 0) || 0;
+            if ((dt === "percent" || dt === "fixed") && dv > 0) {
+              allowedOrderDiscountType = dt;
+              allowedOrderDiscountValue = dv;
+            }
+          }
+        }
+
+        /*
+         * Multiple payment methods — one authoritative tender list.
+         *
+         * `payments` in the request body is an optional array of
+         * { paymentMethod, amount } lines (split tender). When absent, the
+         * single `paymentMethod` tender is used exactly as before — cash,
+         * card, customer_credit, loyalty redemption and gift-card flows are
+         * untouched. Validation rules:
+         *   - each line needs a known method and a positive amount;
+         *   - methods must not repeat (one row per tender);
+         *   - the tender lines must reconcile EXACTLY to the sale total
+         *     (pennies) — over/underpayment is rejected. Cash change is a
+         *     display concern handled by the till UI, never a split line.
+         *   - customer_credit and loyalty redemption are whole-sale tenders:
+         *     they may not be mixed with other methods (credit exposes the
+         *     full sale amount on the ledger; loyalty redemption already
+         *     pre-commit debits its points against the full total).
+         */
+        const PAYMENT_METHODS = [
+          "cash",
+          "card",
+          "customer_credit",
+          "gift_card",
+          "voucher",
+          "cheque",
+          "bank_transfer",
+          "online",
+        ];
+        const rawPayments = Array.isArray(req.body.payments) ? req.body.payments : [];
+        let paymentLines = null;
+        if (rawPayments.length) {
+          if (rawPayments.length > 8) {
+            await client.query("ROLLBACK");
+            return res.status(400).json({
+              success: false,
+              message: "Too many payment lines (maximum 8)",
+            });
+          }
+
+          const seen = new Set();
+          paymentLines = [];
+          let sumCents = 0;
+          for (const line of rawPayments) {
+            const method = String(line?.paymentMethod || "").trim();
+            const amount = Number(line?.amount);
+            if (!PAYMENT_METHODS.includes(method) || !Number.isFinite(amount) || amount <= 0) {
+              await client.query("ROLLBACK");
+              return res.status(400).json({
+                success: false,
+                message: `Invalid payment line: method must be one of ${PAYMENT_METHODS.join(", ")} and amount must be greater than 0`,
+              });
+            }
+            if (seen.has(method)) {
+              await client.query("ROLLBACK");
+              return res.status(400).json({
+                success: false,
+                message: `Duplicate payment method: ${method}`,
+              });
+            }
+            seen.add(method);
+            const cents = Math.round(amount * 100);
+            sumCents += cents;
+            paymentLines.push({ method, amount: cents / 100 });
+          }
+
+          const totalCents = Math.round((Number(total) || 0) * 100);
+          if (sumCents !== totalCents) {
+            await client.query("ROLLBACK");
+            return res.status(400).json({
+              success: false,
+              message: `Payments total ${(sumCents / 100).toFixed(2)} does not match the sale total ${(totalCents / 100).toFixed(2)}`,
+            });
+          }
+
+          if (seen.has("customer_credit") && seen.size > 1) {
+            await client.query("ROLLBACK");
+            return res.status(400).json({
+              success: false,
+              message: "Customer credit cannot be combined with other payment methods",
+            });
+          }
+        } else if (paymentMethod === "split") {
+          /* A "split" sale without tender lines would produce a meaningless
+             single payment row — demand the array. */
+          await client.query("ROLLBACK");
+          return res.status(400).json({
+            success: false,
+            message: "Split payment requires a payments array",
+          });
+        }
+
         /* Till Misc Item lines count as sale content (declared properly in
            the MISC block below; guarded with a body check here). */
         if ((!Array.isArray(items) || !items.length) &&
@@ -256,6 +378,16 @@ export default function createSalesRouter({
         const loyaltyTenderApplied = redeemPoints > 0;
         let loyaltyRedeemValue = 0; // currency value redeemed (0 when none)
         if (redeemPoints > 0) {
+          /* Redemption is a whole-sale tender handled by the loyalty ledger
+             below (pre-commit debit against the full total) — it can never be
+             combined with split payment lines without double-counting money. */
+          if (paymentLines) {
+            await client.query("ROLLBACK");
+            return res.status(400).json({
+              success: false,
+              message: "Loyalty redemption cannot be combined with split payments. Complete the sale with a single payment method.",
+            });
+          }
           if (!customerId) {
             await client.query("ROLLBACK");
             return res.status(400).json({
@@ -575,6 +707,94 @@ export default function createSalesRouter({
         ).padStart(4, "0")}`;
 
         /*
+          * T10-DISCOUNT: authoritative totals recomputation.
+          *
+          * Reads the validated product rows once into a map and recomputes
+          * basket totals from authoritative catalogue prices, mirroring
+          * src/utils/saleTotals.js semantics: per-line discounts are capped at
+          * each line's gross and applied first, then the order discount (only
+          * when sale.discount is held) is applied across the discounted basket,
+          * then VAT is computed with per-product vat_applicable under the
+          * company default rate. The client-proposed subtotal/tax/discount/total
+          * are DISCARDED and replaced, so a till cannot inflate prices, apply a
+          * discount it lacks permission for, or submit a non-reconciling total.
+          */
+        const vatRateFromBody = Number(req.body.vatRate ?? 0) || 0;
+        const productPriceMap = {};
+        const priceRows = await client.query(
+          `
+          SELECT id, price, vat_rate, vat_applicable
+          FROM products
+          WHERE company_id = $1
+            AND id = ANY($2::uuid[])
+            AND active = true
+          `,
+          [req.user.companyId, items.map((i) => i.productId)]
+        );
+        for (const row of priceRows.rows) {
+          productPriceMap[row.id] = row;
+        }
+
+        const basketForTotals = [];
+        const saleDiscountAudit = [];
+        for (const item of items) {
+          const p = productPriceMap[item.productId];
+          const price = Number(p?.price) || 0;
+          const qty = Number(item.quantity) || 1;
+          const vatRate = p ? Number(p.vat_rate || 0) / 100 : vatRateFromBody;
+          const vatApplicable = p ? p.vat_applicable !== false : true;
+
+          const ldt = item.discountType;
+          const ldv = Number(item.discountValue ?? 0) || 0;
+          const ld = (ldt === "percent" || ldt === "fixed") && ldv > 0
+            ? ldt === "percent"
+              ? roundCurrency(Math.min(price * qty, (price * qty) * (ldv / 100)))
+              : roundCurrency(Math.min(price * qty, ldv))
+            : 0;
+
+          if (ld > 0 && item.discountedBy) {
+            saleDiscountAudit.push({
+              itemIndex: items.indexOf(item),
+              discountType: ldt,
+              discountValue: ldv,
+              amount: ld,
+              userId: item.discountedBy,
+            });
+          }
+
+          basketForTotals.push({
+            price,
+            quantity: qty,
+            vatApplicable,
+            discountType: ldt || null,
+            discountValue: ldv || 0,
+          });
+        }
+
+        const engine = computeBasketTotals(basketForTotals, {
+          vatEnabled: vatEnabled !== false,
+          vatRate: vatRateFromBody,
+          discountType: allowedOrderDiscountType,
+          discountValue: allowedOrderDiscountValue,
+        });
+
+        subtotal = roundCurrency(engine.subtotal);
+        tax = roundCurrency(engine.vat || 0);
+        discount = roundCurrency(engine.discountAmount);
+        total = roundCurrency(engine.total);
+
+        if (allowedOrderDiscountType && engine.orderDiscount > 0 && req.user.id) {
+          saleDiscountAudit.push({
+            itemIndex: null,
+            discountType: allowedOrderDiscountType,
+            discountValue: allowedOrderDiscountValue,
+            amount: roundCurrency(engine.orderDiscount),
+            userId: req.user.id,
+          });
+        }
+
+
+        /*
          * Create sale.
          */
         /* T10R: bound (was inline 'completed') so the loyalty earn guard
@@ -741,20 +961,32 @@ export default function createSalesRouter({
         }
 
         /*
-         * Payment record.
+         * Payment records — one row per tender.
+         *
+         * With a validated split (`payments` array) every line is persisted
+         * with its own method and amount (reconciliation already enforced
+         * above). Without one, the historic single tender is written exactly
+         * as before: loyalty redemption relabels the row "loyalty" (the
+         * redemption debit lives in the loyalty ledger), and credit/other
+         * methods pass through unchanged.
          */
-        await client.query(
-          `
-          INSERT INTO payments (
-            sale_id,
-            payment_method,
-            amount,
-            status
-          )
-          VALUES ($1,$2,$3,'completed')
-          `,
-          [saleId, loyaltyTenderApplied ? "loyalty" : paymentMethod, Number(total) || 0]
-        );
+        const tenderRows = paymentLines
+          ? paymentLines.map((line) => [saleId, line.method, line.amount])
+          : [[saleId, loyaltyTenderApplied ? "loyalty" : paymentMethod, Number(total) || 0]];
+        for (const [tSaleId, tMethod, tAmount] of tenderRows) {
+          await client.query(
+            `
+            INSERT INTO payments (
+              sale_id,
+              payment_method,
+              amount,
+              status
+            )
+            VALUES ($1,$2,$3,'completed')
+            `,
+            [tSaleId, tMethod, tAmount]
+          );
+        }
 
         /*
          * T10Y — Customer credit sale. Runs INSIDE the sale transaction so

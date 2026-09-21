@@ -205,6 +205,81 @@ setForm({
   );
 }
 
+/**
+ * JARVES licence control (Users tab). Company allowance + per-user enable /
+ * disable through the existing authenticated backend:
+ *   GET/PUT /api/settings/jarves         (settings.manage for the PUT)
+ *   PUT     /api/admin/users/:id/jarves  (user.edit)
+ */
+function JarvesLicenceCard({ state, onStateChange, canManage, onError }) {
+  const [allowance, setAllowance] = useState(String(state?.allowance ?? 0));
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    setAllowance(String(state?.allowance ?? 0));
+  }, [state?.allowance]);
+
+  const save = async () => {
+    try {
+      setSaving(true);
+      const response = await apiRequest("/api/settings/jarves", {
+        method: "PUT",
+        body: JSON.stringify({ allowance: Number.parseInt(allowance, 10) || 0 }),
+      });
+      if (!response.success) throw new Error(response.message || "Unable to save JARVES licence");
+      onStateChange?.(response.data);
+    } catch (err) {
+      onError(err.message || "Unable to save JARVES licence");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="bg-white border rounded-xl overflow-hidden" data-testid="jarves-licence-card">
+      <div className="p-4 border-b flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+        <div>
+          <h2 className="font-semibold">JARVES AI assistant</h2>
+          <p className="text-xs text-slate-500">
+            Licensed users: <span className="font-medium">{state?.enabledUsers ?? 0}</span> of{" "}
+            <span className="font-medium">{state?.allowance ?? 0}</span> ·{" "}
+            {state?.seatsRemaining ?? 0} seat(s) remaining
+          </p>
+        </div>
+        {canManage && (
+          <div className="flex items-center gap-2">
+            <label htmlFor="jarves-allowance" className="text-sm text-slate-600">
+              Licence allowance
+            </label>
+            <input
+              id="jarves-allowance"
+              type="number"
+              min="0"
+              value={allowance}
+              onChange={(e) => setAllowance(e.target.value)}
+              className="h-9 w-24 px-3 border rounded text-sm"
+              data-testid="jarves-allowance-input"
+            />
+            <button
+              type="button"
+              onClick={save}
+              disabled={saving}
+              className="h-9 px-3 bg-blue-600 text-white rounded text-sm disabled:opacity-50"
+              data-testid="jarves-allowance-save"
+            >
+              {saving ? "Saving…" : "Save"}
+            </button>
+          </div>
+        )}
+      </div>
+      <p className="px-4 py-2 text-xs text-slate-500">
+        Enable JARVES per user below. The number of enabled users can never exceed the allowance; lowering the
+        allowance below the users already enabled is refused — disable users first.
+      </p>
+    </div>
+  );
+}
+
 /*
  * Users section (left-panel navigation): user list only. Roles and the
  * permission matrix live in the separate "Roles & Permissions" section.
@@ -220,16 +295,18 @@ function UsersSettings({ onMessage, onError }) {
   const [error, setError] = useState("");
   const [permissions, setPermissions] = useState([]);
   const [isAdmin, setIsAdmin] = useState(false);
+  const [jarvesState, setJarvesState] = useState(null);
 
   const load = async () => {
     try {
       setLoading(true);
       setError("");
-      const [u, r, s, p] = await Promise.all([
+      const [u, r, s, p, j] = await Promise.all([
         apiRequest("/api/admin/users"),
         apiRequest("/api/admin/roles"),
         apiRequest("/api/admin/stores"),
-        apiRequest("/api/auth/me/permissions")
+        apiRequest("/api/auth/me/permissions"),
+        apiRequest("/api/settings/jarves").catch(() => null),
       ]);
       if (!u.success) throw new Error(u.message);
       setUsers(u.data || []);
@@ -239,6 +316,7 @@ function UsersSettings({ onMessage, onError }) {
         setPermissions(p.data.permissions || []);
         setIsAdmin(p.data.isAdmin || false);
       }
+      if (j?.success) setJarvesState(j.data || null);
     } catch (err) {
       setError(err.message || "Unable to load users");
       onError(err.message || "Unable to load users");
@@ -282,6 +360,23 @@ function UsersSettings({ onMessage, onError }) {
   const canCreateUsers = isAdmin || permissions.includes("user.create");
   const canEditUsers = isAdmin || permissions.includes("user.edit");
   const canDeleteUsers = isAdmin || permissions.includes("user.delete");
+  const canManageJarves = isAdmin || permissions.includes("settings.manage");
+
+  const toggleJarves = async (user) => {
+    try {
+      const response = await apiRequest(`/api/admin/users/${user.id}/jarves`, {
+        method: "PUT",
+        body: JSON.stringify({ enabled: !user.jarves_enabled }),
+      });
+      if (!response.success) throw new Error(response.message || "Unable to update JARVES for this user");
+      setJarvesState(response.data?.licenceState || jarvesState);
+      await load();
+      onMessage(`JARVES ${response.data?.jarvesEnabled ? "enabled" : "disabled"} for ${user.full_name || user.username}.`);
+    } catch (err) {
+      onError(err.message || "Unable to update JARVES for this user");
+    }
+  };
+
 
   if (loading) return <div className="p-8 text-center text-slate-400">Loading users...</div>;
 
@@ -291,6 +386,7 @@ function UsersSettings({ onMessage, onError }) {
 
   return (
     <div className="space-y-6">
+      <JarvesLicenceCard state={jarvesState} onStateChange={setJarvesState} canManage={canManageJarves} onError={onError} />
       <div className="bg-white border rounded-xl overflow-hidden">
         <div className="p-4 border-b flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
           <h2 className="font-semibold">Users</h2>
@@ -326,7 +422,7 @@ function UsersSettings({ onMessage, onError }) {
           <table className="w-full">
             <thead>
               <tr className="bg-slate-50">
-                {["Name", "Username / Email", "Role", "Primary Store", "Status", "Actions"].map((heading) => (
+                {["Name", "Username / Email", "Role", "Primary Store", "Status", "JARVES", "Actions"].map((heading) => (
                   <th key={heading} className="text-left px-4 py-3 text-xs uppercase text-slate-500">{heading}</th>
                 ))}
               </tr>
@@ -345,6 +441,23 @@ function UsersSettings({ onMessage, onError }) {
                     <span className={`px-2 py-1 rounded text-xs ${user.active ? "bg-green-100 text-green-700" : "bg-slate-100 text-slate-600"}`}>
                       {user.active ? "Active" : "Inactive"}
                     </span>
+                  </td>
+                  <td className="px-4 py-3 text-sm">
+                    {canEditUsers && jarvesState ? (
+                      <button
+                        type="button"
+                        onClick={() => toggleJarves(user)}
+                        className={`px-2 py-1 rounded text-xs ${user.jarves_enabled ? "bg-blue-100 text-blue-700" : "border text-slate-600"}`}
+                        data-testid={`jarves-user-toggle-${user.id}`}
+                        title={user.jarves_enabled ? "Disable JARVES for this user" : "Enable JARVES for this user"}
+                      >
+                        {user.jarves_enabled ? "Enabled" : "Disabled"}
+                      </button>
+                    ) : (
+                      <span className={`px-2 py-1 rounded text-xs ${user.jarves_enabled ? "bg-blue-100 text-blue-700" : "bg-slate-100 text-slate-500"}`}>
+                        {user.jarves_enabled ? "Enabled" : "—"}
+                      </span>
+                    )}
                   </td>
                   <td className="px-4 py-3">
                     {canEditUsers && (

@@ -156,7 +156,8 @@ export async function validateSecureInvoiceToken({ db, token, includeSale = true
 
     if (includeSale !== false) {
       const itemResult = await db(
-        `SELECT product_name, quantity, unit_price, discount, tax, total
+        `SELECT product_name, quantity, unit_price, discount, discount_type, discount_value,
+           original_unit_price, tax, total
          FROM sale_items WHERE sale_id = $1 ORDER BY id ASC`,
         [sale.id]
       );
@@ -165,6 +166,9 @@ export async function validateSecureInvoiceToken({ db, token, includeSale = true
         quantity: Number(item.quantity),
         unitPrice: Number(item.unit_price),
         discount: Number(item.discount),
+        discountType: item.discount_type || null,
+        discountValue: Number(item.discount_value) || 0,
+        originalUnitPrice: Number(item.original_unit_price) || null,
         tax: Number(item.tax),
         total: Number(item.total),
       }));

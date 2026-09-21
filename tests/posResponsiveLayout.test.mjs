@@ -85,8 +85,8 @@ test("phone tier: MobileCartSheet is rendered and is phone-only", () => {
 test("category rail: fixed 150px column only at md+; phones get scroll chips", () => {
   assert.match(
     grid,
-    /hidden md:flex md:w-\[120px\] xl:w-\[150px\][^\n]*shrink-0/,
-    "the vertical rail must be hidden below md and keep till-tier widths at xl"
+    /hidden md:flex md:flex-col md:w-\[120px\] xl:w-\[150px\][^\n]*shrink-0/,
+    "the vertical rail must be hidden below md, lay out as a COLUMN (md:flex alone = row = scrollbar), and keep till-tier widths at xl"
   );
   assert.match(grid, /md:hidden[^\n]*overflow-x-auto/, "phone tier needs the horizontal chip row");
   /* Chip row uses the same category contract. */
@@ -125,6 +125,22 @@ test("POS header right-side controls can never overflow the viewport", () => {
   assert.match(rightCluster, /hidden md:inline">Manage Till/);
   assert.match(rightCluster, /hidden md:inline">Online Orders/);
   assert.match(rightCluster, /hidden sm:inline">Admin/);
+});
+
+test("Categories rail lays out vertically and scrolls only inside itself", () => {
+  /* ROOT CAUSE (regressed twice): `md:flex` alone makes the <aside> a flex
+   * ROW (default direction), so the CATEGORIES label and the w-full buttons
+   * spill horizontally inside the 120–150px rail and generate a scrollbar.
+   * The rail must be an explicit COLUMN with vertical-only scrolling; the
+   * phone chip row keeps its own intentional horizontal scroll. */
+  const rail = grid.match(/<aside className="([^"]*)"/);
+  assert.ok(rail, "the desktop Categories rail <aside> must exist");
+  const classes = rail[1];
+  assert.match(classes, /md:flex-col/, "Categories rail must be a flex COLUMN (md:flex alone lays buttons out horizontally and causes the scrollbar)");
+  assert.match(classes, /overflow-y-auto/, "long category lists scroll inside the rail, never the page");
+  assert.match(classes, /md:overflow-x-hidden/, "no horizontal overflow in the rail");
+  /* The phone chip row keeps its own intentional horizontal scrolling. */
+  assert.match(grid, /md:hidden[^>]*overflow-x-auto/, "phone category chip row stays horizontally scrollable");
 });
 
 test("legacy dead stylesheet with the body min-width:1100px trap stays deleted", () => {

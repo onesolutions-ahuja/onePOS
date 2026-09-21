@@ -20,9 +20,9 @@
 import express from "express";
 import { buildJarvisRequestContext } from "../services/jarvis/permissions.js";
 import { normalizeJarvisMessage, JARVIS_MAX_MESSAGE_LENGTH } from "../services/jarvis/service.js";
-import { toJarvisError } from "../services/jarvis/errors.js";
+import { JarvisError, JARVIS_ERROR_CODES, toJarvisError } from "../services/jarvis/errors.js";
 
-export default function createJarvisRouter({ authenticate, jarvis, getRolePermissionCodes = null } = {}) {
+export default function createJarvisRouter({ authenticate, jarvis, getRolePermissionCodes = null, jarvesAccess = null } = {}) {
   if (typeof authenticate !== "function") {
     throw new Error("createJarvisRouter requires the existing authenticate middleware");
   }
@@ -31,6 +31,21 @@ export default function createJarvisRouter({ authenticate, jarvis, getRolePermis
   }
 
   const router = express.Router();
+
+  /*
+   * JARVES licence gate (V2): an authenticated user may only use JARVES when
+   * an administrator has explicitly enabled JARVES for their account within
+   * the company licence allowance (see services/jarvis/licensing.js). The
+   * decision is made server-side from the VERIFIED JWT identity only.
+   */
+  async function requireJarvesEnabled(user) {
+    if (typeof jarvesAccess !== "function") return; // not wired (e.g. tests) - auth still applies
+    if (!(await jarvesAccess(user))) {
+      throw new JarvisError(JARVIS_ERROR_CODES.JARVES_NOT_ENABLED, {
+        detail: `user ${user?.id ?? "unknown"} is not JARVES-enabled for company ${user?.companyId ?? "unknown"}`,
+      });
+    }
+  }
 
   /*
    * POST /api/jarvis
@@ -48,6 +63,7 @@ export default function createJarvisRouter({ authenticate, jarvis, getRolePermis
     }
 
     try {
+      await requireJarvesEnabled(req.user);
       const context = await buildJarvisRequestContext(req.user, { getRolePermissionCodes });
       const result = await jarvis.ask({ message, context });
 

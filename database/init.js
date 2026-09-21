@@ -23,6 +23,26 @@ export async function initializeDatabase(pool) {
     ALTER TABLE companies ADD COLUMN IF NOT EXISTS logo_url TEXT;
     /* Till Misc Item: line type on sale items (existing rows read as PRODUCT). */
     ALTER TABLE sale_items ADD COLUMN IF NOT EXISTS item_type VARCHAR(20) NOT NULL DEFAULT 'PRODUCT';
+    /* Per-line discount support: type, value, original prices, and actor. */
+    ALTER TABLE sale_items ADD COLUMN IF NOT EXISTS discount_type VARCHAR(20);
+    ALTER TABLE sale_items ADD COLUMN IF NOT EXISTS discount_value NUMERIC(12,2) NOT NULL DEFAULT 0;
+    ALTER TABLE sale_items ADD COLUMN IF NOT EXISTS original_unit_price NUMERIC(12,2);
+    ALTER TABLE sale_items ADD COLUMN IF NOT EXISTS original_tax NUMERIC(12,2);
+    ALTER TABLE sale_items ADD COLUMN IF NOT EXISTS original_total NUMERIC(12,2);
+    ALTER TABLE sale_items ADD COLUMN IF NOT EXISTS discounted_by UUID REFERENCES users(id) ON DELETE SET NULL;
+    /* Order-level discount audit trail for any discount applied to a sale. */
+    CREATE TABLE IF NOT EXISTS sale_discounts (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      sale_id UUID NOT NULL REFERENCES sales(id) ON DELETE CASCADE,
+      item_id UUID REFERENCES sale_items(id) ON DELETE CASCADE,
+      user_id UUID NOT NULL REFERENCES users(id),
+      type VARCHAR(20) NOT NULL,
+      value NUMERIC(12,2) NOT NULL,
+      amount NUMERIC(12,2) NOT NULL,
+      reason TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_sale_discounts_sale ON sale_discounts(sale_id);
     /* One invisible MISC placeholder product per company (Till Misc Item). */
     CREATE UNIQUE INDEX IF NOT EXISTS uq_products_misc_per_company
       ON products(company_id) WHERE sku = 'MISC' AND active = false;
@@ -201,6 +221,12 @@ export async function initializeDatabase(pool) {
     ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS loyalty_min_sale_total NUMERIC(12,2) NULL;
     ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS loyalty_redeem_value_per_point NUMERIC(12,4) NULL;
     ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS loyalty_min_points_redeem INTEGER NULL;
+    /* JARVES licence control: company-level allowance (0 = JARVES disabled for
+     * the whole company until an admin configures it) + per-user opt-in.
+     * Existing rows/companies default to 0/false, so nothing changes until an
+     * admin enables JARVES. See services/jarvis/licensing.js. */
+    ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS jarves_licence_users INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS jarves_enabled BOOLEAN NOT NULL DEFAULT FALSE;
     ALTER TABLE stores ADD COLUMN IF NOT EXISTS self_checkout_key_hash VARCHAR(100);
     ALTER TABLE ean_product_master ADD COLUMN IF NOT EXISTS image_url TEXT NULL;
 
@@ -342,7 +368,9 @@ export async function initializeDatabase(pool) {
           'RETURN_IN',
           'RETURN_OUT',
           'ONLINE_RESERVE',
-          'ONLINE_RELEASE'
+          'ONLINE_RELEASE',
+          'TRANSFER_OUT',
+          'TRANSFER_IN'
         )
       ),
       quantity_change NUMERIC(12,3) NOT NULL,
@@ -364,7 +392,8 @@ export async function initializeDatabase(pool) {
           'OPENING', 'PURCHASE', 'SALE', 'CUSTOMER_RETURN',
           'SUPPLIER_RETURN', 'ADJUSTMENT_IN', 'ADJUSTMENT_OUT',
           'RETURN_IN', 'RETURN_OUT',
-          'ONLINE_RESERVE', 'ONLINE_RELEASE'
+          'ONLINE_RESERVE', 'ONLINE_RELEASE',
+          'TRANSFER_OUT', 'TRANSFER_IN'
         )
       );
 
@@ -376,6 +405,66 @@ export async function initializeDatabase(pool) {
 
     CREATE INDEX IF NOT EXISTS idx_inventory_movements_type
     ON inventory_movements(movement_type, created_at);
+
+    /*
+     * STOCK BY STORE — store/location-level stock positions.
+     *
+     * Products remain company-level; the quantity that physically lives at
+     * each store is tracked here. One row per (company, store, product) —
+     * the unique constraint prevents duplicate stock records for the same
+     * product at the same store. product_store_stock is updated only via
+     * services/inventory.js createInventoryMovement, which keeps it in step
+     * with the inventory_movements ledger and the products.stock_quantity
+     * company aggregate in the same transaction.
+     */
+    CREATE TABLE IF NOT EXISTS product_store_stock (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+      store_id UUID NOT NULL REFERENCES stores(id) ON DELETE CASCADE,
+      product_id UUID NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+      quantity NUMERIC(12,3) NOT NULL DEFAULT 0,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE (company_id, store_id, product_id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_product_store_stock_store
+    ON product_store_stock(company_id, store_id);
+
+    CREATE INDEX IF NOT EXISTS idx_product_store_stock_product
+    ON product_store_stock(company_id, product_id);
+
+    /*
+     * STOCK TRANSFERS — moving stock between a company's own stores.
+     * Execution is atomic: the TRANSFER_OUT (source) and TRANSFER_IN
+     * (destination) inventory movements for every line are written in one
+     * transaction with the transfer as their reference, so a failure on
+     * either side rolls back both. Multi-product capable by design via
+     * stock_transfer_items.
+     */
+    CREATE TABLE IF NOT EXISTS stock_transfers (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+      transfer_number VARCHAR(30) UNIQUE,
+      from_store_id UUID NOT NULL REFERENCES stores(id) ON DELETE CASCADE,
+      to_store_id UUID NOT NULL REFERENCES stores(id) ON DELETE CASCADE,
+      status VARCHAR(20) NOT NULL DEFAULT 'COMPLETED' CHECK (status IN ('COMPLETED', 'CANCELLED')),
+      notes TEXT,
+      created_by UUID REFERENCES users(id) ON DELETE SET NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_stock_transfers_company
+    ON stock_transfers(company_id, created_at);
+
+    CREATE TABLE IF NOT EXISTS stock_transfer_items (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      transfer_id UUID NOT NULL REFERENCES stock_transfers(id) ON DELETE CASCADE,
+      product_id UUID NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+      quantity NUMERIC(12,3) NOT NULL CHECK (quantity > 0)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_stock_transfer_items_transfer
+    ON stock_transfer_items(transfer_id);
 
     /*
      * ONLINE ORDERS FOUNDATION

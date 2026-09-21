@@ -262,10 +262,25 @@ function makeCtx() {
       return { rows: [{ total: total }] };
     }
     if (/INSERT INTO refunds/.test(s)) {
-      state.refunds.push({ sale_id: params[0], amount: params[2] });
+      state.refunds.push({ sale_id: params[0], amount: params[2], payment_method: params[4] });
       return { rowCount: 1 };
     }
     if (/UPDATE stock_returns SET refund_amount/.test(s)) return { rowCount: 1 };
+    if (/SELECT payment_method, amount FROM payments/i.test(s)) {
+      /* Full tender list (single or split) — payment-method-aware refund
+         allocation reads this instead of the single "latest row". */
+      const rows = state.payments
+        .filter((p) => p.sale_id === params[0] && p.status === "completed")
+        .map((p) => ({ payment_method: p.payment_method, amount: p.amount }));
+      return { rows };
+    }
+    if (/SELECT payment_method, COALESCE\(SUM\(amount\),0\) AS refunded\s+FROM refunds WHERE sale_id=\$1 GROUP BY/i.test(s)) {
+      const byMethod = new Map();
+      for (const r of state.refunds.filter((x) => x.sale_id === params[0])) {
+        byMethod.set(r.payment_method, (byMethod.get(r.payment_method) || 0) + Number(r.amount));
+      }
+      return { rows: [...byMethod.entries()].map(([payment_method, refunded]) => ({ payment_method, refunded })) };
+    }
 
     return { rows: [], rowCount: 0 };
   };

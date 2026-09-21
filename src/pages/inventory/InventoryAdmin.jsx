@@ -3,6 +3,8 @@ import { Calculator, History, RefreshCw, Search, X } from "lucide-react";
 import { apiRequest } from "../../services/api.js";
 import { normaliseProduct, getStockStatus } from "../../utils/formatters.js";
 import StockAdjustmentModal from "./StockAdjustmentModal.jsx";
+import StockByStore from "./StockByStore.jsx";
+import StockTransfers from "./StockTransfers.jsx";
 function ReconciliationModal({ data, onClose }) {
   return <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4"><div className="bg-white rounded-xl w-[850px] max-w-full max-h-[85vh] shadow-2xl flex flex-col"><div className="p-4 border-b flex justify-between"><div><h2 className="font-bold text-lg">Stock Reconciliation</h2><p className="text-xs text-slate-500">{data.product}</p></div><button onClick={onClose} title="Close"><X size={18} /></button></div><div className="p-4 overflow-auto"><div className={`p-3 rounded text-sm mb-4 ${data.mismatch ? "bg-red-50 text-red-700" : "bg-emerald-50 text-emerald-700"}`}>{data.mismatch ? "Stock balance mismatch" : "Stock balance matches ledger"} <span className="ml-3">Current {data.currentStock} · Ledger {data.ledgerBalance}</span></div><table className="w-full"><thead><tr className="bg-slate-50">{["Date/time", "Type", "Quantity", "Balance", "Reference", "User", "Reason"].map((heading) => <th key={heading} className="text-left px-3 py-2 text-xs uppercase text-slate-500">{heading}</th>)}</tr></thead><tbody>{(data.movements || []).map((movement, index) => <tr key={`${movement.created_at}-${index}`} className="border-t"><td className="px-3 py-2 text-xs">{new Date(movement.created_at).toLocaleString()}</td><td className="px-3 py-2 text-sm font-semibold">{movement.movement_type}</td><td className="px-3 py-2 text-sm">{movement.quantity_change}</td><td className="px-3 py-2 text-sm font-semibold">{movement.balance_after}</td><td className="px-3 py-2 text-xs">{movement.reference_type || "-"}</td><td className="px-3 py-2 text-sm">{movement.username || "-"}</td><td className="px-3 py-2 text-sm">{movement.reason || "-"}</td></tr>)}</tbody></table></div></div></div>;
 }
@@ -19,6 +21,7 @@ function InventoryAdmin() {
   const [movementType, setMovementType] = useState("ALL");
   const [loadingMovements, setLoadingMovements] = useState(false);
   const [reconciliation, setReconciliation] = useState(null);
+  const [stockView, setStockView] = useState("products"); // products | byStore | transfers
 
   const loadProducts = async () => {
     try {
@@ -165,6 +168,27 @@ function InventoryAdmin() {
             </button>
           </div>
 
+          <div className="mb-4 inline-flex rounded-lg border border-slate-200 overflow-hidden">
+            <button
+              onClick={() => setStockView("products")}
+              className={`px-4 h-9 text-sm ${stockView === "products" ? "bg-slate-900 text-white" : "bg-white text-slate-600 hover:bg-slate-50"}`}
+            >
+              Products
+            </button>
+            <button
+              onClick={() => setStockView("byStore")}
+              className={`px-4 h-9 text-sm ${stockView === "byStore" ? "bg-slate-900 text-white" : "bg-white text-slate-600 hover:bg-slate-50"}`}
+            >
+              Stock by Store
+            </button>
+            <button
+              onClick={() => setStockView("transfers")}
+              className={`px-4 h-9 text-sm ${stockView === "transfers" ? "bg-slate-900 text-white" : "bg-white text-slate-600 hover:bg-slate-50"}`}
+            >
+              Stock Transfers
+            </button>
+          </div>
+
           {message && (
             <div className="mb-4 px-4 py-3 bg-emerald-50 border border-emerald-200 text-emerald-700 rounded-lg text-sm">
               {message}
@@ -202,7 +226,11 @@ function InventoryAdmin() {
               </div>
             </div>
 
-            {loading ? (
+            {stockView === "byStore" ? (
+              <StockByStore />
+            ) : stockView === "transfers" ? (
+              <StockTransfers />
+            ) : loading ? (
               <div className="p-12 text-center text-slate-400">
                 <RefreshCw size={28} className="mx-auto mb-3 animate-spin" />
                 Loading inventory...

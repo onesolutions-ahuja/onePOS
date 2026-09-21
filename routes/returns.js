@@ -61,6 +61,45 @@ export default function createReturnsRouter({
   }
 
   /**
+   * All completed payment rows of a sale (single or split tender),
+   * oldest first — the authoritative refund-allocation source.
+   */
+  async function loadSalePayments(clientOrDb, saleId) {
+    const result = await clientOrDb.query(
+      `SELECT payment_method, amount FROM payments
+       WHERE sale_id = $1 AND status = 'completed'
+       ORDER BY created_at, id`,
+      [saleId]
+    );
+    return result.rows
+      .map((row) => ({ method: row.payment_method, amount: Number(row.amount) || 0 }))
+      .filter((p) => p.method && p.amount > 0);
+  }
+
+  /*
+   * Refund allocation across the ORIGINAL tender rows. Water-fills the
+   * refund amount through the methods in payment order, never exceeding
+   * what each method originally paid minus what it has already refunded.
+   * No invented methods; remainingRefundedable() pre-checks the cap.
+   */
+  function allocateRefund(payments, refundAmount, refundedByMethod = new Map()) {
+    const allocation = [];
+    let remaining = round2(refundAmount);
+    for (const payment of payments) {
+      if (remaining <= 0) break;
+      const alreadyRefunded = Number(refundedByMethod.get(payment.method)) || 0;
+      const take = round2(Math.min(remaining, Math.max(0, round2(payment.amount - alreadyRefunded))));
+      if (take > 0) allocation.push({ method: payment.method, amount: take });
+      remaining = round2(remaining - take);
+    }
+    return { allocation, unallocated: remaining };
+  }
+
+  function remainingRefundable(payments, refundedByMethod) {
+    return round2(payments.reduce((sum, p) => sum + Math.max(0, round2(p.amount - (Number(refundedByMethod.get(p.method)) || 0))), 0));
+  }
+
+  /**
    * Load a sale FOR RETURN (authoritative data for both the UI and the
    * validation inside the create transaction): header + items + per-item
    * already-returned quantities + refund summary. Company-scoped always;
@@ -86,7 +125,9 @@ export default function createReturnsRouter({
 
     const itemsResult = await clientOrDb.query(
       `SELECT si.id, si.product_id, si.product_name, si.quantity, si.unit_price,
-              si.discount, si.tax, si.total,
+              si.discount, si.discount_type, si.discount_value,
+              si.original_unit_price, si.original_tax, si.original_total,
+              si.tax, si.total,
               pr.track_stock,
               COALESCE(agg.returned_quantity, 0) AS returned_quantity
        FROM sale_items si
@@ -110,6 +151,11 @@ export default function createReturnsRouter({
 
     return {
       sale,
+      /* Every completed tender row of the original sale. Split payments
+         therefore carry their real per-method breakdown into both the
+         lookup response and the refund-allocation logic — never a single
+         arbitrary "latest row". */
+      payments: await loadSalePayments(clientOrDb, saleId),
       items: itemsResult.rows.map((row) => {
         const quantity = Number(row.quantity);
         const returnedQuantity = Number(row.returned_quantity);
@@ -192,6 +238,9 @@ export default function createReturnsRouter({
                 payment: loaded.sale.payment_method
                   ? { method: loaded.sale.payment_method, amount: Number(loaded.sale.payment_amount), status: loaded.sale.payment_status }
                   : null,
+                /* Full tender list — single sales have one entry, split
+                   sales have their real per-method breakdown. */
+                payments: loaded.payments,
                 totals: { subtotal: Number(loaded.sale.subtotal), tax: Number(loaded.sale.tax), discount: Number(loaded.sale.discount), total: Number(loaded.sale.total) },
                 refunded: round2(loaded.refunded),
                 returnableValue: round2(Math.min(totalReturnable, Math.max(0, Number(loaded.sale.total) - loaded.refunded))),
@@ -479,28 +528,39 @@ export default function createReturnsRouter({
         // Refund recorded against the sale via the existing refunds table,
         // capped by what has actually been paid minus prior refunds, and
         // LINKED to this return for a complete audit trail.
+        //
+        // Payment-method aware (single AND split tender): the refund is
+        // allocated water-filling across the ORIGINAL completed payment
+        // rows of the sale — one refund row per touched method, never more
+        // than that method originally paid minus what it already refunded,
+        // and never a method that did not exist on the original sale.
+        let refundAllocation = [];
         if (refundAmount > 0) {
-          const paymentResult = await client.query(
-            `SELECT COALESCE(SUM(amount),0) AS total_paid,
-                    (SELECT payment_method FROM payments WHERE sale_id=$1 AND status='completed' ORDER BY created_at DESC LIMIT 1) AS payment_method
-             FROM payments WHERE sale_id=$1 AND status='completed'`,
+          const salePayments = loaded.payments;
+          const priorRefunds = await client.query(
+            `SELECT payment_method, COALESCE(SUM(amount),0) AS refunded
+             FROM refunds WHERE sale_id=$1 GROUP BY payment_method`,
             [saleId]
           );
-          const totalPaid = Number(paymentResult.rows[0].total_paid) || 0;
-          const refundMethod = paymentResult.rows[0].payment_method || loaded.sale.payment_method || null;
-          const alreadyRefunded = Number(
-            (await client.query("SELECT COALESCE(SUM(amount),0) AS total FROM refunds WHERE sale_id=$1", [saleId])).rows[0].total
-          ) || 0;
-          const remainingRefundable = round2(totalPaid - alreadyRefunded);
-          if (refundAmount > remainingRefundable + 0.01) {
+          const refundedByMethod = new Map(
+            priorRefunds.rows.map((row) => [row.payment_method, Number(row.refunded) || 0])
+          );
+          const refundableNow = remainingRefundable(salePayments, refundedByMethod);
+          if (refundAmount > refundableNow + 0.01) {
             throw new Error(
-              `Refund amount ${refundAmount.toFixed(2)} exceeds the remaining refundable amount ${remainingRefundable.toFixed(2)}`
+              `Refund amount ${refundAmount.toFixed(2)} exceeds the remaining refundable amount ${refundableNow.toFixed(2)}`
             );
           }
-          await client.query(
-            "INSERT INTO refunds (sale_id, user_id, amount, reason, payment_method, return_id) VALUES ($1,$2,$3,$4,$5,$6)",
-            [saleId, req.user.id, refundAmount, reason || [...itemReasons].join("; ") || null, refundMethod, returnId]
-          );
+          const { allocation } = allocateRefund(salePayments, refundAmount, refundedByMethod);
+          refundAllocation = allocation;
+          for (const part of allocation) {
+            await client.query(
+              "INSERT INTO refunds (sale_id, user_id, amount, reason, payment_method, return_id) VALUES ($1,$2,$3,$4,$5,$6)",
+              [saleId, req.user.id, part.amount, reason || [...itemReasons].join("; ") || null, part.method, returnId]
+            );
+          }
+          // Presentation summary on the return: "cash+card" for splits.
+          const refundMethod = allocation.map((p) => p.method).join("+") || null;
           await client.query(
             "UPDATE stock_returns SET refund_amount=$1, refund_method=$2 WHERE id=$3",
             [refundAmount, refundMethod, returnId]
@@ -595,8 +655,8 @@ export default function createReturnsRouter({
             id: returnId,
             returnNumber,
             refund: refundAmount > 0
-              ? { amount: refundAmount, method: loaded.sale.payment_method || null }
-              : { amount: 0, method: null },
+              ? { amount: refundAmount, method: loaded.sale.payment_method || null, allocation: refundAllocation }
+              : { amount: 0, method: null, allocation: [] },
           },
         });
       } catch (error) {

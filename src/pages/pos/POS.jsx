@@ -72,6 +72,8 @@ function POS({
   const [discountType, setDiscountType] = useState(null);
   const [discountValue, setDiscountValue] = useState(0);
   const [showDiscount, setShowDiscount] = useState(false);
+  const [permissions, setPermissions] = useState([]);
+  const [isAdmin, setIsAdmin] = useState(false);
   const [heldSales, setHeldSales] = useState([]);
   const [showHeldSales, setShowHeldSales] = useState(false);
   /* Cash completion popup: shows the change to return to the customer. */
@@ -421,6 +423,32 @@ function POS({
     loadProducts();
     loadCurrentTill();
     loadOnlineOrderCount();
+
+    let cancelled = false;
+    apiRequest("/api/auth/me/permissions", {
+      signal: AbortSignal.timeout(10000),
+    })
+      .then((p) => {
+        if (cancelled) return;
+        if (p.success) {
+          setPermissions(p.data?.permissions || []);
+          setIsAdmin(p.data?.isAdmin || false);
+        }
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        if (error.code === "AUTH_REQUIRED") {
+          onLogout();
+          return;
+        }
+        if (isNetworkError(error)) {
+          const session = loadOfflineSession();
+          if (session?.permissions) {
+            setPermissions(session.permissions.permissions || []);
+            setIsAdmin(!!session.permissions.isAdmin);
+          }
+        }
+      });
 
     apiRequest("/api/settings", {
       signal: AbortSignal.timeout(10000),
@@ -897,10 +925,19 @@ function POS({
      DISCOUNT
   ========================================================= */
 
+  const canApplyDiscount = isAdmin || permissions.includes("sale.discount");
+
   const applyDiscount = (
     type,
     value
   ) => {
+    if (!canApplyDiscount) {
+      setSaleError(
+        "You do not have permission to apply discounts."
+      );
+      return;
+    }
+
     const numericValue = Number(value);
 
     if (
@@ -923,7 +960,9 @@ function POS({
     setDiscountType(
       numericValue === 0
         ? null
-        : type
+        : type === "amount"
+          ? "fixed"
+          : type
     );
 
     setDiscountValue(
@@ -1272,13 +1311,24 @@ function POS({
         vatRate: line.vatRate,
       })),
 
-      vatEnabled,
+       vatEnabled,
+       vatRate,
 
-      subtotal,
+       subtotal,
       tax: vat,
       discount: discountAmount,
       total,
       paymentMethod,
+
+      /* T10-DISCOUNT: order-level discount proposal for server-side revalidation.
+         The server recomputes all totals from authoritative prices and only
+         applies the order discount when the operator holds sale.discount. */
+      discountType,
+      discountValue,
+
+      /* Split tender: the per-method lines from PaymentModal. Undefined for
+         single-tender sales, so the wire contract is unchanged for them. */
+      payments: options.payments,
 
       ageVerified:
         basketHasAgeRestricted
@@ -1724,12 +1774,12 @@ function POS({
               Customer
             </button>
 
-            <button
-              onClick={() =>
-                setShowDiscount(true)
-              }
-              className="h-10 px-4 border border-slate-200 rounded text-sm"
-            >
+             <button
+               onClick={() => setShowDiscount(true)}
+               disabled={!canApplyDiscount}
+               title={canApplyDiscount ? "Apply discount" : "Discounts require the sale.discount permission"}
+               className="h-10 px-4 border border-slate-200 rounded text-sm disabled:opacity-50"
+             >
               <Percent
                 size={15}
                 className="inline mr-1"

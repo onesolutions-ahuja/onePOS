@@ -22,6 +22,9 @@ export const JARVIS_ERROR_CODES = Object.freeze({
   PROVIDER_ERROR: "provider_error",
   PROVIDER_BLOCKED: "provider_blocked",
   EMPTY_RESPONSE: "empty_response",
+  TOOL_PERMISSION_DENIED: "tool_permission_denied",
+  TOOL_UNAVAILABLE: "tool_unavailable",
+  JARVES_NOT_ENABLED: "jarves_not_enabled",
   UNKNOWN: "unknown",
 });
 
@@ -34,6 +37,9 @@ const HTTP_STATUS_BY_CODE = Object.freeze({
   [JARVIS_ERROR_CODES.PROVIDER_ERROR]: 502,
   [JARVIS_ERROR_CODES.PROVIDER_BLOCKED]: 502,
   [JARVIS_ERROR_CODES.EMPTY_RESPONSE]: 502,
+  [JARVIS_ERROR_CODES.TOOL_PERMISSION_DENIED]: 403,
+  [JARVIS_ERROR_CODES.TOOL_UNAVAILABLE]: 503,
+  [JARVIS_ERROR_CODES.JARVES_NOT_ENABLED]: 403,
   [JARVIS_ERROR_CODES.UNKNOWN]: 500,
 });
 
@@ -47,6 +53,12 @@ const PUBLIC_MESSAGE_BY_CODE = Object.freeze({
   [JARVIS_ERROR_CODES.PROVIDER_ERROR]: "The AI service returned an error. Please try again.",
   [JARVIS_ERROR_CODES.PROVIDER_BLOCKED]: "The AI service declined to answer that request.",
   [JARVIS_ERROR_CODES.EMPTY_RESPONSE]: "The AI service returned an empty answer. Please try again.",
+  [JARVIS_ERROR_CODES.TOOL_PERMISSION_DENIED]:
+    "JARVES cannot view Sales for this account. Ask an administrator for Sales report access.",
+  [JARVIS_ERROR_CODES.TOOL_UNAVAILABLE]:
+    "Sales data is not available right now. Please try again shortly.",
+  [JARVIS_ERROR_CODES.JARVES_NOT_ENABLED]:
+    "JARVES is not enabled for your user account. Ask an administrator to enable it.",
   [JARVIS_ERROR_CODES.UNKNOWN]: "JARVIS could not answer that question. Please try again.",
 });
 

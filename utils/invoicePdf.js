@@ -100,10 +100,18 @@ export function buildInvoicePdf({ sale, company, store }) {
     }
     const rawName = String(item.name || "-");
     const name = rawName.length > 32 ? `${rawName.slice(0, 31)}~` : rawName;
+    const qty = String(item.quantity ?? "");
+    const unit = money(item.unitPrice, currency);
+    const lineDiscount = Number(item.discount) || 0;
     ops.push(at(MARGIN, y, 9, "F1", name));
-    ops.push(at(334, y, 9, "F1", String(item.quantity ?? "")));
-    ops.push(at(375, y, 9, "F1", money(item.unitPrice, currency)));
-    ops.push(at(430, y, 9, "F1", money(item.tax, currency)));
+    ops.push(at(334, y, 9, "F1", qty));
+    ops.push(at(375, y, 9, "F1", unit));
+    if (lineDiscount > 0) {
+      ops.push(at(405, y, 9, "F1", `-${money(lineDiscount, currency)}`));
+      ops.push(at(430, y, 9, "F1", money(item.tax, currency)));
+    } else {
+      ops.push(at(430, y, 9, "F1", money(item.tax, currency)));
+    }
     ops.push(at(PAGE_WIDTH - MARGIN - 60, y, 9, "F1", money(item.total, currency)));
     y -= 15;
   }

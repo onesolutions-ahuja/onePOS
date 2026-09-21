@@ -13,8 +13,9 @@
  *
  * It knows nothing about Gemini/OpenAI/Ollama - that lives behind `provider`.
  */
-import { buildJarvisSystemInstruction, JARVIS_SYSTEM_INSTRUCTION, JARVIS_CONTEXT_FIELDS } from "./prompt.js";
-import { JarvisError, JARVIS_ERROR_CODES, toJarvisError } from "./errors.js";
+import { buildJarvisSystemInstruction, buildJarvisToolNotice, JARVIS_SYSTEM_INSTRUCTION, JARVIS_CONTEXT_FIELDS } from "./prompt.js";
+import { JarvisError, JARVIS_ERROR_CODES, isJarvisError, toJarvisError } from "./errors.js";
+import { formatToolResultBlock } from "./tools/index.js";
 
 /** V1 bound: a question, not a document. */
 export const JARVIS_MAX_MESSAGE_LENGTH = 2000;
@@ -51,13 +52,19 @@ export function sanitizeJarvisContext(context = {}) {
 /**
  * Build the JARVIS service around an AI provider.
  *
- * @param {{ provider: object, baseInstruction?: string, logger?: Console, maxMessageLength?: number }} options
+ * @param {{ provider: object, baseInstruction?: string, logger?: Console, maxMessageLength?: number, tools?: object|null }} options
+ *        `tools` is the optional read-only tool registry from
+ *        services/jarvis/tools/index.js ({ matchTool, executeTool }). When
+ *        provided, a matched question runs its tool server-side BEFORE the AI
+ *        call and the (non-secret) result grounds the prompt. The AI itself
+ *        never gains database access.
  */
 export function createJarvisService({
   provider,
   baseInstruction = JARVIS_SYSTEM_INSTRUCTION,
   logger = console,
   maxMessageLength = JARVIS_MAX_MESSAGE_LENGTH,
+  tools = null,
 } = {}) {
   if (!provider || typeof provider.generateAnswer !== "function") {
     throw new Error("createJarvisService requires an AI provider exposing generateAnswer()");
@@ -104,9 +111,46 @@ export function createJarvisService({
     const safeContext = sanitizeJarvisContext(context);
     const startedAt = Date.now();
 
+    /*
+     * Server-side tool pass (read-only). Gemini never chooses tools and never
+     * runs them - the tool executes inside the existing permission model and
+     * only a non-secret summary is handed to the prompt. Degradation ladder
+     * (pinned by tests):
+     *   - a PERMISSION failure is a real access decision and surfaces as-is
+     *     (403 tool_permission_denied) - no data was read, nothing is leaked;
+     *   - any other tool failure degrades SAFELY to the general assistant:
+     *     an explicit "no tool data could be loaded" notice is attached to the
+     *     system instruction so the model answers from general onePOS
+     *     knowledge and is anchored against inventing figures.
+     */
+    let groundingBlock = null;
+    let toolFailed = false;
+    if (tools && typeof tools.matchTool === "function" && typeof tools.executeTool === "function") {
+      try {
+        const match = tools.matchTool(question);
+        if (match?.name) {
+          const toolResult = await tools.executeTool(match.name, safeContext);
+          const grounding = formatToolResultBlock(toolResult);
+          if (grounding) groundingBlock = grounding;
+        }
+      } catch (toolError) {
+        if (isJarvisError(toolError) && toolError.code === JARVIS_ERROR_CODES.TOOL_PERMISSION_DENIED) {
+          throw toolError;
+        }
+        toolFailed = true;
+        logger?.warn?.(
+          `JARVES tool pass failed, degrading to the general assistant: ${(toolError && toolError.message) || toolError}`
+        );
+      }
+    }
+
     try {
       const result = await provider.generateAnswer({
-        systemInstruction: buildJarvisSystemInstruction({ baseInstruction, context: safeContext }),
+        systemInstruction: buildJarvisSystemInstruction({
+          baseInstruction,
+          context: safeContext,
+          toolNotice: buildJarvisToolNotice({ grounding: groundingBlock, failed: toolFailed }),
+        }),
         message: question,
       });
 

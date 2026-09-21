@@ -17,6 +17,8 @@ export const inventoryMovementTypes = new Set([
   "RETURN_OUT",
   "ONLINE_RESERVE",
   "ONLINE_RELEASE",
+  "TRANSFER_OUT",
+  "TRANSFER_IN",
 ]);
 
 /*
@@ -27,11 +29,11 @@ export const inventoryMovementTypes = new Set([
  * existing access model allows it (admin/owner bypass via canAccessStore,
  * otherwise membership of user_stores).
  */
-export function resolveStockStore({ user, requestedStoreId = null, canAccessStore }) {
+export async function resolveStockStore({ user, requestedStoreId = null, canAccessStore }) {
   if (!requestedStoreId || String(requestedStoreId) === String(user.storeId)) {
     return user.storeId;
   }
-  if (typeof canAccessStore === "function" && canAccessStore(user, requestedStoreId)) {
+  if (typeof canAccessStore === "function" && (await canAccessStore(user, requestedStoreId))) {
     return requestedStoreId;
   }
   const error = new Error("You do not have access to this store");

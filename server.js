@@ -35,6 +35,14 @@ import createCustomerAuthRouter from "./routes/customerAuth.js";
 import createAccountingExportRouter from "./routes/accountingExport.js"; // T10V - accounting integration export
 import createJarvisRouter from "./routes/jarvis.js"; // JARVIS V1 - authenticated AI assistant questions
 import { createJarvis } from "./services/jarvis/index.js";
+import { createJarvisTools } from "./services/jarvis/tools/index.js"; // JARVES V2 - read-only Sales tool
+import { createJarvesAccessChecker } from "./services/jarvis/licensing.js"; // JARVES V2 - licence gate
+/* Inventory primitives live in services/inventory.js (shared with every
+ * stock writer: POS sales, purchases, returns, adjustments). */
+import {
+  createInventoryMovement,
+  inventoryMovementTypes,
+} from "./services/inventory.js";
 
 const { Pool } = pg;
 
@@ -190,7 +198,13 @@ const authenticate = createAuthenticate();
 | This changes NO existing behaviour - it only adds the JARVIS service used
 | by the dedicated routes/jarvis.js router registered further below.
 */
-const jarvis = createJarvis();
+/*
+ * JARVES read-only tools + licence gate. Built once at boot from the EXISTING
+ * db helper and admin-bypass helper - no new permission system, and the tool
+ * runner only ever runs SELECTs scoped to the caller's verified company/store.
+*/
+const jarvis = createJarvis({ tools: createJarvisTools({ db, canViewCompanyCustomers }) });
+const jarvesAccess = createJarvesAccessChecker({ db });
 
 /*
 |--------------------------------------------------------------------------
@@ -310,142 +324,6 @@ async function canAccessStore(user, storeId) {
   }
   
   return user.assignedStoreIds.includes(storeId);
-}
-
-const inventoryMovementTypes = new Set([
-  "OPENING",
-  "PURCHASE",
-  "SALE",
-  "CUSTOMER_RETURN",
-  "SUPPLIER_RETURN",
-  "ADJUSTMENT_IN",
-  "ADJUSTMENT_OUT",
-  "RETURN_IN",
-  "RETURN_OUT",
-  "ONLINE_RESERVE",
-  "ONLINE_RELEASE",
-]);
-
-async function createInventoryMovement(client, {
-  companyId,
-  productId,
-  storeId,
-  movementType,
-  quantityChange,
-  referenceType = null,
-  referenceId = null,
-  reason = null,
-  notes = null,
-  createdBy = null,
-}) {
-  const quantity = Number(quantityChange);
-
-  if (
-    !inventoryMovementTypes.has(movementType) ||
-    !Number.isFinite(quantity) ||
-    (quantity === 0 && movementType !== "OPENING")
-  ) {
-    throw new Error("Invalid inventory movement");
-  }
-
-  const productResult = await client.query(
-    `
-    SELECT
-      id,
-      name,
-      price,
-      vat_rate,
-      track_stock,
-      stock_quantity
-    FROM products
-    WHERE id = $1
-      AND company_id = $2
-      AND active = true
-    FOR UPDATE
-    `,
-    [productId, companyId]
-  );
-
-  if (!productResult.rows.length) {
-    throw new Error("Product not found");
-  }
-
-  const product = productResult.rows[0];
-  const currentBalance = Number(product.stock_quantity);
-  const newBalance = currentBalance + quantity;
-
-  /*
-   * SALE movements may drive the balance negative: a paid sale is the
-   * authoritative record and must never be rolled back because stock ran
-   * out. Every other movement type (adjustments, returns, transfers…)
-   * still keeps the non-negative-balance guard.
-   */
-  if (newBalance < 0 && movementType !== "SALE") {
-    throw new Error(`Insufficient stock for ${product.name}`);
-  }
-
-  await client.query(
-    `
-    UPDATE products
-    SET
-      stock_quantity = $1,
-      updated_at = NOW()
-    WHERE id = $2
-      AND company_id = $3
-    `,
-    [newBalance, productId, companyId]
-  );
-
-  const movementResult = await client.query(
-    `
-    INSERT INTO inventory_movements (
-      company_id,
-      product_id,
-      store_id,
-      movement_type,
-      quantity_change,
-      balance_after,
-      reference_type,
-      reference_id,
-      reason,
-      notes,
-      created_by
-    )
-    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
-    RETURNING
-      id,
-      product_id,
-      store_id,
-      movement_type,
-      quantity_change,
-      balance_after,
-      reference_type,
-      reference_id,
-      reason,
-      notes,
-      created_by,
-      created_at
-    `,
-    [
-      companyId,
-      productId,
-      storeId || null,
-      movementType,
-      quantity,
-      newBalance,
-      referenceType,
-      referenceId,
-      reason && String(reason).trim() ? String(reason).trim() : null,
-      notes && String(notes).trim() ? String(notes).trim() : null,
-      createdBy,
-    ]
-  );
-
-  return {
-    product,
-    balance: newBalance,
-    movement: movementResult.rows[0],
-  };
 }
 
 /*
@@ -821,6 +699,7 @@ app.use(
     authenticate,
     jarvis,
     getRolePermissionCodes,
+    jarvesAccess,
   })
 );
 
@@ -884,6 +763,8 @@ app.use(
     pool,
     createInventoryMovement,
     inventoryMovementTypes,
+    canAccessStore,
+    canViewCompanyCustomers,
   })
 );
 
@@ -942,7 +823,7 @@ app.use(
   })
 );
 
-app.use("/api", createSalesRouter({ authenticate, authorize, db, pool, createInventoryMovement, associateCustomerWithStore, writeAudit, selfCheckoutMode: (req) => req.user?.mode === "self_checkout" }));
+app.use("/api", createSalesRouter({ authenticate, authorize, db, pool, createInventoryMovement, associateCustomerWithStore, writeAudit, getRolePermissionCodes, canViewCompanyCustomers, selfCheckoutMode: (req) => req.user?.mode === "self_checkout" }));
 
 app.use("/api", createReturnsRouter({ authenticate, authorize, db, pool, createInventoryMovement, writeAudit }));
 

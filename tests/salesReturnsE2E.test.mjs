@@ -110,7 +110,7 @@ function makeHarness() {
             const clash = state.stockReturns.some((r) => r.return_number === params[0]);
             return { rows: clash ? [{ 1: 1 }] : [] };
           }
-          if (/SELECT s\.id, s\.company_id, s\.store_id, s\.receipt_number/i.test(s)) {
+          if (/SELECT s\.id, s\.company_id, s\.store_id, s\.customer_id, s\.receipt_number/i.test(s)) {
             const sale = state.sales.get(params[0]);
             const ok = sale && sale.company_id === params[1] && (params.length < 3 || sale.store_id === params[2]);
             if (!ok) return { rows: [] };
@@ -152,6 +152,23 @@ function makeHarness() {
             const sale = state.sales.get(params[0]);
             const paid = sale ? Number(sale.total) : 0;
             return { rows: [{ total_paid: paid, payment_method: sale?.payment_method ?? null }] };
+          }
+          if (/SELECT payment_method, COALESCE\(SUM\(amount\),0\) AS refunded\s+FROM refunds WHERE sale_id=\$1 GROUP BY/i.test(s)) {
+            /* Per-method refund totals for the allocation cap. */
+            const byMethod = new Map();
+            for (const r of state.refunds.filter((x) => x.sale_id === params[0])) {
+              byMethod.set(r.payment_method, (byMethod.get(r.payment_method) || 0) + Number(r.amount));
+            }
+            return { rows: [...byMethod.entries()].map(([payment_method, refunded]) => ({ payment_method, refunded })) };
+          }
+          if (/SELECT payment_method, amount FROM payments/i.test(s)) {
+            /* Full tender list (single or split) for the sale — the
+               payment-method-aware refund allocation reads this. */
+            const sale = state.sales.get(params[0]);
+            const rows = sale?.payment_method
+              ? [{ payment_method: sale.payment_method, amount: sale.total }]
+              : [];
+            return { rows };
           }
           if (/SELECT COALESCE\(SUM\(sri\.quantity\),0\) AS quantity/i.test(s)) {
             const saleItemId = params[1];

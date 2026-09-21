@@ -1,4 +1,9 @@
 import express from "express";
+import {
+  JARVES_ALLOWANCE_RESULTS,
+  getJarvesLicenceState,
+  setJarvesUserEnabled,
+} from "../services/jarvis/licensing.js";
 
 export default function createAdminRouter({
   authenticate,
@@ -15,10 +20,47 @@ export default function createAdminRouter({
    */
   router.get("/admin/users", authenticate, authorize("user.view"), async (req, res) => {
     try {
-      const result = await db("SELECT u.id, u.username, u.full_name, u.email, u.active, u.store_id, s.name AS store_name, u.role_id, r.name AS role_name FROM users u LEFT JOIN stores s ON s.id=u.store_id LEFT JOIN roles r ON r.id=u.role_id WHERE u.company_id=$1 ORDER BY u.full_name", [req.user.companyId]);
+      const result = await db("SELECT u.id, u.username, u.full_name, u.email, u.active, u.store_id, s.name AS store_name, u.role_id, r.name AS role_name, u.jarves_enabled FROM users u LEFT JOIN stores s ON s.id=u.store_id LEFT JOIN roles r ON r.id=u.role_id WHERE u.company_id=$1 ORDER BY u.full_name", [req.user.companyId]);
       res.json({ success: true, data: result.rows });
     } catch (error) {
       res.status(500).json({ success: false, message: "Unable to load users" });
+    }
+  });
+
+  /*
+   * PUT /api/admin/users/:id/jarves
+   * JARVES licence control: enable/disable JARVES for ONE user. Enabling is
+   * refused when the company licence allowance is already fully used
+   * (ALLOWANCE_REACHED, 409). Company-scoped via the existing users.company_id
+   * filter - an admin can never touch another company's user.
+   */
+  router.put("/admin/users/:id/jarves", authenticate, authorize("user.edit"), async (req, res) => {
+    try {
+      const enabled = req.body?.enabled;
+      if (typeof enabled !== "boolean") {
+        return res.status(400).json({ success: false, message: "A boolean \"enabled\" is required" });
+      }
+      const result = await setJarvesUserEnabled(db, {
+        companyId: req.user.companyId,
+        userId: req.params.id,
+        enabled,
+      });
+      if (result === JARVES_ALLOWANCE_RESULTS.USER_NOT_FOUND) {
+        return res.status(404).json({ success: false, message: "User not found" });
+      }
+      if (result === JARVES_ALLOWANCE_RESULTS.ALLOWANCE_REACHED) {
+        const state = await getJarvesLicenceState(db, req.user.companyId);
+        return res.status(409).json({
+          success: false,
+          code: "jarves_allowance_reached",
+          message: `The JARVES licence allowance (${state.allowance}) is already fully used. Increase the allowance or disable JARVES for another user first.`,
+        });
+      }
+      const state = await getJarvesLicenceState(db, req.user.companyId);
+      res.json({ success: true, data: state });
+    } catch (error) {
+      console.error("JARVES user toggle error:", error?.message || error);
+      res.status(500).json({ success: false, message: "Unable to update JARVES for this user" });
     }
   });
 

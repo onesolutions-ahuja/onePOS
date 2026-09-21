@@ -320,16 +320,24 @@ describe("Opening stock (create-only, store-specific, ledger-traceable)", () => 
     } finally { server.close(); }
   });
 
-  test("movement contract: server.js createInventoryMovement still matches the ported copy", () => {
-    const serverSrc = fs.readFileSync(new URL("../server.js", import.meta.url), "utf8");
-    const fnStart = serverSrc.indexOf("async function createInventoryMovement");
-    assert.ok(fnStart > -1, "createInventoryMovement must exist in server.js");
-    const fnSrc = serverSrc.slice(fnStart, serverSrc.indexOf("async function db(", fnStart));
+  test("movement contract: the shared createInventoryMovement primitive keeps its guarantees", () => {
+    /* The primitive now lives in services/inventory.js (single shared code
+     * path for sales, purchases, returns and adjustments); server.js imports
+     * it instead of defining a private copy. */
+    const svcSrc = fs.readFileSync(new URL("../services/inventory.js", import.meta.url), "utf8");
+    const fnStart = svcSrc.indexOf("export async function createInventoryMovement");
+    assert.ok(fnStart > -1, "createInventoryMovement must exist in services/inventory.js");
+    const fnSrc = svcSrc.slice(fnStart);
     assert.match(fnSrc, /INSERT INTO inventory_movements/);
     assert.match(fnSrc, /stock_quantity = \$1/, "movement updates the product balance");
     assert.match(fnSrc, /currentBalance = Number\(product\.stock_quantity\)/);
     assert.match(fnSrc, /newBalance = currentBalance \+ quantity/, "balance math preserved");
     assert.match(fnSrc, /Insufficient stock/);
+    /* Stock-by-store: the same transaction maintains the store position. */
+    assert.match(fnSrc, /INSERT INTO product_store_stock/, "store-scoped position is maintained by the same primitive");
+    assert.match(fnSrc, /ON CONFLICT \(company_id, store_id, product_id\)/, "one stock record per company+store+product");
+    const serverSrc = fs.readFileSync(new URL("../server.js", import.meta.url), "utf8");
+    assert.match(serverSrc, /import \{[^}]*createInventoryMovement[^}]*\} from "\.\/services\/inventory\.js"/, "server.js uses the shared primitive, not a private copy");
   });
 });
 

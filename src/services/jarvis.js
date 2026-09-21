@@ -77,15 +77,18 @@ export async function fetchJarvisStatus() {
 }
 
 const ERROR_MESSAGES = {
-  provider_not_configured: "JARVIS isn't switched on for this server yet. Ask an administrator to add the AI key.",
-  provider_unsupported: "JARVIS is misconfigured on this server. Ask an administrator to check the AI provider.",
-  provider_timeout: "JARVIS took too long to answer. Try again, or ask a shorter question.",
-  provider_unreachable: "JARVIS can't reach the AI service right now. Try again in a moment.",
+  provider_not_configured: "JARVES isn't switched on for this server yet. Ask an administrator to add the AI key.",
+  provider_unsupported: "JARVES is misconfigured on this server. Ask an administrator to check the AI provider.",
+  provider_timeout: "JARVES took too long to answer. Try again, or ask a shorter question.",
+  provider_unreachable: "JARVES can't reach the AI service right now. Try again in a moment.",
   provider_error: "The AI service returned an error. Try again in a moment.",
-  provider_blocked: "JARVIS can't answer that one. Try rephrasing your question.",
-  empty_response: "JARVIS returned an empty answer. Try asking again.",
-  INVALID_QUESTION: "Type a question for JARVIS first.",
-  EMPTY_ANSWER: "JARVIS returned an empty answer. Try asking again.",
+  provider_blocked: "JARVES can't answer that one. Try rephrasing your question.",
+  empty_response: "JARVES returned an empty answer. Try asking again.",
+  INVALID_QUESTION: "Type a question for JARVES first.",
+  EMPTY_ANSWER: "JARVES returned an empty answer. Try asking again.",
+  jarves_not_enabled: "JARVES is not enabled for your user account. Ask an administrator to enable it in Settings → Users.",
+  tool_permission_denied: "You don't have permission to view that data, so JARVES can't answer it for you.",
+  tool_unavailable: "That JARVES capability isn't available right now. Try again later.",
 };
 
 const RETRYABLE_CODES = new Set([

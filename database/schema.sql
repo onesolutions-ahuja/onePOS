@@ -94,6 +94,9 @@ CREATE TABLE IF NOT EXISTS company_settings (
     till_invoice_prefix VARCHAR(10) NOT NULL DEFAULT 'TO',
     delivery_invoice_prefix VARCHAR(10) NOT NULL DEFAULT 'DEL',
     self_checkout_invoice_prefix VARCHAR(10) NOT NULL DEFAULT 'SC',
+    /* JARVES licence control: company allowance (0 = disabled) + per-user
+       opt-in; enforced by services/jarvis/licensing.js. */
+    jarves_licence_users INTEGER NOT NULL DEFAULT 0,
     updated_by UUID,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -196,6 +199,9 @@ CREATE TABLE IF NOT EXISTS users (
     email VARCHAR(255),
     pin_hash TEXT,
     active BOOLEAN NOT NULL DEFAULT TRUE,
+    /* JARVES per-user opt-in; count vs company_settings.jarves_licence_users
+       is enforced by services/jarvis/licensing.js (never above the allowance). */
+    jarves_enabled BOOLEAN NOT NULL DEFAULT FALSE,
     last_login_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -348,7 +354,9 @@ CREATE TABLE IF NOT EXISTS inventory_movements (
             'RETURN_IN',
             'RETURN_OUT',
             'ONLINE_RESERVE',
-            'ONLINE_RELEASE'
+            'ONLINE_RELEASE',
+            'TRANSFER_OUT',
+            'TRANSFER_IN'
         )
     ),
     quantity_change NUMERIC(12,3) NOT NULL,
@@ -369,6 +377,60 @@ ON inventory_movements(company_id, created_at);
 
 CREATE INDEX IF NOT EXISTS idx_inventory_movements_type
 ON inventory_movements(movement_type, created_at);
+
+-- ------------------------------------------------------------
+-- STOCK BY STORE — store/location-level stock positions.
+-- Products stay company-level; the quantity physically living at each
+-- store is tracked here, one row per (company, store, product). Updated
+-- only via services/inventory.js createInventoryMovement, in step with
+-- inventory_movements and products.stock_quantity in the same transaction.
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS product_store_stock (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+    store_id UUID NOT NULL REFERENCES stores(id) ON DELETE CASCADE,
+    product_id UUID NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+    quantity NUMERIC(12,3) NOT NULL DEFAULT 0,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (company_id, store_id, product_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_product_store_stock_store
+ON product_store_stock(company_id, store_id);
+
+CREATE INDEX IF NOT EXISTS idx_product_store_stock_product
+ON product_store_stock(company_id, product_id);
+
+-- ------------------------------------------------------------
+-- STOCK TRANSFERS — moving stock between a company's own stores.
+-- Execution is atomic: TRANSFER_OUT (source) and TRANSFER_IN (destination)
+-- inventory movements for every line are written in one transaction with
+-- the transfer as their reference. Multi-product capable via items.
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS stock_transfers (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+    transfer_number VARCHAR(30) UNIQUE,
+    from_store_id UUID NOT NULL REFERENCES stores(id) ON DELETE CASCADE,
+    to_store_id UUID NOT NULL REFERENCES stores(id) ON DELETE CASCADE,
+    status VARCHAR(20) NOT NULL DEFAULT 'COMPLETED' CHECK (status IN ('COMPLETED', 'CANCELLED')),
+    notes TEXT,
+    created_by UUID REFERENCES users(id) ON DELETE SET NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_stock_transfers_company
+ON stock_transfers(company_id, created_at);
+
+CREATE TABLE IF NOT EXISTS stock_transfer_items (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    transfer_id UUID NOT NULL REFERENCES stock_transfers(id) ON DELETE CASCADE,
+    product_id UUID NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+    quantity NUMERIC(12,3) NOT NULL CHECK (quantity > 0)
+);
+
+CREATE INDEX IF NOT EXISTS idx_stock_transfer_items_transfer
+ON stock_transfer_items(transfer_id);
 
 -- ============================================================
 -- SUPPLIERS
@@ -693,7 +755,13 @@ CREATE TABLE IF NOT EXISTS sale_items (
     discount NUMERIC(12,2) NOT NULL DEFAULT 0,
     tax NUMERIC(12,2) NOT NULL DEFAULT 0,
     total NUMERIC(12,2) NOT NULL,
-    item_type VARCHAR(20) NOT NULL DEFAULT 'PRODUCT'
+    item_type VARCHAR(20) NOT NULL DEFAULT 'PRODUCT',
+    discount_type VARCHAR(20),
+    discount_value NUMERIC(12,2) NOT NULL DEFAULT 0,
+    original_unit_price NUMERIC(12,2),
+    original_tax NUMERIC(12,2),
+    original_total NUMERIC(12,2),
+    discounted_by UUID REFERENCES users(id) ON DELETE SET NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_sale_items_sale
@@ -770,6 +838,25 @@ CREATE TABLE IF NOT EXISTS discounts (
     requires_permission BOOLEAN NOT NULL DEFAULT FALSE,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+-- ============================================================
+-- SALE DISCOUNTS (audit trail for discounts applied to a sale)
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS sale_discounts (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    sale_id UUID NOT NULL REFERENCES sales(id) ON DELETE CASCADE,
+    item_id UUID REFERENCES sale_items(id) ON DELETE CASCADE,
+    user_id UUID NOT NULL REFERENCES users(id),
+    type VARCHAR(20) NOT NULL,
+    value NUMERIC(12,2) NOT NULL,
+    amount NUMERIC(12,2) NOT NULL,
+    reason TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_sale_discounts_sale
+ON sale_discounts(sale_id);
 
 -- ============================================================
 -- TILL SESSIONS

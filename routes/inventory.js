@@ -1,5 +1,5 @@
 import express from "express";
-import { lowStockRow } from "../services/inventory.js";
+import { lowStockRow, resolveStockStore } from "../services/inventory.js";
 import { resolveAdjustmentReason } from "../services/adjustmentReasons.js";
 
 export default function createInventoryRouter({
@@ -9,6 +9,8 @@ export default function createInventoryRouter({
   pool,
   createInventoryMovement,
   inventoryMovementTypes,
+  canAccessStore,
+  canViewCompanyCustomers,
 }) {
   const router = express.Router();
 
@@ -189,10 +191,25 @@ export default function createInventoryRouter({
         await client.query("BEGIN");
         transactionStarted = true;
 
+        /* The store being adjusted: the operator's own store by default; an
+         * explicit storeId only via the EXISTING access model. */
+        let adjustStoreId;
+        try {
+          adjustStoreId = await resolveStockStore({
+            user: req.user,
+            requestedStoreId: req.body.storeId || null,
+            canAccessStore: async (user, storeId) => canAccessStore(user, storeId),
+          });
+        } catch (scopeError) {
+          return res
+            .status(scopeError.statusCode || 403)
+            .json({ success: false, message: scopeError.message });
+        }
+
         const result = await createInventoryMovement(client, {
           companyId: req.user.companyId,
           productId,
-          storeId: req.user.storeId,
+          storeId: adjustStoreId,
           movementType: quantity > 0 ? "ADJUSTMENT_IN" : "ADJUSTMENT_OUT",
           quantityChange: quantity,
           reason: storedReason,
@@ -323,6 +340,461 @@ export default function createInventoryRouter({
       }
     }
   );
+  /*
+   * STOCK BY STORE — read foundation.
+   *
+   * GET /api/inventory/stock            → current store only (own-store scope)
+   * GET /api/inventory/stock?allStores=true
+   *                                     → every assigned store (or all company
+   *                                       stores for admins) when the existing
+   *                                       access model allows it; 403 otherwise.
+   * GET /api/inventory/stock/:productId → one product across accessible stores.
+   *
+   * The authoritative per-store quantity is product_store_stock. Products
+   * with no store rows (created before store stock existed) fall back to the
+   * company-level products.stock_quantity on their operator's store so the
+   * view is never silently empty. A company-wide total is never returned as
+   * the primary value — only an explicitly labelled total.
+   */
+  router.get(
+    "/inventory/stock",
+    authenticate,
+    authorize("inventory.view", "product.view"),
+    async (req, res) => {
+      try {
+        const wantAll = String(req.query.allStores || "") === "true";
+
+        if (wantAll) {
+          const isAdmin = await canViewCompanyCustomers(req.user);
+          const assigned = Array.isArray(req.user.assignedStoreIds)
+            ? req.user.assignedStoreIds.filter(Boolean)
+            : [];
+          if (!isAdmin && assigned.length <= 1) {
+            return res
+              .status(403)
+              .json({ success: false, message: "You do not have access to other stores" });
+          }
+          const result = await db(
+            `
+            SELECT pss.product_id, pss.store_id, pss.quantity, s.name AS store_name
+            FROM product_store_stock pss
+            INNER JOIN stores s ON s.id = pss.store_id
+            WHERE pss.company_id = $1
+              AND ($2::uuid[] IS NULL OR pss.store_id = ANY($2::uuid[]))
+            ORDER BY s.name, pss.product_id
+            `,
+            [req.user.companyId, isAdmin ? null : assigned]
+          );
+          return res.json({ success: true, data: result.rows.map((r) => ({ ...r, quantity: Number(r.quantity) })) });
+        }
+
+        /* Single-store read: own store only — a requested storeId can never
+         * widen the scope past the operator's access. */
+        const requestedStoreId = req.query.storeId ? String(req.query.storeId) : req.user.storeId;
+        const allowed = requestedStoreId === req.user.storeId || (await canAccessStore(req.user, requestedStoreId));
+        if (!allowed) {
+          return res
+            .status(403)
+            .json({ success: false, message: "You do not have access to this store" });
+        }
+        const result = await db(
+          `
+          SELECT p.id AS product_id, p.name, p.sku,
+                 COALESCE(pss.quantity, p.stock_quantity) AS quantity,
+                 (pss.id IS NULL) AS is_company_fallback
+          FROM products p
+          LEFT JOIN product_store_stock pss
+            ON pss.product_id = p.id
+           AND pss.company_id = p.company_id
+           AND pss.store_id = $2
+          WHERE p.company_id = $1 AND p.active = true
+          ORDER BY p.name
+          `,
+          [req.user.companyId, requestedStoreId]
+        );
+        res.json({
+          success: true,
+          data: result.rows.map((r) => ({
+            productId: r.product_id,
+            name: r.name,
+            sku: r.sku,
+            storeId: requestedStoreId,
+            quantity: Number(r.quantity) || 0,
+            isCompanyFallback: r.is_company_fallback,
+          })),
+        });
+      } catch (error) {
+        console.error("Load store stock error:", error);
+        res.status(500).json({ success: false, message: "Unable to load store stock" });
+      }
+    }
+  );
+
+  /*
+   * GET /api/inventory/stock/:productId — one product's stock across the
+   * stores the operator may access. Includes an explicitly labelled total;
+   * single-store users see just their store.
+   */
+  router.get(
+    "/inventory/stock/:productId",
+    authenticate,
+    authorize("inventory.view", "product.view"),
+    async (req, res) => {
+      try {
+        const isAdmin = await canViewCompanyCustomers(req.user);
+        const storeFilter = isAdmin
+          ? null
+          : (req.user.assignedStoreIds || []).filter(Boolean);
+        const result = await db(
+          `
+          SELECT pss.store_id, pss.quantity, s.name AS store_name
+          FROM product_store_stock pss
+          INNER JOIN stores s ON s.id = pss.store_id
+          WHERE pss.company_id = $1 AND pss.product_id = $2
+            AND ($3::uuid[] IS NULL OR pss.store_id = ANY($3::uuid[]))
+          ORDER BY s.name
+          `,
+          [req.user.companyId, req.params.productId, storeFilter]
+        );
+        const stores = result.rows.map((r) => ({
+          storeId: r.store_id,
+          storeName: r.store_name,
+          quantity: Number(r.quantity) || 0,
+        }));
+        res.json({
+          success: true,
+          data: {
+            productId: req.params.productId,
+            stores,
+            total: stores.reduce((sum, s) => sum + s.quantity, 0),
+          },
+        });
+      } catch (error) {
+        console.error("Load product store stock error:", error);
+        res.status(500).json({ success: false, message: "Unable to load product stock by store" });
+      }
+    }
+  );
+
+  /*
+   * STOCK TRANSFERS — move stock between a company's own stores.
+   *
+   * Uses the EXISTING store-access model (canAccessStore) for both sides and
+   * the EXISTING movement primitive for execution: each line writes a
+   * TRANSFER_OUT at the source and a TRANSFER_IN at the destination inside
+   * ONE transaction referencing the transfer row, so partial transfers are
+   * impossible and the established negative-stock rules apply unchanged
+   * (a transfer, like any non-SALE movement, cannot drive the source
+   * negative).
+   */
+  const accessibleStoreIds = async (user) => {
+    if (await canViewCompanyCustomers(user)) return null; // admin/owner: all company stores
+    return Array.isArray(user.assignedStoreIds) ? user.assignedStoreIds.filter(Boolean) : [];
+  };
+
+  const nextTransferNumber = async (client, companyId) => {
+    const row = await client.query(
+      `SELECT COALESCE(MAX(NULLIF(SUBSTRING(transfer_number FROM '[0-9]+$'), '')::int), 0) + 1 AS next_number
+       FROM stock_transfers WHERE company_id = $1 AND transfer_number IS NOT NULL`,
+      [companyId]
+    );
+    const candidate = Number(row.rows[0].next_number) || 1;
+    /* Defensive loop: transfer_number is UNIQUE (mirrors the RET- pattern). */
+    for (let i = 0; i < 20; i += 1) {
+      const attempt = `TRF-${String(candidate + i).padStart(4, "0")}`;
+      const clash = await client.query("SELECT 1 FROM stock_transfers WHERE transfer_number = $1 LIMIT 1", [attempt]);
+      if (!clash.rows.length) return attempt;
+    }
+    throw new Error("Unable to allocate a transfer number");
+  };
+
+  router.post(
+    "/inventory/transfers",
+    authenticate,
+    authorize("inventory.adjust"),
+    async (req, res) => {
+      const { fromStoreId, toStoreId, notes = null, items } = req.body || {};
+
+      if (!fromStoreId || !toStoreId) {
+        return res.status(400).json({ success: false, message: "Source and destination stores are required" });
+      }
+      if (String(fromStoreId) === String(toStoreId)) {
+        return res.status(400).json({ success: false, message: "Source and destination stores must be different" });
+      }
+      if (!Array.isArray(items) || items.length === 0) {
+        return res.status(400).json({ success: false, message: "At least one product line is required" });
+      }
+
+      /* Normalise + validate lines up-front (multi-product capable). */
+      const lines = [];
+      const seenProducts = new Set();
+      for (const item of items) {
+        const productId = String(item?.productId || "");
+        const quantity = Number(item?.quantity);
+        if (!productId) {
+          return res.status(400).json({ success: false, message: "Every line needs a product" });
+        }
+        if (!Number.isFinite(quantity) || quantity <= 0) {
+          return res.status(400).json({ success: false, message: "Transfer quantities must be greater than zero" });
+        }
+        if (seenProducts.has(productId)) {
+          return res.status(400).json({ success: false, message: "Duplicate product lines are not allowed" });
+        }
+        seenProducts.add(productId);
+        lines.push({ productId, quantity });
+      }
+
+      /* Company isolation first: both stores must belong to the caller's
+       * company (canAccessStore's admin bypass is role-based, not
+       * company-based — this closes that gap explicitly). */
+      const companyStores = await db(
+        "SELECT id FROM stores WHERE company_id = $1 AND (id = $2 OR id = $3)",
+        [req.user.companyId, fromStoreId, toStoreId]
+      );
+      if (companyStores.rows.length < 2) {
+        return res
+          .status(403)
+          .json({ success: false, message: "Both locations must belong to your company" });
+      }
+
+      /* Both stores must be within the operator's existing access. */
+      try {
+        await resolveStockStore({ user: req.user, requestedStoreId: fromStoreId, canAccessStore });
+        await resolveStockStore({ user: req.user, requestedStoreId: toStoreId, canAccessStore });
+      } catch (scopeError) {
+        return res
+          .status(scopeError.statusCode || 403)
+          .json({ success: false, message: scopeError.message });
+      }
+
+      if (!pool) {
+        return res.status(500).json({ success: false, message: "DATABASE_URL is not configured" });
+      }
+
+      const client = await pool.connect();
+      let transactionStarted = false;
+      try {
+        await client.query("BEGIN");
+        transactionStarted = true;
+
+        const transferNumber = await nextTransferNumber(client, req.user.companyId);
+        const header = await client.query(
+          `INSERT INTO stock_transfers (company_id, transfer_number, from_store_id, to_store_id, status, notes, created_by)
+           VALUES ($1, $2, $3, $4, 'COMPLETED', $5, $6)
+           RETURNING id, transfer_number, created_at`,
+          [req.user.companyId, transferNumber, fromStoreId, toStoreId, notes || null, req.user.id]
+        );
+        const transferId = header.rows[0].id;
+
+        const executedLines = [];
+        for (const line of lines) {
+          await client.query(
+            "INSERT INTO stock_transfer_items (transfer_id, product_id, quantity) VALUES ($1, $2, $3)",
+            [transferId, line.productId, line.quantity]
+          );
+          /* Source side: guarded like every non-SALE movement. */
+          const out = await createInventoryMovement(client, {
+            companyId: req.user.companyId,
+            productId: line.productId,
+            storeId: fromStoreId,
+            movementType: "TRANSFER_OUT",
+            quantityChange: -line.quantity,
+            referenceType: "STOCK_TRANSFER",
+            referenceId: transferId,
+            reason: notes || null,
+            createdBy: req.user.id,
+          });
+          /* Destination side. If THIS fails, the whole transaction (including
+           * the source deduction) rolls back — atomicity. */
+          const inn = await createInventoryMovement(client, {
+            companyId: req.user.companyId,
+            productId: line.productId,
+            storeId: toStoreId,
+            movementType: "TRANSFER_IN",
+            quantityChange: line.quantity,
+            referenceType: "STOCK_TRANSFER",
+            referenceId: transferId,
+            reason: notes || null,
+            createdBy: req.user.id,
+          });
+          executedLines.push({
+            productId: line.productId,
+            productName: out.product.name,
+            quantity: line.quantity,
+            sourceBalanceAfter: out.storeBalance,
+            destinationBalanceAfter: inn.storeBalance,
+          });
+        }
+
+        await client.query("COMMIT");
+        res.status(201).json({
+          success: true,
+          message: "Stock transfer completed",
+          data: {
+            id: transferId,
+            transferNumber: header.rows[0].transfer_number,
+            fromStoreId,
+            toStoreId,
+            status: "COMPLETED",
+            notes: notes || null,
+            createdAt: header.rows[0].created_at,
+            items: executedLines,
+          },
+        });
+      } catch (error) {
+        if (transactionStarted) {
+          await client.query("ROLLBACK");
+        }
+        console.error("Stock transfer error:", error);
+        const status = error.message === "Product not found" ? 404 : /Insufficient stock/.test(error.message || "") ? 400 : 400;
+        res.status(status).json({ success: false, message: error.message || "Unable to complete stock transfer" });
+      } finally {
+        client.release();
+      }
+    }
+  );
+
+  /*
+   * GET /api/inventory/transfers — history. Non-admins see transfers that
+   * involve at least one of their assigned stores; admins see the company's.
+   */
+  router.get(
+    "/inventory/transfers",
+    authenticate,
+    authorize("inventory.view", "product.view"),
+    async (req, res) => {
+      try {
+        const storeFilter = await accessibleStoreIds(req.user);
+        const result = await db(
+          `
+          SELECT t.id, t.transfer_number, t.from_store_id, t.to_store_id,
+                 fs.name AS from_store_name, ts.name AS to_store_name,
+                 t.status, t.notes, u.username AS created_by_name, t.created_at,
+                 COUNT(ti.id)::int AS item_count,
+                 COALESCE(SUM(ti.quantity), 0) AS total_quantity
+          FROM stock_transfers t
+          INNER JOIN stores fs ON fs.id = t.from_store_id
+          INNER JOIN stores ts ON ts.id = t.to_store_id
+          LEFT JOIN users u ON u.id = t.created_by
+          LEFT JOIN stock_transfer_items ti ON ti.transfer_id = t.id
+          WHERE t.company_id = $1
+            AND ($2::uuid[] IS NULL OR t.from_store_id = ANY($2::uuid[]) OR t.to_store_id = ANY($2::uuid[]))
+          GROUP BY t.id, fs.name, ts.name, u.username
+          ORDER BY t.created_at DESC
+          LIMIT 100
+          `,
+          [req.user.companyId, storeFilter]
+        );
+        res.json({
+          success: true,
+          data: result.rows.map((r) => ({
+            ...r,
+            total_quantity: Number(r.total_quantity) || 0,
+          })),
+        });
+      } catch (error) {
+        console.error("Load stock transfers error:", error);
+        res.status(500).json({ success: false, message: "Unable to load stock transfers" });
+      }
+    }
+  );
+
+  /*
+   * GET /api/inventory/transfer-stores — the stores THIS user may transfer
+   * between (admin/owner: all active company stores; others: their assigned
+   * stores). Keeps the picker inside the existing access model without
+   * granting store.view.
+   */
+  router.get(
+    "/inventory/transfer-stores",
+    authenticate,
+    authorize("inventory.view", "product.view"),
+    async (req, res) => {
+      try {
+        const storeFilter = await accessibleStoreIds(req.user);
+        const result = await db(
+          `
+          SELECT s.id, s.name, s.code
+          FROM stores s
+          WHERE s.company_id = $1 AND s.active = true
+            AND ($2::uuid[] IS NULL OR s.id = ANY($2::uuid[]))
+          ORDER BY s.name
+          `,
+          [req.user.companyId, storeFilter]
+        );
+        res.json({ success: true, data: result.rows });
+      } catch (error) {
+        console.error("Load transfer stores error:", error);
+        res.status(500).json({ success: false, message: "Unable to load stores" });
+      }
+    }
+  );
+
+  /*
+   * GET /api/inventory/transfers/:id — detail: header + lines + the
+   * TRANSFER_OUT/TRANSFER_IN movements (the audit trail).
+   */
+  router.get(
+    "/inventory/transfers/:id",
+    authenticate,
+    authorize("inventory.view", "product.view"),
+    async (req, res) => {
+      try {
+        const storeFilter = await accessibleStoreIds(req.user);
+        const header = await db(
+          `
+          SELECT t.id, t.transfer_number, t.from_store_id, t.to_store_id,
+                 fs.name AS from_store_name, ts.name AS to_store_name,
+                 t.status, t.notes, u.username AS created_by_name, t.created_at
+          FROM stock_transfers t
+          INNER JOIN stores fs ON fs.id = t.from_store_id
+          INNER JOIN stores ts ON ts.id = t.to_store_id
+          LEFT JOIN users u ON u.id = t.created_by
+          WHERE t.id = $2 AND t.company_id = $1
+            AND ($3::uuid[] IS NULL OR t.from_store_id = ANY($3::uuid[]) OR t.to_store_id = ANY($3::uuid[]))
+          `,
+          [req.user.companyId, req.params.id, storeFilter]
+        );
+        if (!header.rows.length) {
+          return res.status(404).json({ success: false, message: "Stock transfer not found" });
+        }
+        const items = await db(
+          `
+          SELECT ti.product_id, p.name AS product_name, p.sku, ti.quantity
+          FROM stock_transfer_items ti
+          INNER JOIN products p ON p.id = ti.product_id
+          WHERE ti.transfer_id = $1
+          ORDER BY ti.id
+          `,
+          [req.params.id]
+        );
+        const movements = await db(
+          `
+          SELECT m.movement_type, m.store_id, s.name AS store_name,
+                 m.quantity_change, m.balance_after, m.created_at, u.username
+          FROM inventory_movements m
+          LEFT JOIN stores s ON s.id = m.store_id
+          LEFT JOIN users u ON u.id = m.created_by
+          WHERE m.reference_type = 'STOCK_TRANSFER' AND m.reference_id = $1
+          ORDER BY m.created_at, m.id
+          `,
+          [req.params.id]
+        );
+        res.json({
+          success: true,
+          data: {
+            transfer: header.rows[0],
+            items: items.rows.map((r) => ({ ...r, quantity: Number(r.quantity) })),
+            movements: movements.rows.map((r) => ({ ...r, quantity_change: Number(r.quantity_change), balance_after: Number(r.balance_after) })),
+          },
+        });
+      } catch (error) {
+        console.error("Load stock transfer detail error:", error);
+        res.status(500).json({ success: false, message: "Unable to load stock transfer" });
+      }
+    }
+  );
+
   return router;
 }
 

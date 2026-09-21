@@ -28,10 +28,10 @@ import { JarvisError, JARVIS_ERROR_CODES, toJarvisError, isJarvisError, jarvisHt
  * Create the JARVIS service from the environment (or an injected provider,
  * which is how tests supply the mocked Gemini provider).
  */
-export function createJarvis({ env = process.env, fetchImpl, provider, providerName, baseInstruction } = {}) {
+export function createJarvis({ env = process.env, fetchImpl, provider, providerName, baseInstruction, tools } = {}) {
   const resolvedProvider =
     provider || createJarvisProvider({ name: providerName || resolveProviderName(env), env, fetchImpl });
-  return createJarvisService({ provider: resolvedProvider, baseInstruction });
+  return createJarvisService({ provider: resolvedProvider, baseInstruction, tools });
 }
 
 export {

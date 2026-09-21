@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { ChevronDown, ChevronRight, History, RefreshCw, Search, ShoppingCart, X } from "lucide-react";
 import { apiRequest } from "../../services/api.js";
+import { getConnectivity, SERVER_STATES, subscribeConnectivity } from "../../services/connectivity.js";
 
 /*
  * T9M-SMALL - Sales Returns UI.
@@ -28,6 +29,15 @@ function ProcessReturnTab({ onMessage, onError }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [result, setResult] = useState(null);
+
+  /* Refunds are online-only: they must be validated and recorded by the
+     backend in one transaction, which the offline queue cannot offer. */
+  const [serverConnected, setServerConnected] = useState(
+    getConnectivity().server === SERVER_STATES.CONNECTED,
+  );
+  useEffect(() => subscribeConnectivity((snapshot) => {
+    setServerConnected(snapshot.server === SERVER_STATES.CONNECTED);
+  }), []);
 
   const doLookup = async (term) => {
     const value = String(term || "").trim();
@@ -72,6 +82,10 @@ function ProcessReturnTab({ onMessage, onError }) {
 
   const submit = async () => {
     if (busy || !selectedLines.length) return;
+    if (!serverConnected) {
+      setError("Refunds require a connection to the onePOS server. Reconnect and try again — offline refunds are not supported.");
+      return;
+    }
     setBusy(true);
     setError("");
     try {
@@ -141,10 +155,15 @@ function ProcessReturnTab({ onMessage, onError }) {
           <div className="font-medium text-emerald-800">
             Return {result.returnNumber} processed successfully.
           </div>
-          {result.refund?.amount > 0 && (
+              {result.refund?.amount > 0 && (
             <div className="text-emerald-700 mt-1">
               Refund recorded: {money(result.refund.amount)}
-              {result.refund.method ? ` · via ${result.refund.method}` : ""}.
+              {result.refund.allocation?.length > 1
+                ? ` · via ${result.refund.allocation.map((part) => `${part.method} ${money(part.amount)}`).join(" + ")}`
+                : result.refund.method
+                  ? ` · via ${result.refund.method}`
+                  : ""}
+              .
               {/card/i.test(result.refund.method || "") && " Process the card-terminal refund separately."}
             </div>
           )}
@@ -174,8 +193,15 @@ function ProcessReturnTab({ onMessage, onError }) {
               <div>
                 <span className="text-slate-400 block">Payment</span>
                 <span className="text-slate-700">
-                  {lookup.sale.payment ? `${lookup.sale.payment.method} · ${money(lookup.sale.payment.amount)}` : "-"}
+                  {lookup.sale.payments?.length
+                    ? lookup.sale.payments.map((p) => `${p.method} · ${money(p.amount)}`).join("  +  ")
+                    : lookup.sale.payment
+                      ? `${lookup.sale.payment.method} · ${money(lookup.sale.payment.amount)}`
+                      : "-"}
                 </span>
+                {lookup.sale.payments?.length > 1 && (
+                  <span className="text-amber-700 block">Split payment — refund is allocated across the original methods</span>
+                )}
               </div>
               <div>
                 <span className="text-slate-400 block">Returnable value</span>
@@ -250,6 +276,11 @@ function ProcessReturnTab({ onMessage, onError }) {
           ) : (
             <div className="p-4">
               <h3 className="font-semibold text-sm mb-3">Review before confirming</h3>
+              {!serverConnected && (
+                <p role="status" className="mb-3 rounded bg-amber-50 p-2.5 text-xs text-amber-800">
+                  Offline — refunds are online-only. The refund must be validated and recorded by the onePOS server.
+                </p>
+              )}
               <table className="w-full text-sm mb-4">
                 <thead>
                   <tr className="text-left text-xs uppercase text-slate-400 border-b border-slate-100">
@@ -280,7 +311,7 @@ function ProcessReturnTab({ onMessage, onError }) {
                   <button
                     type="button"
                     onClick={submit}
-                    disabled={busy}
+                    disabled={busy || !serverConnected}
                     className="h-9 px-4 bg-emerald-600 text-white rounded-lg text-sm font-medium disabled:opacity-50"
                   >
                     {busy ? "Processing…" : "Confirm return"}

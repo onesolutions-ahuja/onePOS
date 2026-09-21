@@ -1,5 +1,5 @@
 /*
- * JARVIS panel - compact assistant surface for the till.
+ * JARVES panel - compact assistant surface for the till.
  *
  * Two input methods, one destination:
  *   - TEXT: input + Ask -> the existing authenticated POST /api/jarvis
@@ -39,6 +39,7 @@ export default function JarvisPanel({ onClose, onActivityChange }) {
   const [retryable, setRetryable] = useState(false);
   const [lastQuestion, setLastQuestion] = useState("");
   const [listening, setListening] = useState(false);
+  const [responding, setResponding] = useState(false);
   const [speechNotice, setSpeechNotice] = useState("");
   const [speechSupported] = useState(() => isSpeechRecognitionSupported());
 
@@ -71,10 +72,19 @@ export default function JarvisPanel({ onClose, onActivityChange }) {
     listRef.current?.scrollTo?.({ top: listRef.current.scrollHeight });
   }, [messages, loading]);
 
-  /* Mirror the assistant's activity to the host (orb animation state). */
+  /* Mirror the assistant's activity to the host (orb animation state):
+     listening (voice capture) -> thinking (waiting for the answer) -> a short
+     "response" flare when the answer lands, then smoothly back to idle. */
   useEffect(() => {
-    onActivityChange?.(listening ? "listening" : loading ? "thinking" : null);
-  }, [listening, loading, onActivityChange]);
+    onActivityChange?.(listening ? "listening" : loading ? "thinking" : responding ? "response" : null);
+  }, [listening, loading, responding, onActivityChange]);
+
+  /* The response state is a brief energetic moment, never a new resting state. */
+  useEffect(() => {
+    if (!responding) return undefined;
+    const timer = setTimeout(() => setResponding(false), 1600);
+    return () => clearTimeout(timer);
+  }, [responding]);
 
   const ask = async (raw) => {
     if (loading) return;
@@ -97,6 +107,8 @@ export default function JarvisPanel({ onClose, onActivityChange }) {
     try {
       const reply = await askJarvis(validation.question);
       setMessages((current) => [...current, { role: "assistant", text: reply.answer }]);
+      /* Short "here you go" flare on the orb; cleared by the timer above. */
+      setResponding(true);
     } catch (askError) {
       setError(describeJarvisError(askError));
       setRetryable(isRetryableJarvisError(askError));
@@ -130,7 +142,7 @@ export default function JarvisPanel({ onClose, onActivityChange }) {
     >
       <button
         type="button"
-        aria-label="Close JARVIS"
+        aria-label="Close JARVES"
         onClick={onClose}
         className="absolute inset-0 bg-black/40"
         data-testid="jarvis-panel-backdrop"
@@ -138,7 +150,7 @@ export default function JarvisPanel({ onClose, onActivityChange }) {
       <section
         role="dialog"
         aria-modal="true"
-        aria-label="JARVIS assistant"
+        aria-label="JARVES assistant"
         data-testid="jarvis-panel"
         className="relative w-full sm:w-[400px] max-h-[78dvh] flex flex-col bg-white rounded-2xl shadow-2xl overflow-hidden"
       >
@@ -147,13 +159,13 @@ export default function JarvisPanel({ onClose, onActivityChange }) {
         <header className="flex items-center gap-2 px-4 py-3 bg-gradient-to-r from-teal-900 via-teal-800 to-teal-700 text-white">
           <span className="w-7 h-7 rounded-full shrink-0 bg-[radial-gradient(circle_at_34%_28%,#eef7f6_0%,#b0d9d5_18%,#4fa69e_42%,#176F6A_68%,#104744_100%)]" aria-hidden="true" />
           <div className="flex-1 min-w-0">
-            <h2 className="text-sm font-bold tracking-[0.2em]">JARVIS</h2>
+            <h2 className="text-sm font-bold tracking-[0.2em]">JARVES</h2>
             <p className="text-[11px] text-teal-100/80 leading-tight">onePOS AI assistant</p>
           </div>
           <button
             type="button"
             onClick={onClose}
-            aria-label="Close JARVIS"
+            aria-label="Close JARVES"
             title="Close"
             data-testid="jarvis-panel-close"
             className="p-1.5 rounded-lg hover:bg-white/10"
@@ -170,7 +182,7 @@ export default function JarvisPanel({ onClose, onActivityChange }) {
           {messages.length === 0 && !loading && (
             <div className="text-center py-3" data-testid="jarvis-empty">
               <Sparkles size={22} className="mx-auto text-teal-700" />
-              <p className="mt-1 text-sm font-semibold text-slate-700">Ask JARVIS anything about onePOS.</p>
+              <p className="mt-1 text-sm font-semibold text-slate-700">Ask JARVES anything about onePOS.</p>
               <div className="mt-3 flex flex-wrap justify-center gap-1.5">
                 {SUGGESTIONS.map((suggestion) => (
                   <button
@@ -274,18 +286,18 @@ export default function JarvisPanel({ onClose, onActivityChange }) {
             type="text"
             value={question}
             onChange={(event) => setQuestion(event.target.value)}
-            placeholder={listening ? "Listening…" : "Ask JARVIS…"}
+            placeholder={listening ? "Listening…" : "Ask JARVES…"}
             maxLength={2000}
             disabled={loading}
             data-testid="jarvis-input"
-            aria-label="Your question for JARVIS"
+            aria-label="Your question for JARVES"
             className="flex-1 min-w-0 text-sm px-3 py-2.5 rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-teal-600 focus:border-teal-600 disabled:bg-slate-100"
           />
 
           <button
             type="submit"
             disabled={loading || !question.trim()}
-            aria-label="Ask JARVIS"
+            aria-label="Ask JARVES"
             title="Ask"
             data-testid="jarvis-ask"
             className="shrink-0 w-10 h-10 rounded-full bg-teal-800 text-white flex items-center justify-center hover:bg-teal-700 disabled:opacity-40 disabled:cursor-not-allowed"

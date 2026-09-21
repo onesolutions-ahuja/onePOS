@@ -245,8 +245,8 @@ describe("JARVIS V1 provider abstraction (services/jarvis/providers)", () => {
 /* ===================================================== system instruction */
 
 describe("JARVIS system instruction (services/jarvis/prompt.js)", () => {
-  test("establishes JARVIS as the onePOS assistant", () => {
-    assert.match(JARVIS_SYSTEM_INSTRUCTION, /You are JARVIS/);
+  test("establishes JARVES as the onePOS assistant", () => {
+    assert.match(JARVIS_SYSTEM_INSTRUCTION, /You are JARVES/);
     assert.match(JARVIS_SYSTEM_INSTRUCTION, /onePOS/);
   });
 
@@ -289,7 +289,7 @@ describe("JARVIS system instruction (services/jarvis/prompt.js)", () => {
 /* =============================================== authenticated JARVIS call */
 
 describe("POST /api/jarvis - authenticated question", () => {
-  test("an authenticated question returns JARVIS's answer", async () => {
+  test("an authenticated question returns JARVES's answer", async () => {
     const gemini = mockGeminiFetch();
     const ctx = makeApp({ fetchImpl: gemini.fetchImpl });
     const { server } = await listen(ctx.app);
@@ -307,7 +307,7 @@ describe("POST /api/jarvis - authenticated question", () => {
       assert.equal(gemini.calls[0].options.method, "POST");
       assert.match(gemini.calls[0].url, /\/v1beta\/models\/gemini-flash-latest:generateContent$/);
       assert.equal(sentQuestion(gemini.calls[0]), "What is onePOS?");
-      assert.match(sentSystemInstruction(gemini.calls[0]), /You are JARVIS/);
+      assert.match(sentSystemInstruction(gemini.calls[0]), /You are JARVES/);
       assert.deepEqual(Object.keys(sentBody(gemini.calls[0])), ["systemInstruction", "contents", "generationConfig"]);
     } finally {
       server.close();
@@ -329,7 +329,7 @@ describe("POST /api/jarvis - authenticated question", () => {
       const raw = JSON.stringify(body);
       assert.ok(!raw.includes(TEST_API_KEY), "the API key must never be returned to the client");
       assert.ok(!raw.includes("x-goog-api-key"), "provider headers must never be returned to the client");
-      assert.ok(!raw.includes("You are JARVIS"), "the system instruction must never be returned to the client");
+      assert.ok(!raw.includes("You are JARVES"), "the system instruction must never be returned to the client");
     } finally {
       server.close();
     }
@@ -791,7 +791,7 @@ describe("JARVIS V1 safety guarantees", () => {
     }
   });
 
-  test("the JARVIS backend modules contain no write SQL and are mounted behind authenticate", () => {
+  test("the JARVIS backend modules contain no business-data write SQL and are mounted behind authenticate", () => {
     const jarvisSources = [
       ...walkFiles(path.join(ROOT, "services", "jarvis")),
       path.join(ROOT, "routes", "jarvis.js"),
@@ -800,9 +800,25 @@ describe("JARVIS V1 safety guarantees", () => {
 
     for (const file of jarvisSources) {
       const source = fs.readFileSync(file, "utf8");
+      const base = path.basename(file);
+      if (base === "licensing.js") {
+        /* Licence control is admin-only configuration (company_settings allowance
+           + users.jarves_enabled flag). It must never touch business data. */
+        assert.ok(
+          !/\b(DELETE|TRUNCATE|ALTER|DROP|GRANT)\b/.test(source),
+          `JARVIS licensing module must not contain destructive SQL: ${base}`
+        );
+        for (const table of ["sales", "sale_items", "products", "stock", "customers", "payments"]) {
+          assert.ok(
+            !new RegExp(`\\b${table}\\b`, "i").test(source),
+            `JARVIS licensing module must not touch business table ${table}: ${base}`
+          );
+        }
+        continue;
+      }
       assert.ok(
         !/\b(INSERT|UPDATE|DELETE|TRUNCATE|ALTER|DROP|GRANT)\b/.test(source),
-        `JARVIS module must not contain write SQL: ${path.basename(file)}`
+        `JARVIS module must not contain write SQL: ${base}`
       );
     }
 

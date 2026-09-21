@@ -5,6 +5,13 @@ import {
   buildStoredConfiguration,
   maskConfiguration,
 } from "../services/onlineOrders/platformConfig.js";
+import {
+  JARVES_ALLOWANCE_RESULTS,
+  getJarvesLicenceState,
+  isJarvesEnabledForUser,
+  normalizeJarvesAllowance,
+  setJarvesAllowance,
+} from "../services/jarvis/licensing.js";
 
 export default function createSettingsRouter({
   authenticate,
@@ -15,6 +22,53 @@ export default function createSettingsRouter({
   testPaymentTerminal,
 }) {
   const router = express.Router();
+
+  /*
+   * JARVES licence control (see services/jarvis/licensing.js).
+   *
+   *   GET /api/settings/jarves  - licence state for the caller's company
+   *                               (settings.manage OR user.view: the users
+   *                               admin page uses it to show seat usage).
+   *   PUT /api/settings/jarves  - set the company allowance (settings.manage).
+   *
+   * Refusing to lower the allowance below the enabled count guarantees
+   * existing JARVES users are never silently disabled.
+   */
+  router.get("/settings/jarves", authenticate, authorize("settings.manage", "user.view"), async (req, res) => {
+    try {
+      const state = await getJarvesLicenceState(db, req.user.companyId);
+      const enabledForMe = await isJarvesEnabledForUser(db, {
+        userId: req.user.id,
+        companyId: req.user.companyId,
+      });
+      res.json({ success: true, data: { ...state, enabledForMe } });
+    } catch (error) {
+      console.error("JARVES licence state error:", error?.message || error);
+      res.status(500).json({ success: false, message: "Unable to load JARVES licence state" });
+    }
+  });
+
+  router.put("/settings/jarves", authenticate, authorize("settings.manage"), async (req, res) => {
+    try {
+      if (normalizeJarvesAllowance(req.body?.allowance) == null) {
+        return res.status(400).json({ success: false, message: "A whole-number \"allowance\" between 0 and 10000 is required" });
+      }
+      const result = await setJarvesAllowance(db, req.user.companyId, req.body.allowance, req.user.id);
+      if (result === JARVES_ALLOWANCE_RESULTS.ALLOWANCE_BELOW_ENABLED) {
+        const state = await getJarvesLicenceState(db, req.user.companyId);
+        return res.status(409).json({
+          success: false,
+          code: "jarves_allowance_below_enabled",
+          message: `Cannot set the allowance below the number of users already enabled (${state.enabledUsers}). Disable JARVES for some users first - no user is disabled automatically.`,
+        });
+      }
+      const state = await getJarvesLicenceState(db, req.user.companyId);
+      res.json({ success: true, message: "JARVES licence updated", data: state });
+    } catch (error) {
+      console.error("JARVES licence update error:", error?.message || error);
+      res.status(500).json({ success: false, message: "Unable to save JARVES licence" });
+    }
+  });
 
   router.get("/settings", authenticate, async (req, res) => {
     try {

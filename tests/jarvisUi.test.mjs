@@ -94,7 +94,7 @@ test("askJarvis maps backend failure codes onto error.code for the panel", async
 test("errors surface as human text and never leak internals", () => {
   assert.equal(
     describeJarvisError(Object.assign(new Error("x"), { code: "provider_timeout" })),
-    "JARVIS took too long to answer. Try again, or ask a shorter question.",
+    "JARVES took too long to answer. Try again, or ask a shorter question.",
   );
   assert.match(describeJarvisError(Object.assign(new Error("x"), { status: 401 })), /sign in/i);
   assert.ok(!describeJarvisError(new TypeError("fetch failed")).includes("fetch"), "network TypeError gets a friendly message");
