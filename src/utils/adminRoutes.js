@@ -61,6 +61,9 @@ export const PAGE_SLUGS = {
   Accounting: "accounting",
   Reports: "reports",
   Settings: "settings",
+   Licensing: "licensing",
+   "Business Divisions": "business-divisions",
+   "Audit Log": "audit",
 };
 
 export const SLUG_TO_PAGE = Object.fromEntries(
@@ -71,6 +74,7 @@ export const SLUG_TO_PAGE = Object.fromEntries(
 export const SETTINGS_TAB_SLUGS = {
   General: "general",
   Company: "company",
+  Appearance: "appearance",
   "Store & Till": "store-till",
   "Tax / VAT": "tax-vat",
   Receipts: "receipts",
@@ -87,6 +91,8 @@ export const SETTINGS_TAB_SLUGS = {
   "Email Delivery": "email-delivery",
   /* System / device-level configuration. */
   "Server / API Configuration": "server-api",
+  Platform: "platform",
+  "Message Templates": "message-templates",
   /* Legacy sections (pre left-panel navigation) - kept so existing deep
      links still resolve; the Settings page redirects them internally. */
   "Users & Permissions": "users-permissions",

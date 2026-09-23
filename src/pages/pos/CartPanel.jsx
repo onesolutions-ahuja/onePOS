@@ -1,4 +1,6 @@
+import { useState } from "react";
 import { CreditCard, Receipt, ShoppingCart } from "lucide-react";
+import PriceOverrideModal from "./PriceOverrideModal.jsx";
 
 function CartPanel({
   basket,
@@ -13,11 +15,14 @@ function CartPanel({
   onDecrease,
   onUpdateQuantity,
   onRemoveItem,
+  onPriceOverride,
+  canPriceOverride = false,
   subtotal,
   vat,
   total,
   onCheckout,
 }) {
+  const [overrideItem, setOverrideItem] = useState(null);
   return (
     <aside className="w-[350px] bg-white border-l border-slate-200 flex flex-col shrink-0">
       <div className="h-[58px] border-b border-slate-200 flex items-center justify-between px-4">
@@ -118,14 +123,24 @@ function CartPanel({
                     </button>
                   </div>
 
-                  <span className="text-xs text-slate-400">
-                    £
-                    {Number(
-                      item.price || 0
-                    ).toFixed(2)}{" "}
-                    each
-                  </span>
-                </div>
+                   <span className="text-xs text-slate-400">
+                     £
+                     {Number(
+                       item.price || 0
+                     ).toFixed(2)}{" "}
+                     each
+                   </span>
+                   {canPriceOverride && (
+                     <button
+                       onClick={() => setOverrideItem(item)}
+                       className="w-8 h-8 hover:bg-slate-100"
+                       title="Change price"
+                       aria-label={`Change price of ${item.name}`}
+                     >
+                       £
+                     </button>
+                   )}
+                 </div>
               </div>
             ))}
 
@@ -176,10 +191,22 @@ function CartPanel({
                   </div>
                 </div>
               </div>
-            ))}
-          </div>
-        )}
-      </div>
+             ))}
+           </div>
+         )}
+       </div>
+
+      {overrideItem && onPriceOverride && (
+        <PriceOverrideModal
+          item={overrideItem}
+          onClose={() => setOverrideItem(null)}
+          onApply={(newPrice, reason) => {
+            onPriceOverride(overrideItem, newPrice, reason);
+            setOverrideItem(null);
+          }}
+        />
+      )}
+
 
       <div className="border-t border-slate-200 p-4">
         <div className="flex justify-between text-sm mb-2">

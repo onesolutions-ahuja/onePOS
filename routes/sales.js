@@ -1,10 +1,42 @@
 import express from "express";
+import { createHash } from "node:crypto";
+import { allocateBatchConsumption } from "../services/inventory.js";
 import { checkCreditLimit, buildCreditSaleTransaction } from "../services/customerCredit.js";
 import { validateRedeemConfig, validateRedeemablePoints } from "../src/utils/loyaltyPoints.js";
-import { computeBasketTotals, roundCurrency } from "../src/utils/saleTotals.js";
+import { computeBasketTotals, roundCurrency, resolveEffectivePrice } from "../src/utils/saleTotals.js";
 import { dispatchIntegrationEvent } from "../services/integrationDispatcher.js";
 import { dispatchWhatsAppInvoiceDelivery } from "../services/whatsappDelivery.js";
 import { dispatchSmsInvoiceDelivery, dispatchEmailInvoiceDelivery } from "../services/invoiceDelivery.js";
+import { loadSaleLineFeatures, calculateModifierTotal, expandBundleComponents } from "../services/productFeatures.js";
+import { resolvePrice } from "../services/pricingEngine.js";
+import { getRequestPool } from "../services/tenantDatabase.js";
+
+export const PAYMENT_METHODS = [
+  "cash",
+  "card",
+  "customer_credit",
+  "gift_card",
+  "voucher",
+  "cheque",
+  "bank_transfer",
+  "online",
+];
+
+function stableRequestValue(value) {
+  if (Array.isArray(value)) return value.map(stableRequestValue);
+  if (!value || typeof value !== "object") return value;
+  return Object.keys(value)
+    .filter((key) => !["clientRequestId", "authorization", "card", "paymentToken", "paymentCredentials"].includes(key))
+    .sort()
+    .reduce((result, key) => {
+      result[key] = stableRequestValue(value[key]);
+      return result;
+    }, {});
+}
+
+export function requestFingerprint(payload) {
+  return createHash("sha256").update(JSON.stringify(stableRequestValue(payload))).digest("hex");
+}
 
 export default function createSalesRouter({
   authenticate,
@@ -17,6 +49,7 @@ export default function createSalesRouter({
   selfCheckoutMode = null,
   getRolePermissionCodes = null,
   canViewCompanyCustomers = null,
+  requestPool = null,
 }) {
   const router = express.Router();
 
@@ -105,7 +138,8 @@ export default function createSalesRouter({
       try {
         const sale = await db(
           `
-          SELECT s.*, st.name AS store_name, u.username AS cashier,
+          SELECT s.*, st.name AS store_name, st.address_line1, st.address_line2, st.city, st.postcode,
+            st.phone AS store_phone, t.name AS terminal_name, u.username AS cashier,
             cst.name AS customer_name, cst.phone AS customer_phone, cst.email AS customer_email,
             pay.payment_method, pay.amount AS payment_amount, pay.status AS payment_status, pay.created_at AS payment_created_at,
             oo.platform, oo.external_order_id
@@ -113,6 +147,7 @@ export default function createSalesRouter({
           LEFT JOIN online_orders oo ON oo.id = s.online_order_id
             AND oo.company_id = s.company_id AND oo.store_id = s.store_id
           LEFT JOIN stores st ON st.id = s.store_id
+          LEFT JOIN terminals t ON t.id = s.terminal_id
           LEFT JOIN users u ON u.id = s.user_id
           LEFT JOIN customers cst ON cst.id = s.customer_id
           LEFT JOIN payments pay ON pay.sale_id = s.id
@@ -161,15 +196,21 @@ export default function createSalesRouter({
       }
 
       const clientRequestId = req.body.clientRequestId ?? null;
+      const clientRequestFingerprint = clientRequestId === null ? null : requestFingerprint(req.body);
       if (clientRequestId !== null && (typeof clientRequestId !== "string" ||
         !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(clientRequestId))) {
         return res.status(400).json({ success: false, message: "Invalid clientRequestId UUID" });
       }
 
-      const client = await pool.connect();
+      const transactionPool = (typeof requestPool === "function" ? requestPool(req) : null) || req.tenantPool || pool;
+      if (!transactionPool) {
+        return res.status(503).json({ success: false, code: "TENANT_DATABASE_UNAVAILABLE", message: "Company database is unavailable" });
+      }
+      const client = await transactionPool.connect();
 
       try {
         await client.query("BEGIN");
+        const db = (query, params = []) => client.query(query, params);
 
         if (clientRequestId !== null) {
           // Serialize retries before any customer, inventory or payment writes.
@@ -177,10 +218,14 @@ export default function createSalesRouter({
             `${req.user.companyId}:${clientRequestId.toLowerCase()}`,
           ]);
           const existing = await client.query(
-            "SELECT id, created_at, total, receipt_number FROM sales WHERE company_id = $1 AND client_request_id = $2",
+            "SELECT id, created_at, total, receipt_number, client_request_fingerprint FROM sales WHERE company_id = $1 AND client_request_id = $2",
             [req.user.companyId, clientRequestId]
           );
           if (existing.rows.length) {
+            if (existing.rows[0].client_request_fingerprint && existing.rows[0].client_request_fingerprint !== clientRequestFingerprint) {
+              await client.query("ROLLBACK");
+              return res.status(409).json({ success: false, code: "IDEMPOTENCY_CONFLICT", message: "Operation ID was already used with a different sale payload" });
+            }
             await client.query("COMMIT");
             return res.status(201).json({ success: true, message: "Sale completed", sale: existing.rows[0] });
           }
@@ -210,7 +255,9 @@ export default function createSalesRouter({
           });
         }
 
-        const {
+        /* `let`, not `const`: the server-authoritative totals engine below
+         * (computeBasketTotals) overwrites these with the recomputed values. */
+        let {
           items = [],
           customerId = null,
           subtotal = 0,
@@ -252,8 +299,10 @@ export default function createSalesRouter({
           : false;
         let allowedOrderDiscountType = null;
         let allowedOrderDiscountValue = 0;
+        let canOverridePrice = false;
+        let roleCodes = [];
         if (typeof getRolePermissionCodes === "function") {
-          const roleCodes = await getRolePermissionCodes(req.user.roleId);
+          roleCodes = await getRolePermissionCodes(req.user.roleId);
           const canDiscount = isAdmin || roleCodes.includes("sale.discount");
           if (canDiscount) {
             const dt = req.body.discountType ?? null;
@@ -263,6 +312,7 @@ export default function createSalesRouter({
               allowedOrderDiscountValue = dv;
             }
           }
+          canOverridePrice = isAdmin || roleCodes.includes("sale.price_change");
         }
 
         /*
@@ -283,16 +333,6 @@ export default function createSalesRouter({
          *     full sale amount on the ledger; loyalty redemption already
          *     pre-commit debits its points against the full total).
          */
-        const PAYMENT_METHODS = [
-          "cash",
-          "card",
-          "customer_credit",
-          "gift_card",
-          "voucher",
-          "cheque",
-          "bank_transfer",
-          "online",
-        ];
         const rawPayments = Array.isArray(req.body.payments) ? req.body.payments : [];
         let paymentLines = null;
         if (rawPayments.length) {
@@ -598,6 +638,12 @@ export default function createSalesRouter({
           }
 
           const p = product.rows[0];
+          const kind = await client.query(
+            `SELECT product_kind FROM products
+             WHERE id = $1 AND company_id = $2 AND active = true`,
+            [item.productId, req.user.companyId]
+          );
+          p.product_kind = kind.rows[0]?.product_kind || "standard";
 
           if (p.age_restricted === true) {
             basketHasAgeRestricted = true;
@@ -605,6 +651,7 @@ export default function createSalesRouter({
 
           if (
             p.track_stock &&
+            p.product_kind !== "bundle" &&
             Number(p.stock_quantity) < Number(item.quantity)
           ) {
             /*
@@ -723,7 +770,7 @@ export default function createSalesRouter({
         const productPriceMap = {};
         const priceRows = await client.query(
           `
-          SELECT id, price, vat_rate, vat_applicable
+          SELECT id, price, vat_rate, vat_applicable, category_id
           FROM products
           WHERE company_id = $1
             AND id = ANY($2::uuid[])
@@ -734,30 +781,96 @@ export default function createSalesRouter({
         for (const row of priceRows.rows) {
           productPriceMap[row.id] = row;
         }
+        const customerPricing = req.body.customerId
+          ? await client.query(
+            `SELECT c.price_list_id, cg.price_list_id AS group_price_list_id
+               FROM customers c LEFT JOIN customer_groups cg ON cg.id=c.customer_group_id
+              WHERE c.id=$1 AND c.company_id=$2`,
+            [req.body.customerId, req.user.companyId]
+          )
+          : { rows: [] };
+        const lineFeatures = await loadSaleLineFeatures(client, req.user.companyId, items);
 
         const basketForTotals = [];
         const saleDiscountAudit = [];
+        const salePriceOverride = [];
         for (const item of items) {
           const p = productPriceMap[item.productId];
-          const price = Number(p?.price) || 0;
+          const cataloguePrice = Number(p?.price) || 0;
           const qty = Number(item.quantity) || 1;
+          const features = lineFeatures.get(String(item.productId)) || { modifiers: [] };
+          const modifierTotal = calculateModifierTotal(features.modifiers);
           const vatRate = p ? Number(p.vat_rate || 0) / 100 : vatRateFromBody;
           const vatApplicable = p ? p.vat_applicable !== false : true;
 
+          /*
+            * T10-PRICE: manual price override. The catalogue price is the
+            * default and is used UNLESS the operator holds sale.price_change
+            * AND supplies a positive `priceOverride` on the line. Without the
+            * permission the client's proposed price is IGNORED — the catalogue
+            * price wins, so a user cannot raise or lower the selling price via
+            * a crafted request. The override never mutates the product master
+            * (only this sale's line is affected); original_unit_price stores
+            * the catalogue value for audit/receipts. Decision is delegated to
+            * the shared resolveEffectivePrice helper (src/utils/saleTotals.js)
+            * so it is unit-tested independently.
+            */
+          const customer = customerPricing.rows[0];
+          const pricingRows = await client.query(
+           `SELECT
+              (SELECT plp.price FROM price_list_prices plp WHERE plp.product_id=$1 AND plp.price_list_id=$2) AS customer_price,
+              (SELECT plp.price FROM price_list_prices plp WHERE plp.product_id=$1 AND plp.price_list_id=$3) AS group_price,
+              COALESCE((SELECT json_agg(spp) FROM scheduled_product_prices spp
+                WHERE spp.product_id=$1 AND spp.company_id=$4 AND spp.active=true), '[]') AS scheduled_prices,
+              COALESCE((SELECT json_agg(pr) FROM promotions pr
+                WHERE pr.company_id=$4 AND pr.active=true
+                  AND (pr.product_id=$1 OR pr.category_id=$5)), '[]') AS promotions`,
+           [item.productId, customer?.price_list_id || null, customer?.group_price_list_id || null,
+             req.user.companyId, p?.category_id || null]
+          );
+          const pricing = pricingRows.rows[0] || {};
+          const resolved = resolvePrice({
+            basePrice: cataloguePrice + modifierTotal / qty,
+            customerPrice: pricing.customer_price == null ? null : Number(pricing.customer_price),
+            groupPrice: pricing.group_price == null ? null : Number(pricing.group_price),
+            scheduledPrices: pricing.scheduled_prices || [],
+            promotions: pricing.promotions || [],
+            quantity: qty,
+            at: new Date(),
+          });
+          const priceResolution = resolveEffectivePrice({
+            cataloguePrice: resolved.unitPrice,
+            priceOverride: item.priceOverride ?? item.unitPrice,
+            canOverridePrice,
+          });
+          const price = priceResolution.price;
+          if (priceResolution.overridden && req.user.id) {
+            salePriceOverride.push({
+              itemIndex: items.indexOf(item),
+              productId: item.productId,
+              originalUnitPrice: priceResolution.originalUnitPrice,
+              overriddenUnitPrice: price,
+              userId: req.user.id,
+              reason: typeof item.priceOverrideReason === "string" ? item.priceOverrideReason.trim().slice(0, 255) || null : null,
+            });
+          }
+
           const ldt = item.discountType;
           const ldv = Number(item.discountValue ?? 0) || 0;
-          const ld = (ldt === "percent" || ldt === "fixed") && ldv > 0
+          const quantityDiscount = roundCurrency(Math.max(0, (price * qty) - resolved.total));
+          const requestedDiscount = (ldt === "percent" || ldt === "fixed") && ldv > 0
             ? ldt === "percent"
               ? roundCurrency(Math.min(price * qty, (price * qty) * (ldv / 100)))
               : roundCurrency(Math.min(price * qty, ldv))
             : 0;
+          const ld = roundCurrency(Math.min(price * qty, quantityDiscount + requestedDiscount));
 
-          if (ld > 0 && item.discountedBy) {
+          if (requestedDiscount > 0 && item.discountedBy) {
             saleDiscountAudit.push({
               itemIndex: items.indexOf(item),
               discountType: ldt,
               discountValue: ldv,
-              amount: ld,
+              amount: requestedDiscount,
               userId: item.discountedBy,
             });
           }
@@ -766,10 +879,20 @@ export default function createSalesRouter({
             price,
             quantity: qty,
             vatApplicable,
-            discountType: ldt || null,
-            discountValue: ldv || 0,
+            discountType: ld > 0 ? "fixed" : null,
+            discountValue: ld,
           });
         }
+
+        /* Index effective prices + original catalogue prices by item index for
+         * the sale_items insert below (authoritative, permission-enforced). */
+        const effectiveLinePrice = basketForTotals.map((b) => b.price);
+        const catalogueLinePrice = items.map((item, idx) => {
+          const p = productPriceMap[item.productId];
+          const features = lineFeatures.get(String(item.productId)) || { modifiers: [] };
+          return (Number(p?.price) || 0) +
+            calculateModifierTotal(features.modifiers) / Math.max(Number(item.quantity) || 1, 1);
+        });
 
         const engine = computeBasketTotals(basketForTotals, {
           vatEnabled: vatEnabled !== false,
@@ -817,6 +940,7 @@ export default function createSalesRouter({
             offline_created,
             sync_status,
             client_request_id,
+            client_request_fingerprint,
             completed_at
           )
           VALUES (
@@ -825,6 +949,7 @@ export default function createSalesRouter({
             false,
             'synced',
             $11,
+            $13,
             NOW()
           )
           RETURNING
@@ -845,6 +970,7 @@ export default function createSalesRouter({
             Number(discount) || 0,
             Number(total) || 0,
             clientRequestId,
+            clientRequestFingerprint,
             saleStatus,
           ]
         );
@@ -856,8 +982,8 @@ export default function createSalesRouter({
          * insert as ordinary lines, but flagged item_type='MISC' and never
          * stock-decremented (no catalogue SKU exists to decrement).
           */
-         const saleItemIds = [];
-         for (const item of items) {
+          const saleItemIds = [];
+          for (const [itemIndex, item] of items.entries()) {
           const product = await client.query(
             `
           SELECT
@@ -875,20 +1001,62 @@ export default function createSalesRouter({
           );
 
           const p = product.rows[0];
-
-          if (p.track_stock) {
+          if (!p) {
+            throw Object.assign(new Error(`Product ${item.productId} was not found`), { statusCode: 400 });
+          }
+          const batch = await client.query(
+            `SELECT batch_tracking
+             FROM products
+             WHERE id = $1 AND company_id = $2 AND active = true`,
+            [item.productId, req.user.companyId]
+          );
+          p.batch_tracking = batch.rows[0]?.batch_tracking === true;
+          const features = lineFeatures.get(String(item.productId)) || { modifiers: [], bundleComponents: [] };
+          const stockLines = features.bundleComponents.length
+            ? expandBundleComponents(item.quantity, features.bundleComponents)
+            : p.track_stock
+              ? [{ productId: item.productId, quantity: Number(item.quantity) || 1 }]
+              : [];
+          for (const modifier of features.modifiers) {
+            if (modifier.trackStock && modifier.inventoryProductId) {
+              stockLines.push({
+                productId: modifier.inventoryProductId,
+                quantity: modifier.quantity * (Number(item.quantity) || 1),
+              });
+            }
+          }
+          for (const stockLine of stockLines) {
             const movement = await createInventoryMovement(client, {
               companyId: req.user.companyId,
-              productId: item.productId,
+              productId: stockLine.productId,
               storeId: req.user.storeId,
               movementType: "SALE",
-              quantityChange: -(Number(item.quantity) || 1),
+              quantityChange: -stockLine.quantity,
               referenceType: "SALE",
               referenceId: saleId,
               createdBy: req.user.id,
             });
 
-            p.stock_quantity = movement.balance;
+            if (stockLine.productId === item.productId) p.stock_quantity = movement.balance;
+
+            /*
+             * Batch / expiry tracking: keep this store's batch rows in step
+             * with the sale. Only products flagged batch_tracking allocate
+             * (no-op otherwise — zero extra queries); allocation is FEFO
+             * (First Expired, First Out). The authoritative stock deduction
+             * is the movement above; this only moves the batch bookkeeping
+             * so the ledger and the batches can never disagree. Same
+             * transaction — sale failure rolls both back together.
+             */
+            if (p.batch_tracking && stockLine.productId === item.productId) {
+              await allocateBatchConsumption(client, {
+                companyId: req.user.companyId,
+                storeId: req.user.storeId,
+                productId: item.productId,
+                quantity: stockLine.quantity,
+                mode: "fefo",
+              });
+            }
           }
 
           const itemInsert = await client.query(
@@ -908,29 +1076,44 @@ export default function createSalesRouter({
             original_unit_price,
             original_tax,
             original_total,
-            discounted_by
+            discounted_by,
+            modifier_data,
+            bundle_components
           )
-          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'PRODUCT',$9,$10,$11,$12,$13,$14)
+          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'PRODUCT',$9,$10,$11,$12,$13,$14,$15::jsonb,$16::jsonb)
           RETURNING id
           `,
-            [
-              saleId,
-              item.productId,
-              p.name,
-              Number(item.quantity) || 1,
-              Number(item.unitPrice) || Number(p.price) || 0,
-              Number(item.discount) || 0,
-              Number(item.tax) || 0,
-              Number(item.total) || 0,
-              item.discountType || null,
-              Number(item.discountValue) || 0,
-              Number(p.price) || 0,
-              Number(p.vat_rate || 0) / 100,
-              roundCurrency((Number(item.unitPrice) || Number(p.price) || 0) * (Number(item.quantity) || 1)),
-              item.discountedBy || null,
-            ]
-          );
-          saleItemIds.push(itemInsert.rows[0].id);
+             [
+               saleId,
+               item.productId,
+               p.name,
+               Number(item.quantity) || 1,
+               effectiveLinePrice[itemIndex],
+               Number(item.discount) || 0,
+               Number(item.tax) || 0,
+               Number(item.total) || 0,
+               item.discountType || null,
+               Number(item.discountValue) || 0,
+               catalogueLinePrice[itemIndex],
+               Number(p.vat_rate || 0) / 100,
+               roundCurrency(effectiveLinePrice[itemIndex] * (Number(item.quantity) || 1)),
+               item.discountedBy || null,
+               JSON.stringify(features.modifiers),
+               JSON.stringify(features.bundleComponents),
+             ]
+           );
+          const saleItemId = itemInsert?.rows?.[0]?.id || null;
+          saleItemIds.push(saleItemId);
+          for (const modifier of features.modifiers) {
+            if (!saleItemId) continue;
+            await client.query(
+              `INSERT INTO sale_item_modifiers
+                (sale_item_id, modifier_option_id, quantity, unit_price, total)
+               VALUES ($1,$2,$3,$4,$5)`,
+              [saleItemId, modifier.optionId, modifier.quantity, modifier.price,
+                roundCurrency(modifier.quantity * modifier.price)]
+            );
+          }
         }
 
         /*
@@ -980,17 +1163,35 @@ export default function createSalesRouter({
           * Per-line entries reference the sale_items row; order-level entries
           * have item_id NULL. Persisted atomically with the sale.
           */
-         for (const entry of saleDiscountAudit) {
-           const itemId = entry.itemIndex != null ? saleItemIds[entry.itemIndex] : null;
-           await client.query(
-             `
-             INSERT INTO sale_discounts
-               (sale_id, item_id, user_id, type, value, amount)
-             VALUES ($1, $2, $3, $4, $5, $6)
-             `,
-             [saleId, itemId || null, entry.userId, entry.discountType, entry.discountValue, entry.amount]
-           );
-         }
+          for (const entry of saleDiscountAudit) {
+            const itemId = entry.itemIndex != null ? saleItemIds[entry.itemIndex] : null;
+            await client.query(
+              `
+              INSERT INTO sale_discounts
+                (sale_id, item_id, user_id, type, value, amount)
+              VALUES ($1, $2, $3, $4, $5, $6)
+              `,
+              [saleId, itemId || null, entry.userId, entry.discountType, entry.discountValue, entry.amount]
+            );
+          }
+
+          /*
+           * T10-PRICE: audit trail for manual price overrides (sale.price_change).
+           * Persisted atomically with the sale; links the sale, sale_item and
+           * product with the original and overridden unit prices and the actor.
+           */
+          for (const entry of salePriceOverride) {
+            const itemId = entry.itemIndex != null ? saleItemIds[entry.itemIndex] : null;
+            await client.query(
+              `
+              INSERT INTO sale_price_overrides
+                (sale_id, item_id, product_id, user_id, original_unit_price, overridden_unit_price, reason)
+              VALUES ($1, $2, $3, $4, $5, $6, $7)
+              `,
+              [saleId, itemId, entry.productId, entry.userId, entry.originalUnitPrice, entry.overriddenUnitPrice, entry.reason]
+            );
+          }
+
 
         /*
           * Payment records — one row per tender.

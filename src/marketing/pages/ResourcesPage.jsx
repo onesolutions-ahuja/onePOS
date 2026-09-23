@@ -6,6 +6,13 @@ import { PageHero, SectionHead, Btn, CTASection } from "../components/Ui";
 
 const GUIDES = [
   {
+    icon: LifeBuoy,
+    title: "Help & Support centre",
+    blurb: "Practical tutorials, troubleshooting, staff training and screenshot-ready product guides.",
+    to: "/help",
+    cta: "Open the Help Centre",
+  },
+  {
     icon: MessageCircleQuestion,
     title: "Frequently asked questions",
     blurb: "Till setup, inventory, purchasing, online orders, WhatsApp, hardware and accounts.",

@@ -1,7 +1,11 @@
 import express from "express";
+import { exportProductsCsv, validateCsvImport, previewCsvImport, parseCsv, executeCsvImport } from "../services/productImportExport.js";
+import { resolveBatchEntry, normaliseBatchPolicy } from "../services/batchPolicy.js";
+import { upsertBatchRow } from "../services/inventory.js";
 
-export default function createProductsRouter({ authenticate, authorize, db, pool, createInventoryMovement, writeAudit }) {
+export default function createProductsRouter({ authenticate, authorize, db: domainDb, pool, createInventoryMovement, writeAudit, canAccessStore, savePlatformRecord = null }) {
   const router = express.Router();
+  const db = domainDb;
 
   /*
    * GET /api/categories
@@ -341,11 +345,15 @@ export default function createProductsRouter({ authenticate, authorize, db, pool
           p.stock_quantity,
           p.low_stock_level,
           p.track_stock,
+          p.batch_tracking,
           p.available_on_uber,
           p.available_on_deliveroo,
           p.uber_item_id,
           p.deliveroo_item_id,
           p.category_id,
+          p.parent_product_id,
+          p.product_kind,
+          p.variant_attributes,
           p.active,
           c.name AS category_name,
           p.created_at,
@@ -381,6 +389,217 @@ export default function createProductsRouter({ authenticate, authorize, db, pool
   });
 
   /*
+   * GET /api/products/export
+   *
+   * Exports products as CSV. Supports an optional ?storeId= filter
+   * to export only products associated with a specific store.
+   * Store-scoped users can only export their own store; admins can
+   * export all stores within the company.
+   */
+  router.get("/products/export", authenticate, authorize("product.view"), async (req, res) => {
+    try {
+      const { storeId } = req.query;
+
+      if (storeId) {
+        const allowed =
+          req.user.storeId === storeId ||
+          (await canAccessStore(req.user, storeId));
+        if (!allowed) {
+          return res.status(403).json({
+            success: false,
+            message: "You do not have access to this store",
+          });
+        }
+      }
+
+      if (!pool) {
+        return res.status(500).json({
+          success: false,
+          message: "DATABASE_URL is not configured",
+        });
+      }
+
+      const client = await pool.connect();
+      let transactionStarted = false;
+
+      try {
+        await client.query("BEGIN");
+        transactionStarted = true;
+
+        const rows = await exportProductsCsv(client, req.user.companyId, storeId || null);
+
+        const headers = [
+          "product_id", "sku", "ean", "name", "description", "category",
+          "vat_rate", "cost_price", "price", "active",
+          "store_id", "store_code", "store_enabled", "store_price",
+          "reorder_level", "minimum_stock",
+        ];
+
+        const csvRows = [headers.join(",")];
+        for (const row of rows) {
+          const values = headers.map((h) => {
+            const v = row[h] ?? "";
+            const str = String(v ?? "");
+            if (str.includes(",") || str.includes('"') || str.includes("\n")) {
+              return '"' + str.replace(/"/g, '""') + '"';
+            }
+            return str;
+          });
+          csvRows.push(values.join(","));
+        }
+
+        await client.query("COMMIT");
+
+        res.setHeader("Content-Type", "text/csv");
+        res.setHeader("Content-Disposition", `attachment; filename="products-export-${new Date().toISOString().slice(0, 10)}.csv"`);
+        res.send(csvRows.join("\n"));
+      } catch (error) {
+        if (transactionStarted) {
+          await client.query("ROLLBACK");
+        }
+        console.error("Product export error:", error);
+        res.status(500).json({
+          success: false,
+          message: "Unable to export products",
+        });
+      } finally {
+        if (typeof client.release === "function") {
+          client.release();
+        }
+      }
+    } catch (error) {
+      console.error("Product export error:", error);
+      res.status(500).json({
+        success: false,
+        message: "Unable to export products",
+      });
+    }
+  });
+
+  /*
+   * POST /api/products/import/validate
+   *
+   * Validates a CSV payload without writing to the database.
+   * Returns row-by-row validation errors and a preview of changes.
+   */
+  router.post("/products/import/validate", authenticate, authorize("product.create"), async (req, res) => {
+    try {
+      const { csv } = req.body;
+
+      if (!csv || typeof csv !== "string") {
+        return res.status(400).json({
+          success: false,
+          message: "CSV content is required",
+        });
+      }
+
+      const rows = parseCsv(csv);
+
+      if (!rows.length) {
+        return res.status(400).json({
+          success: false,
+          message: "CSV contains no data rows",
+        });
+      }
+
+      const [validationErrors, preview] = await Promise.all([
+        validateCsvImport(db, req.user.companyId, rows),
+        previewCsvImport(db, pool, req.user.companyId, rows),
+      ]);
+
+      res.json({
+        success: true,
+        data: {
+          rowCount: rows.length,
+          validationErrors,
+          preview: {
+            ...preview,
+            summary: {
+              new: preview.summary.new,
+              update: preview.summary.update,
+              storeMappings: preview.summary.storeMappings,
+            },
+          },
+        },
+      });
+    } catch (error) {
+      console.error("Product import validation error:", error);
+      res.status(500).json({
+        success: false,
+        message: "Unable to validate import",
+        error: error.message,
+      });
+    }
+  });
+
+  /*
+   * POST /api/products/import
+   *
+   * Imports products from validated CSV in a single transaction.
+   * Requires the same permissions as import validation.
+   */
+  router.post("/products/import", authenticate, authorize("product.create"), async (req, res) => {
+    try {
+      const { csv } = req.body;
+
+      if (!csv || typeof csv !== "string") {
+        return res.status(400).json({
+          success: false,
+          message: "CSV content is required",
+        });
+      }
+
+      if (!pool) {
+        return res.status(500).json({
+          success: false,
+          message: "DATABASE_URL is not configured",
+        });
+      }
+
+      const rows = parseCsv(csv);
+
+      if (!rows.length) {
+        return res.status(400).json({
+          success: false,
+          message: "CSV contains no data rows",
+        });
+      }
+
+      const result = await executeCsvImport(db, pool, req.user.companyId, req.user.id, rows, { savePlatformRecord, req });
+
+      if (typeof writeAudit === "function") {
+        writeAudit(
+          req.user.companyId,
+          req.user.id,
+          "product.imported",
+          "product",
+          null,
+          {
+            created: result.created.length,
+            updated: result.updated.length,
+            storeMappings: result.storeMappings.length,
+            errors: result.errors.length,
+          }
+        );
+      }
+
+      res.json({
+        success: true,
+        message: "Product import completed",
+        data: result,
+      });
+    } catch (error) {
+      console.error("Product import error:", error);
+      if (error.code === "PLATFORM_RECORD_INVALID") return res.status(error.status).json({ success: false, code: error.code, message: error.message });
+      res.status(500).json({
+        success: false,
+        message: "Unable to import products",
+        error: error.message,
+      });
+    }
+  });
+
+  /*
    * GET /api/products/:id
    */
   router.get("/products/:id", authenticate, authorize("product.view"), async (req, res) => {
@@ -401,6 +620,9 @@ export default function createProductsRouter({ authenticate, authorize, db, pool
           p.low_stock_level,
           p.track_stock,
           p.category_id,
+          p.parent_product_id,
+          p.product_kind,
+          p.variant_attributes,
           p.active,
           c.name AS category_name
         FROM products p
@@ -460,6 +682,9 @@ export default function createProductsRouter({ authenticate, authorize, db, pool
         ageRestricted = false,
         stockQuantity = undefined,
         openingStock = undefined,
+        openingBatchNumber = null,
+        openingManufacturingDate = null,
+        openingExpiryDate = null,
         lowStockLevel = 0,
         trackStock = true,
         categoryId = null,
@@ -597,6 +822,12 @@ export default function createProductsRouter({ authenticate, authorize, db, pool
           typeof imageUrl === "string" && imageUrl.trim() ? imageUrl.trim().slice(0, 500_000) : null,
         ]
       );
+      await client.query("UPDATE products SET batch_tracking=$1 WHERE id=$2 AND company_id=$3", [
+        Boolean(req.body.batchTracking),
+        result.rows[0].id,
+        req.user.companyId,
+      ]);
+      result.rows[0].batch_tracking = Boolean(req.body.batchTracking);
 
       /*
        * Opening stock (store-specific, create-only).
@@ -614,6 +845,16 @@ export default function createProductsRouter({ authenticate, authorize, db, pool
       const openingStockQty = Number(stockQuantity ?? openingStock) || 0;
 
       if (trackStock && openingStockQty >= 0) {
+        const policyResult = await client.query(
+          "SELECT batch_inventory_mode, batch_default_mfg_rule, batch_default_expiry_rule, batch_default_expiry_days FROM company_settings WHERE company_id=$1",
+          [req.user.companyId]
+        );
+        const batch = resolveBatchEntry(normaliseBatchPolicy(policyResult.rows[0]), {
+          productBatchTracking: Boolean(req.body.batchTracking),
+          batchNumber: openingBatchNumber,
+          manufacturingDate: openingManufacturingDate,
+          expiryDate: openingExpiryDate,
+        });
         const movement = await createInventoryMovement(client, {
           companyId: req.user.companyId,
           productId: result.rows[0].id,
@@ -623,10 +864,22 @@ export default function createProductsRouter({ authenticate, authorize, db, pool
           reason: "Opening stock",
           createdBy: req.user.id,
         });
+        if (openingStockQty > 0 && batch.batchNumber) {
+          await upsertBatchRow(client, {
+            companyId: req.user.companyId,
+            storeId: req.user.storeId,
+            productId: result.rows[0].id,
+            batchNumber: batch.batchNumber,
+            manufacturingDate: batch.manufacturingDate,
+            expiryDate: batch.expiryDate,
+            quantity: openingStockQty,
+          });
+        }
 
         result.rows[0].stock_quantity = movement.balance;
       }
 
+      if (savePlatformRecord) result.rows[0].platform = await savePlatformRecord({ db: client.query.bind(client), key: "product", req, record: result.rows[0] });
       await client.query("COMMIT");
 
       // Audit log for product creation (best-effort; never fails the create)
@@ -662,6 +915,7 @@ export default function createProductsRouter({ authenticate, authorize, db, pool
 
       console.error("Create product error:", error);
 
+      if (error.code === "PLATFORM_RECORD_INVALID") return res.status(error.status).json({ success: false, code: error.code, message: error.message });
       res.status(500).json({
         success: false,
         message: "Unable to create product",
@@ -676,7 +930,14 @@ export default function createProductsRouter({ authenticate, authorize, db, pool
    * PUT /api/products/:id
    */
   router.put("/products/:id", authenticate, authorize("product.edit"), async (req, res) => {
+    let platformClient = null;
+    let committed = false;
+    const db = (...args) => platformClient ? platformClient.query(...args) : domainDb(...args);
     try {
+      if (savePlatformRecord) {
+        platformClient = await pool.connect();
+        await platformClient.query("BEGIN");
+      }
       const {
         name,
         sku = null,
@@ -689,6 +950,7 @@ export default function createProductsRouter({ authenticate, authorize, db, pool
         ageRestricted, // undefined = keep current (edits never flip age restriction silently)
         lowStockLevel = 0,
         trackStock = true,
+        batchTracking = false,
         categoryId = null,
         availableOnUber = false,
         availableOnDeliveroo = false,
@@ -725,9 +987,10 @@ export default function createProductsRouter({ authenticate, authorize, db, pool
       const currentProduct = await db(
         `
         SELECT
-          name, sku, barcode, category_id, price, vat_rate, age_restricted, active
+          ${savePlatformRecord ? "*" : "name, sku, barcode, category_id, price, vat_rate, age_restricted, active"}
         FROM products
         WHERE id = $1 AND company_id = $2
+        ${savePlatformRecord ? "FOR UPDATE" : ""}
         `,
         [req.params.id, req.user.companyId]
       );
@@ -881,8 +1144,14 @@ export default function createProductsRouter({ authenticate, authorize, db, pool
         ]
       );
 
-      // Audit log for product changes
       const updatedProduct = result.rows[0];
+      await db(
+        "UPDATE products SET batch_tracking = $1 WHERE id = $2 AND company_id = $3",
+        [Boolean(batchTracking), req.params.id, req.user.companyId]
+      );
+      if (updatedProduct) updatedProduct.batch_tracking = Boolean(batchTracking);
+
+      // Audit log for product changes
       const changes = [];
 
       if (!updatedProduct) {
@@ -919,6 +1188,12 @@ export default function createProductsRouter({ authenticate, authorize, db, pool
         changes.push({ field: "active", previous: previousValues.active, new: updatedProduct.active });
       }
 
+      if (savePlatformRecord) {
+        updatedProduct.platform = await savePlatformRecord({ db, key: "product", req, record: updatedProduct, previous: previousValues });
+        await platformClient.query("COMMIT");
+        committed = true;
+      }
+
       if (changes.length > 0 && typeof writeAudit === "function") {
         writeAudit(
           req.user.companyId,
@@ -941,11 +1216,16 @@ export default function createProductsRouter({ authenticate, authorize, db, pool
     } catch (error) {
       console.error("Update product error:", error);
 
+      if (error.code === "PLATFORM_RECORD_INVALID") return res.status(error.status).json({ success: false, code: error.code, message: error.message });
       res.status(500).json({
         success: false,
         message: "Unable to update product",
         error: error.message,
       });
+    } finally {
+      if (platformClient) {
+        try { if (!committed) await platformClient.query("ROLLBACK"); } finally { platformClient.release(); }
+      }
     }
   });
 

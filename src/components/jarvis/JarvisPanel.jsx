@@ -31,7 +31,7 @@ const SUGGESTIONS = Object.freeze([
   "How do offline sales sync?",
 ]);
 
-export default function JarvisPanel({ onClose, onActivityChange }) {
+export default function JarvisPanel({ onClose, onActivityChange, embedded = false }) {
   const [messages, setMessages] = useState([]);
   const [question, setQuestion] = useState("");
   const [loading, setLoading] = useState(false);
@@ -46,6 +46,18 @@ export default function JarvisPanel({ onClose, onActivityChange }) {
   const inputRef = useRef(null);
   const listRef = useRef(null);
   const recognizerRef = useRef(null);
+
+  useEffect(() => {
+    inputRef.current?.focus();
+  }, []);
+
+  useEffect(() => {
+    const onKeyDown = (event) => {
+      if (event.key === "Escape") onClose();
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [onClose]);
 
   /* One recogniser per panel; torn down with the panel so the microphone can
      never outlive the UI that opened it. */
@@ -137,14 +149,14 @@ export default function JarvisPanel({ onClose, onActivityChange }) {
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-end justify-end p-3 sm:p-5"
+      className={`jarvis-panel-overlay fixed inset-0 flex items-end justify-end p-3 sm:p-5${embedded ? " jarvis-panel-overlay--dock" : ""}`}
       data-testid="jarvis-panel-overlay"
     >
       <button
         type="button"
         aria-label="Close JARVES"
         onClick={onClose}
-        className="absolute inset-0 bg-black/40"
+        className="jarvis-panel-backdrop absolute inset-0 bg-black/40"
         data-testid="jarvis-panel-backdrop"
       />
       <section
@@ -309,4 +321,3 @@ export default function JarvisPanel({ onClose, onActivityChange }) {
     </div>
   );
 }
-

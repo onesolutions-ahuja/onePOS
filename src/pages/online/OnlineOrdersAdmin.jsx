@@ -368,7 +368,7 @@ export default function OnlineOrdersAdmin() {
     <div>
       <div className="flex items-center justify-between mb-5">
         <div>
-          <h1 className="text-2xl font-bold">Online Orders</h1>
+          <h1 className="onepos-page-title">Online Orders</h1>
           <p className="text-sm text-slate-500 mt-1">Uber Eats &amp; Deliveroo foundation - platform calls are stubbed until credentials are added.</p>
         </div>
         <button onClick={loadAll} className="h-10 px-4 bg-white border border-slate-200 rounded-lg text-sm flex items-center gap-2 hover:bg-slate-50">
@@ -399,9 +399,9 @@ export default function OnlineOrdersAdmin() {
       {viewMode === "processing" ? (
         pendingOrders.length ? <div className="grid gap-3 md:grid-cols-2 2xl:grid-cols-3">
           {pendingOrders.map((order) => <OnlineOrderCard key={order.id} order={order} detail={orderDetails[order.id]} busyAction={busyActions[order.id] ? { orderId: order.id, action: busyActions[order.id] } : null} allowedActions={STATUS_ACTIONS[order.status] || []} onAction={runAction} onOpenDetail={openDetail} onPrint={handlePrint} />)}
-        </div> : <div className="bg-white border rounded-lg p-6 text-center text-slate-500">{loading ? "Loading orders..." : "No pending orders"}</div>
+        </div> : <div className="onepos-card onepos-card-body text-center text-slate-500">{loading ? "Loading orders..." : "No pending orders"}</div>
       ) : (
-      <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
+      <div className="onepos-card overflow-hidden">
         <div className="p-5 border-b border-slate-100 flex items-center justify-between">
           <h2 className="font-bold">Orders</h2>
           <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="h-9 px-3 border border-slate-200 rounded-lg bg-white text-sm">

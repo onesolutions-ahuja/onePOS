@@ -56,7 +56,7 @@ export default function StockMovementLedger({ companyId = "current", storeId = "
     ...Object.entries(MOVEMENT_TYPE_LABELS).map(([value, label]) => ({ value, label })),
   ];
   const reasonOptions = ["", "Wastage", "Breakage", "Other"];
-  if (error) return <div className="p-6 text-sm text-slate-500 bg-white border rounded-xl">Unable to load stock movements: {error}</div>;
+  if (error) return <div className="onepos-alert onepos-alert-error">Unable to load stock movements: {error}</div>;
 
   return (
     <div>
@@ -68,43 +68,44 @@ export default function StockMovementLedger({ companyId = "current", storeId = "
         onFromChange={setFrom}
         onToChange={setTo}
       />
-      <div className="flex flex-wrap items-center gap-3 mb-3">
-        <label className="text-sm text-slate-600">Movement type:
+      <div className="onepos-card overflow-hidden" style={{ marginBottom: "var(--onepos-section-gap, 20px)" }}>
+        <div className="onepos-toolbar">
+        <label className="onepos-label">Movement type:
           <select
             value={selectedType}
             onChange={(e) => setSelectedType(e.target.value)}
-            className="ml-2 rounded border border-slate-300 bg-white px-2 py-1 text-sm"
+            className="onepos-input w-auto ml-2"
           >
             {typeOptions.map((option) => (
               <option key={option.value} value={option.value}>{option.label}</option>
             ))}
           </select>
         </label>
-        <label className="text-sm text-slate-600">Reason:
+        <label className="onepos-label">Reason:
           <select
             value={selectedReason}
             onChange={(e) => setSelectedReason(e.target.value)}
-            className="ml-2 rounded border border-slate-300 bg-white px-2 py-1 text-sm"
+            className="onepos-input w-auto ml-2"
           >
             {reasonOptions.map((value) => (
               <option key={value} value={value}>{value === "" ? "All reasons" : value}</option>
             ))}
           </select>
         </label>
-        <label className="text-sm text-slate-600">Product:
+        <label className="onepos-label">Product:
           <input
             value={productFilter}
             onChange={(e) => setProductFilter(e.target.value)}
             placeholder="name, SKU or barcode"
-            className="ml-2 rounded border border-slate-300 bg-white px-2 py-1 text-sm"
+            className="onepos-input w-auto ml-2"
           />
         </label>
-        <label className="text-sm text-slate-600">Category:
+        <label className="onepos-label">Category:
           <input
             value={categoryFilter}
             onChange={(e) => setCategoryFilter(e.target.value)}
             placeholder="category"
-            className="ml-2 rounded border border-slate-300 bg-white px-2 py-1 text-sm"
+            className="onepos-input w-auto ml-2"
           />
         </label>
         {(payload.quantity || payload.value) ? (
@@ -112,6 +113,7 @@ export default function StockMovementLedger({ companyId = "current", storeId = "
             Total qty {payload.quantity} · value {payload.value}
           </span>
         ) : null}
+        </div>
       </div>
       <ReportTable
         title="Stock movement ledger"

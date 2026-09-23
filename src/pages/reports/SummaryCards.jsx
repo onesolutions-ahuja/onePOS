@@ -1,5 +1,10 @@
-import ReportTable from "./ReportTable.jsx";
-
+/**
+ * Report summary KPI row.
+ *
+ * Presentation only — the labels and values are unchanged. Cards now use the
+ * shared stat primitive, so padding/radius/shadow follow the preset and the
+ * surfaces follow appearance.
+ */
 export default function SummaryCards({ report }) {
   const cards = [
     ["Gross sales", report.grossSales],
@@ -11,11 +16,11 @@ export default function SummaryCards({ report }) {
   ];
 
   return (
-    <div className="grid grid-cols-6 gap-3 mb-5">
+    <div className="grid grid-cols-6 gap-3" style={{ marginBottom: "var(--onepos-section-gap, 20px)" }}>
       {cards.map(([label, value]) => (
-        <div key={label} className="bg-white border rounded-lg p-3">
-          <div className="text-xs text-slate-500">{label}</div>
-          <div className="font-bold mt-1">
+        <div key={label} className="onepos-stat">
+          <div className="onepos-stat-label">{label}</div>
+          <div className="onepos-stat-value">
             {typeof value === "number" && label === "Gross sales" ? `£${value.toFixed(2)}` : value}
           </div>
         </div>

@@ -6,6 +6,7 @@ import { buildPurchaseImportPreview } from "../../services/purchaseImportPreview
 import { mapPurchaseImport } from "../../services/purchaseImportMapper.js";
 import { normaliseProduct } from "../../utils/formatters.js";
 import PurchaseImportModal from "./PurchaseImportModal.jsx";
+import PlatformExtensionFields from "../../components/platform/PlatformExtensionFields.jsx";
 function PurchasesAdmin() {
   const [purchases, setPurchases] = useState([]);
   const [products, setProducts] = useState([]);
@@ -76,6 +77,22 @@ function PurchasesAdmin() {
     }
   };
 
+  const receivePurchase = async (purchase) => {
+    try {
+      setError("");
+      const data = await apiRequest(`/api/purchases/${purchase.id}/receive`, {
+        method: "POST",
+        body: JSON.stringify({}),
+      });
+      if (!data.success) throw new Error(data.message || "Unable to receive purchase");
+      await loadPurchases();
+      await viewPurchase(purchase);
+      setMessage("Remaining purchase stock received.");
+    } catch (err) {
+      setError(err.message || "Unable to receive purchase");
+    }
+  };
+
   return (
     <div>
       <div className="flex items-center justify-between mb-5">
@@ -130,7 +147,7 @@ function PurchasesAdmin() {
 
       {showForm && <PurchaseFormModal products={products} suppliers={suppliers} onClose={() => setShowForm(false)} onSave={createPurchase} />}
       {showImport && <PurchaseImportModal products={products} suppliers={suppliers} onClose={() => setShowImport(false)} />}
-      {selectedPurchase && <PurchaseDetailModal purchase={selectedPurchase} onClose={() => setSelectedPurchase(null)} />}
+      {selectedPurchase && <PurchaseDetailModal purchase={selectedPurchase} onClose={() => setSelectedPurchase(null)} onReceive={() => receivePurchase(selectedPurchase)} />}
     </div>
   );
 }
@@ -140,12 +157,14 @@ function PurchaseFormModal({ products, suppliers, onClose, onSave }) {
   const [referenceNumber, setReferenceNumber] = useState("");
   const [purchaseDate, setPurchaseDate] = useState(new Date().toISOString().slice(0, 10));
   const [notes, setNotes] = useState("");
-  const [lines, setLines] = useState([{ productId: "", quantity: 1, unitCost: 0 }]);
+  const [platform, setPlatform] = useState(null);
+  const [platformReady, setPlatformReady] = useState(false);
+  const [lines, setLines] = useState([{ productId: "", quantity: 1, unitCost: 0, batchNumber: "", manufacturingDate: "", expiryDate: "" }]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
   const updateLine = (index, field, value) => setLines((current) => current.map((line, lineIndex) => lineIndex === index ? { ...line, [field]: value } : line));
-  const addLine = () => setLines((current) => [...current, { productId: "", quantity: 1, unitCost: 0 }]);
+  const addLine = () => setLines((current) => [...current, { productId: "", quantity: 1, unitCost: 0, batchNumber: "", manufacturingDate: "", expiryDate: "" }]);
   const removeLine = (index) => setLines((current) => current.length === 1 ? current : current.filter((_, lineIndex) => lineIndex !== index));
   const total = lines.reduce((sum, line) => sum + (Number(line.quantity) || 0) * (Number(line.unitCost) || 0), 0);
 
@@ -158,7 +177,11 @@ function PurchaseFormModal({ products, suppliers, onClose, onSave }) {
     try {
       setSaving(true);
       setError("");
-      await onSave({ supplierId: supplierId || null, referenceNumber: referenceNumber.trim() || null, purchaseDate, notes: notes.trim() || null, items: lines.map((line) => ({ productId: line.productId, quantity: Number(line.quantity), unitCost: Number(line.unitCost) })) });
+      if (!platformReady) {
+        setError("Purchase configuration is still loading.");
+        return;
+      }
+      await onSave({ supplierId: supplierId || null, referenceNumber: referenceNumber.trim() || null, purchaseDate, notes: notes.trim() || null, platform, items: lines.map((line) => ({ productId: line.productId, quantity: Number(line.quantity), unitCost: Number(line.unitCost), batchNumber: line.batchNumber.trim() || null, manufacturingDate: line.manufacturingDate || null, expiryDate: line.expiryDate || null })) });
     } catch (err) {
       setError(err.message || "Unable to receive stock");
     } finally {
@@ -178,19 +201,20 @@ function PurchaseFormModal({ products, suppliers, onClose, onSave }) {
             <label className="text-sm text-slate-600"><span className="block mb-1 font-medium">Purchase date</span><input required type="date" value={purchaseDate} onChange={(event) => setPurchaseDate(event.target.value)} className="w-full h-10 px-3 border border-slate-200 rounded-lg" /></label>
             <label className="text-sm text-slate-600"><span className="block mb-1 font-medium">Notes</span><input value={notes} onChange={(event) => setNotes(event.target.value)} className="w-full h-10 px-3 border border-slate-200 rounded-lg" /></label>
           </div>
-          <div className="border border-slate-200 rounded-lg overflow-hidden"><table className="w-full"><thead><tr className="bg-slate-50">{["Product", "SKU", "Quantity", "Unit cost", "Line total", ""].map((heading) => <th key={heading} className="text-left px-3 py-2 text-xs font-semibold text-slate-500 uppercase">{heading}</th>)}</tr></thead><tbody>{lines.map((line, index) => { const selected = products.find((product) => product.id === line.productId); const lineTotal = (Number(line.quantity) || 0) * (Number(line.unitCost) || 0); return <tr key={index} className="border-t border-slate-100"><td className="px-3 py-2"><select required value={line.productId} onChange={(event) => updateLine(index, "productId", event.target.value)} className="w-full h-9 border border-slate-200 rounded px-2 text-sm"><option value="">Select product</option>{products.map((product) => <option key={product.id} value={product.id}>{product.name}</option>)}</select></td><td className="px-3 py-2 text-sm text-slate-500">{selected?.sku || "-"}</td><td className="px-3 py-2"><input required type="number" min="0.001" step="0.001" value={line.quantity} onChange={(event) => updateLine(index, "quantity", event.target.value)} className="w-24 h-9 border border-slate-200 rounded px-2 text-sm" /></td><td className="px-3 py-2"><input required type="number" min="0" step="0.01" value={line.unitCost} onChange={(event) => updateLine(index, "unitCost", event.target.value)} className="w-28 h-9 border border-slate-200 rounded px-2 text-sm" /></td><td className="px-3 py-2 text-sm font-semibold">£{lineTotal.toFixed(2)}</td><td className="px-3 py-2"><button type="button" onClick={() => removeLine(index)} disabled={lines.length === 1} className="p-2 text-red-500 hover:bg-red-50 rounded" title="Remove line"><X size={16} /></button></td></tr>; })}</tbody></table></div>
+          <div className="border border-slate-200 rounded-lg overflow-hidden"><table className="w-full"><thead><tr className="bg-slate-50">{["Product", "SKU", "Quantity", "Unit cost", "Batch", "MFG", "Expiry", "Line total", ""].map((heading) => <th key={heading} className="text-left px-3 py-2 text-xs font-semibold text-slate-500 uppercase">{heading}</th>)}</tr></thead><tbody>{lines.map((line, index) => { const selected = products.find((product) => product.id === line.productId); const lineTotal = (Number(line.quantity) || 0) * (Number(line.unitCost) || 0); return <tr key={index} className="border-t border-slate-100"><td className="px-3 py-2"><select required value={line.productId} onChange={(event) => updateLine(index, "productId", event.target.value)} className="w-full h-9 border border-slate-200 rounded px-2 text-sm"><option value="">Select product</option>{products.map((product) => <option key={product.id} value={product.id}>{product.name}</option>)}</select></td><td className="px-3 py-2 text-sm text-slate-500">{selected?.sku || "-"}</td><td className="px-3 py-2"><input required type="number" min="0.001" step="0.001" value={line.quantity} onChange={(event) => updateLine(index, "quantity", event.target.value)} className="w-24 h-9 border border-slate-200 rounded px-2 text-sm" /></td><td className="px-3 py-2"><input required type="number" min="0" step="0.01" value={line.unitCost} onChange={(event) => updateLine(index, "unitCost", event.target.value)} className="w-28 h-9 border border-slate-200 rounded px-2 text-sm" /></td><td className="px-3 py-2"><input value={line.batchNumber} onChange={(event) => updateLine(index, "batchNumber", event.target.value)} disabled={!selected?.batchTracking} placeholder={selected?.batchTracking ? "Batch no." : "-"} className="w-24 h-9 border border-slate-200 rounded px-2 text-sm disabled:bg-slate-50" /></td><td className="px-3 py-2"><input type="date" value={line.manufacturingDate} onChange={(event) => updateLine(index, "manufacturingDate", event.target.value)} disabled={!selected?.batchTracking} className="w-28 h-9 border border-slate-200 rounded px-2 text-sm disabled:bg-slate-50" /></td><td className="px-3 py-2"><input type="date" value={line.expiryDate} onChange={(event) => updateLine(index, "expiryDate", event.target.value)} disabled={!selected?.batchTracking} className="w-28 h-9 border border-slate-200 rounded px-2 text-sm disabled:bg-slate-50" /></td><td className="px-3 py-2 text-sm font-semibold">£{lineTotal.toFixed(2)}</td><td className="px-3 py-2"><button type="button" onClick={() => removeLine(index)} disabled={lines.length === 1} className="p-2 text-red-500 hover:bg-red-50 rounded" title="Remove line"><X size={16} /></button></td></tr>; })}</tbody></table></div>
           <button type="button" onClick={addLine} className="mt-3 px-3 py-2 border border-slate-200 rounded-lg text-sm hover:bg-slate-50"><Plus size={15} className="inline mr-1" />Add product line</button>
+          <PlatformExtensionFields objectKey="purchase" coreValues={{ reference_number: referenceNumber, purchase_date: purchaseDate, notes }} onChange={setPlatform} onReady={setPlatformReady} />
           <div className="flex justify-end text-lg font-bold mt-5">Total: £{total.toFixed(2)}</div>
-          <div className="flex justify-end gap-2 mt-5 pt-4 border-t border-slate-200"><button type="button" onClick={onClose} disabled={saving} className="h-10 px-4 border border-slate-200 rounded-lg text-sm">Cancel</button><button type="submit" disabled={saving} className="h-10 px-5 bg-blue-600 text-white rounded-lg text-sm font-medium">{saving ? "Receiving..." : "Receive Stock"}</button></div>
+          <div className="flex justify-end gap-2 mt-5 pt-4 border-t border-slate-200"><button type="button" onClick={onClose} disabled={saving} className="h-10 px-4 border border-slate-200 rounded-lg text-sm">Cancel</button><button type="submit" disabled={saving || !platformReady} className="h-10 px-5 bg-blue-600 text-white rounded-lg text-sm font-medium">{saving ? "Receiving..." : "Receive Stock"}</button></div>
         </form>
       </div>
     </div>
   );
 }
 
-function PurchaseDetailModal({ purchase, onClose }) {
+function PurchaseDetailModal({ purchase, onClose, onReceive }) {
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4"><div className="bg-white rounded-xl w-[900px] max-w-full max-h-[90vh] shadow-2xl flex flex-col"><div className="p-5 border-b border-slate-200 flex items-center justify-between"><div><h2 className="font-bold text-xl">Purchase {purchase.reference_number || purchase.id.slice(0, 8)}</h2><p className="text-sm text-slate-500 mt-1">{purchase.supplier_name || "No supplier"} · {purchase.purchase_date} · {purchase.status}</p></div><button onClick={onClose} className="p-2 hover:bg-slate-100 rounded" title="Close"><X size={20} /></button></div><div className="p-5 overflow-auto"><table className="w-full mb-6"><thead><tr className="bg-slate-50">{["Product", "SKU", "Quantity", "Unit cost", "Line total"].map((heading) => <th key={heading} className="text-left px-3 py-2 text-xs font-semibold text-slate-500 uppercase">{heading}</th>)}</tr></thead><tbody>{(purchase.items || []).map((item) => <tr key={item.id} className="border-b border-slate-100"><td className="px-3 py-3 text-sm font-medium">{item.product_name}</td><td className="px-3 py-3 text-sm text-slate-500">{item.sku || "-"}</td><td className="px-3 py-3 text-sm">{item.quantity}</td><td className="px-3 py-3 text-sm">£{Number(item.unit_cost).toFixed(2)}</td><td className="px-3 py-3 text-sm font-semibold">£{Number(item.line_total).toFixed(2)}</td></tr>)}</tbody></table><div className="text-right font-bold mb-6">Total: £{Number(purchase.total || 0).toFixed(2)}</div><h3 className="font-semibold mb-3">Generated inventory movements</h3>{(purchase.movements || []).length === 0 ? <div className="text-sm text-slate-500">No movements generated.</div> : <table className="w-full"><thead><tr className="bg-slate-50">{["Product", "Movement", "Quantity", "Balance", "Date"].map((heading) => <th key={heading} className="text-left px-3 py-2 text-xs font-semibold text-slate-500 uppercase">{heading}</th>)}</tr></thead><tbody>{purchase.movements.map((movement) => <tr key={movement.id} className="border-b border-slate-100"><td className="px-3 py-3 text-sm">{(purchase.items || []).find((item) => item.product_id === movement.product_id)?.product_name || movement.product_id}</td><td className="px-3 py-3 text-sm font-semibold">{movement.movement_type}</td><td className="px-3 py-3 text-sm text-emerald-600">+{movement.quantity_change}</td><td className="px-3 py-3 text-sm font-semibold">{movement.balance_after}</td><td className="px-3 py-3 text-xs text-slate-500">{new Date(movement.created_at).toLocaleString()}</td></tr>)}</tbody></table>}</div></div></div>
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4"><div className="bg-white rounded-xl w-[900px] max-w-full max-h-[90vh] shadow-2xl flex flex-col"><div className="p-5 border-b border-slate-200 flex items-center justify-between"><div><h2 className="font-bold text-xl">Purchase {purchase.reference_number || purchase.id.slice(0, 8)}</h2><p className="text-sm text-slate-500 mt-1">{purchase.supplier_name || "No supplier"} · {purchase.purchase_date} · {purchase.status}</p></div><div className="flex gap-2">{purchase.status !== "RECEIVED" && purchase.status !== "CANCELLED" && <button onClick={onReceive} className="px-3 py-2 bg-blue-600 text-white rounded-lg text-sm">Receive remaining</button>}<button onClick={onClose} className="p-2 hover:bg-slate-100 rounded" title="Close"><X size={20} /></button></div></div><div className="p-5 overflow-auto"><table className="w-full mb-6"><thead><tr className="bg-slate-50">{["Product", "SKU", "Ordered", "Received", "Remaining", "Unit cost", "Line total"].map((heading) => <th key={heading} className="text-left px-3 py-2 text-xs font-semibold text-slate-500 uppercase">{heading}</th>)}</tr></thead><tbody>{(purchase.items || []).map((item) => <tr key={item.id} className="border-b border-slate-100"><td className="px-3 py-3 text-sm font-medium">{item.product_name}</td><td className="px-3 py-3 text-sm text-slate-500">{item.sku || "-"}</td><td className="px-3 py-3 text-sm">{item.quantity}</td><td className="px-3 py-3 text-sm">{item.received_quantity || 0}</td><td className="px-3 py-3 text-sm">{item.remaining_quantity || 0}</td><td className="px-3 py-3 text-sm">£{Number(item.unit_cost).toFixed(2)}</td><td className="px-3 py-3 text-sm font-semibold">£{Number(item.line_total).toFixed(2)}</td></tr>)}</tbody></table><div className="text-right font-bold mb-6">Total: £{Number(purchase.total || 0).toFixed(2)}</div><h3 className="font-semibold mb-3">Generated inventory movements</h3>{(purchase.movements || []).length === 0 ? <div className="text-sm text-slate-500">No movements generated.</div> : <table className="w-full"><thead><tr className="bg-slate-50">{["Product", "Movement", "Quantity", "Balance", "Date"].map((heading) => <th key={heading} className="text-left px-3 py-2 text-xs font-semibold text-slate-500 uppercase">{heading}</th>)}</tr></thead><tbody>{purchase.movements.map((movement) => <tr key={movement.id} className="border-b border-slate-100"><td className="px-3 py-3 text-sm">{(purchase.items || []).find((item) => item.product_id === movement.product_id)?.product_name || movement.product_id}</td><td className="px-3 py-3 text-sm font-semibold">{movement.movement_type}</td><td className="px-3 py-3 text-sm text-emerald-600">+{movement.quantity_change}</td><td className="px-3 py-3 text-sm font-semibold">{movement.balance_after}</td><td className="px-3 py-3 text-xs text-slate-500">{new Date(movement.created_at).toLocaleString()}</td></tr>)}</tbody></table>}</div></div></div>
   );
 }
 

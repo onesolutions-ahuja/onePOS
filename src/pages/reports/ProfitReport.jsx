@@ -16,7 +16,7 @@ export default function ProfitReport({ from, to }) {
   const profit = data || null;
 
   if (loading) return <ReportTable title="Profit & Margin" headers={["Metric", "Value"]} rows={[]} />;
-  if (error) return <div className="p-6 text-sm text-slate-500 bg-white border rounded-xl">Unable to load profit report: {error}</div>;
+  if (error) return <div className="onepos-alert onepos-alert-error">Unable to load profit report: {error}</div>;
   if (!profit) return <ReportTable title="Profit & Margin" headers={["Metric", "Value"]} rows={[]} />;
 
   const money = (value) => `£${Number(value || 0).toFixed(2)}`;

@@ -310,11 +310,12 @@ function currentQueue(tenant) {
 
 export function getQueueSnapshot() {
   const tenant = getTenantFromToken();
-  if (!tenant) return { pending: 0, failed: 0, total: 0, syncing: false };
+  if (!tenant) return { pending: 0, failed: 0, needsReconciliation: 0, total: 0, syncing: false };
   const queue = currentQueue(tenant);
   return {
     pending: queue.filter((entry) => entry.status === "pending").length,
     failed: queue.filter((entry) => entry.status === "failed").length,
+    needsReconciliation: queue.filter((entry) => entry.status === "needs_reconciliation").length,
     total: queue.length,
     syncing,
   };
@@ -333,12 +334,14 @@ export function getQueueEntries() {
     clientRequestId: entry.clientRequestId,
     provisionalReceipt: entry.provisionalReceipt || null,
     createdAt: entry.createdAt || null,
-    status: entry.status === "failed" ? "failed" : "pending",
+    status: ["failed", "needs_reconciliation"].includes(entry.status) ? entry.status : "pending",
     attempts: Number(entry.attempts) || 0,
     lastError: entry.lastError || null,
     paymentUnverified: !!entry.paymentUnverified,
     total: Number(entry.sale?.total) || 0,
     itemCount: Array.isArray(entry.sale?.items) ? entry.sale.items.length : 0,
+    saleId: entry.saleId || null,
+    receiptNumber: entry.receiptNumber || null,
   }));
 }
 
@@ -622,7 +625,7 @@ export async function syncOfflineQueue() {
             item.id === entry.id
               ? {
                   ...item,
-                  status: "failed",
+                  status: body?.code === "IDEMPOTENCY_CONFLICT" ? "needs_reconciliation" : "failed",
                   lastError: `Sale rejected (HTTP ${response.status}). Check stock, permissions and till session before retrying.`,
                   attempts: item.attempts + 1,
                 }

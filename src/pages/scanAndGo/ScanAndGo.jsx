@@ -294,7 +294,7 @@ export default function ScanAndGo({ onExit }) {
           <button
             onClick={() => setCameraOpen(true)}
             disabled={scanning}
-            className="h-11 px-3 bg-slate-800 text-white rounded-lg text-sm font-medium hover:bg-slate-700 disabled:opacity-50 flex items-center gap-1.5"
+            className="onepos-btn onepos-btn-primary flex items-center gap-1.5"
             aria-label="Scan with Camera"
             data-testid="scan-go-camera-open"
           >

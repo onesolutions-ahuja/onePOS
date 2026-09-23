@@ -8,16 +8,45 @@ import {
   buildAdjustmentTransaction,
   generateStatement,
 } from "../services/customerCredit.js";
+import {
+  validateIssueValue,
+  validateTopUp,
+  normaliseGiftCardCode,
+  codeLookupClause,
+} from "../services/giftCards.js";
 
 export default function createCustomersRouter({
   authenticate,
   authorize,
-  db,
+  db: domainDb,
   pool,
+  savePlatformRecord = null,
   canViewCompanyCustomers,
   associateCustomerWithStore,
+  requireLoyaltyEntitlement = (_req, _res, next) => next(),
+  /*
+   * Administrative GATE for customer administration: Admin/Owner roles AND a
+   * Platform Superadmin. Deliberately separate from canViewCompanyCustomers,
+   * which also drives DATA SCOPE (company-wide vs store-restricted reads) —
+   * widening that helper would silently change query scope.
+   *
+   * Defaults to the company-admin check alone, so existing callers and tests
+   * keep exactly today's behaviour.
+   */
+  hasCompanyAdminAccess = async (req) => canViewCompanyCustomers(req.user),
 }) {
   const router = express.Router();
+  const db = domainDb;
+
+  const parseCsv = (csv) => {
+    const lines = String(csv || "").split(/\r?\n/).filter(Boolean);
+    if (!lines.length) return [];
+    const headers = lines.shift().split(",").map((header) => header.trim());
+    return lines.map((line) => {
+      const values = line.split(",");
+      return headers.reduce((row, header, index) => ({ ...row, [header]: (values[index] || "").trim() }), {});
+    });
+  };
 
   /*
    * GET /api/customers
@@ -133,6 +162,52 @@ export default function createCustomersRouter({
     }
   });
 
+  // These collection routes must precede the parameterised customer detail route.
+  router.get("/customers/export", authenticate, authorize("customer.view"), async (req, res) => {
+    const result = await db(
+      `SELECT c.name, c.phone, c.email, c.address, c.postcode, c.notes,
+        c.credit_enabled, c.credit_limit, COALESCE(clb.balance, 0) AS loyalty_balance
+       FROM customers c
+       LEFT JOIN customer_loyalty_balances clb ON clb.customer_id = c.id AND clb.company_id = c.company_id
+       WHERE c.company_id = $1 ORDER BY c.name`,
+      [req.user.companyId]
+    );
+    const headers = ["name", "phone", "email", "address", "postcode", "notes", "credit_enabled", "credit_limit", "loyalty_balance"];
+    res.type("text/csv").send([headers.join(","), ...result.rows.map((row) => headers.map((header) => String(row[header] ?? "").replaceAll(",", " ")).join(","))].join("\n"));
+  });
+
+  router.post("/customers/import/preview", authenticate, authorize("customer.edit"), async (req, res) => {
+    const sourceRows = parseCsv(req.body.csv);
+    const existing = await db(`SELECT id, name, phone, email, credit_enabled, credit_limit FROM customers WHERE company_id = $1 AND active = true`, [req.user.companyId]);
+    const rows = sourceRows.map((row, index) => {
+      const match = existing.rows.find((customer) => (row.email && customer.email === row.email) || (row.phone && customer.phone === row.phone));
+      const invalid = !row.name || (row.phone && !/^\+?\d{7,15}$/.test(row.phone)) || (row.email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(row.email));
+      return { row: index + 2, ...row, valid: !invalid, action: invalid ? "invalid" : match ? "update" : "create", matchCustomer: match ? { id: match.id, name: match.name } : null, errors: !row.name ? ["Name is required"] : invalid ? ["Invalid email or phone"] : [] };
+    });
+    res.json({ success: true, data: { total: rows.length, creates: rows.filter((row) => row.action === "create").length, updates: rows.filter((row) => row.action === "update").length, invalid: rows.filter((row) => row.action === "invalid").length, rows } });
+  });
+
+  router.post("/customers/import", authenticate, authorize("customer.edit"), async (req, res) => {
+    const rows = Array.isArray(req.body.rows) ? req.body.rows : [];
+    if (rows.some((row) => row.valid === false || row.action === "invalid")) return res.status(422).json({ success: false, message: "Import contains invalid rows" });
+    for (const row of rows.filter((item) => item.action === "update")) {
+      const check = await db(`SELECT id FROM customers WHERE id = $1 AND company_id = $2`, [row.matchCustomer?.id, req.user.companyId]);
+      if (!check.rows.length) return res.status(400).json({ success: false, message: "Import customer does not belong to this company" });
+    }
+    let created = 0;
+    let updated = 0;
+    for (const row of rows) {
+      if (row.action === "update") {
+        await db(`UPDATE customers SET name = COALESCE($1, name), phone = COALESCE($2, phone), email = COALESCE($3, email), address = COALESCE($4, address), postcode = COALESCE($5, postcode), notes = COALESCE($6, notes), credit_enabled = COALESCE($7, credit_enabled), credit_limit = COALESCE($8, credit_limit) WHERE id = $9 AND company_id = $10 RETURNING id, name, phone, email`, [row.name, row.phone, row.email, row.address, row.postcode, row.notes, row.creditEnabled, row.creditLimit, row.matchCustomer.id, req.user.companyId]);
+        updated += 1;
+      } else {
+        await db(`INSERT INTO customers (company_id, name, phone, email, address, postcode, notes, credit_enabled, credit_limit) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id, name, phone, email`, [req.user.companyId, row.name, row.phone, row.email, row.address, row.postcode, row.notes, row.creditEnabled ?? false, row.creditLimit]);
+        created += 1;
+      }
+    }
+    res.json({ success: true, data: { created, updated } });
+  });
+
   /*
    * GET /api/customers/:id
    */
@@ -217,7 +292,7 @@ export default function createCustomersRouter({
    * GET /api/customers/:id/loyalty
    * Returns customer loyalty balance and transaction history
    */
-  router.get("/customers/:id/loyalty", authenticate, authorize("customer.view"), async (req, res) => {
+  router.get("/customers/:id/loyalty", authenticate, requireLoyaltyEntitlement, authorize("customer.view"), async (req, res) => {
     try {
       const companyAdmin = await canViewCompanyCustomers(req.user);
 
@@ -303,7 +378,7 @@ export default function createCustomersRouter({
    * - permission: loyalty.adjust (managers/admins), falls back to customer.edit
    * - writes a ledger row + an adjustments audit row; both company-scoped
    */
-  router.post("/customers/:id/loyalty/adjust", authenticate, authorize("loyalty.adjust", "customer.edit"), async (req, res) => {
+  router.post("/customers/:id/loyalty/adjust", authenticate, requireLoyaltyEntitlement, authorize("loyalty.adjust", "customer.edit"), async (req, res) => {
     try {
       const companyAdmin = await canViewCompanyCustomers(req.user);
 
@@ -497,6 +572,7 @@ export default function createCustomersRouter({
         targetStoreId,
         req.user.companyId
       );
+      if (savePlatformRecord && !ids.length) customer.platform = await savePlatformRecord({ db: client.query.bind(client), key: "customer", req, record: customer });
       await client.query("COMMIT");
       res
         .status(ids.length ? 200 : 201)
@@ -509,6 +585,7 @@ export default function createCustomersRouter({
         });
     } catch (error) {
       await client.query("ROLLBACK");
+      if (error.code === "PLATFORM_RECORD_INVALID") return res.status(error.status).json({ success: false, code: error.code, message: error.message });
       console.error("Create customer error:", error);
       res
         .status(500)
@@ -563,7 +640,7 @@ export default function createCustomersRouter({
    * PUT /api/customers/:id
    */
   router.put("/customers/:id", authenticate, authorize("customer.edit"), async (req, res) => {
-    if (!(await canViewCompanyCustomers(req.user)))
+    if (!(await hasCompanyAdminAccess(req)))
       return res
         .status(403)
         .json({ success: false, message: "Customer administration permission required" });
@@ -573,7 +650,16 @@ export default function createCustomersRouter({
         .status(400)
         .json({ success: false, message: "Customer name is required" });
 
+    let client = null;
+    let committed = false;
+    const db = (...args) => client ? client.query(...args) : domainDb(...args);
     try {
+      let previous = null;
+      if (savePlatformRecord) {
+        client = await pool.connect(); await client.query("BEGIN");
+        previous = (await db("SELECT * FROM customers WHERE id=$1 AND company_id=$2 FOR UPDATE", [req.params.id, req.user.companyId])).rows[0];
+        if (!previous) return res.status(404).json({ success: false, message: "Customer not found" });
+      }
       const result = await db(
         `
         UPDATE customers
@@ -596,12 +682,19 @@ export default function createCustomersRouter({
         return res
           .status(404)
           .json({ success: false, message: "Customer not found" });
+      if (savePlatformRecord) {
+        result.rows[0].platform = await savePlatformRecord({ db, key: "customer", req, record: { ...previous, ...result.rows[0] }, previous });
+        await client.query("COMMIT"); committed = true;
+      }
       res.json({ success: true, message: "Customer updated", data: result.rows[0] });
     } catch (error) {
+      if (error.code === "PLATFORM_RECORD_INVALID") return res.status(error.status).json({ success: false, code: error.code, message: error.message });
       console.error("Update customer error:", error);
       res
         .status(500)
         .json({ success: false, message: "Unable to update customer" });
+    } finally {
+      if (client) { try { if (!committed) await client.query("ROLLBACK"); } finally { client.release(); } }
     }
   });
 
@@ -609,7 +702,7 @@ export default function createCustomersRouter({
    * PATCH /api/customers/:id/status
    */
   router.patch("/customers/:id/status", authenticate, authorize("customer.edit"), async (req, res) => {
-    if (!(await canViewCompanyCustomers(req.user)))
+    if (!(await hasCompanyAdminAccess(req)))
       return res
         .status(403)
         .json({ success: false, message: "Customer administration permission required" });
@@ -684,6 +777,11 @@ export default function createCustomersRouter({
       res.status(403).json({ success: false, message: "Company administration permission required" });
       return null;
     }
+    const ageResult = await db(
+      "SELECT maximum_credit_age_days FROM customers WHERE id = $1 AND company_id = $2",
+      [req.params.id, req.user.companyId]
+    );
+    customer.maximum_credit_age_days = ageResult.rows[0]?.maximum_credit_age_days ?? null;
     return customer;
   }
 
@@ -712,6 +810,7 @@ export default function createCustomersRouter({
       const credit = {
         enabled: !!customer.credit_enabled,
         limit: Number(customer.credit_limit) || 0,
+        maximumAgeDays: customer.maximum_credit_age_days == null ? null : Number(customer.maximum_credit_age_days),
         balance: fromCents(balanceC),
         available: Math.max(0, (Number(customer.credit_limit) || 0) - fromCents(balanceC)),
       };
@@ -743,6 +842,13 @@ export default function createCustomersRouter({
       if (limitMajor === null) {
         limitMajor = Number(customer.credit_limit) || 0;
       }
+      let maximumAgeDays = customer.maximum_credit_age_days == null ? null : Number(customer.maximum_credit_age_days);
+      if (req.body.maximumAgeDays !== undefined && req.body.maximumAgeDays !== null && req.body.maximumAgeDays !== "") {
+        maximumAgeDays = Number(req.body.maximumAgeDays);
+        if (!Number.isInteger(maximumAgeDays) || maximumAgeDays < 0) {
+          return res.status(400).json({ success: false, message: "Maximum credit age must be a non-negative whole number of days" });
+        }
+      }
 
       const result = await db(
         `UPDATE customers SET credit_enabled = $1, credit_limit = $2, updated_at = NOW() WHERE id = $3 AND company_id = $4 RETURNING credit_enabled, credit_limit`,
@@ -750,6 +856,10 @@ export default function createCustomersRouter({
       );
       if (!result.rows.length)
         return res.status(404).json({ success: false, message: "Customer not found" });
+      await db(
+        "UPDATE customers SET maximum_credit_age_days = $1, updated_at = NOW() WHERE id = $2 AND company_id = $3",
+        [maximumAgeDays, req.params.id, req.user.companyId]
+      );
 
       res.json({
         success: true,
@@ -757,6 +867,7 @@ export default function createCustomersRouter({
         data: {
           enabled: !!result.rows[0].credit_enabled,
           limit: Number(result.rows[0].credit_limit) || 0,
+          maximumAgeDays: maximumAgeDays == null ? null : Number(maximumAgeDays),
         },
       });
     } catch (error) {
@@ -768,7 +879,7 @@ export default function createCustomersRouter({
   /*
    * POST /api/customers/:id/credit/payments — record a payment against credit.
    */
-  router.post("/customers/:id/credit/payments", authenticate, authorize("customer.edit"), async (req, res) => {
+  router.post("/customers/:id/credit/payments", authenticate, authorize("payment.manage", "customer.edit"), async (req, res) => {
     try {
       const customer = await loadCustomerForCredit(req, res);
       if (!customer) return;
@@ -790,6 +901,24 @@ export default function createCustomersRouter({
       if (!check.allowed)
         return res.status(409).json({ success: false, message: "Payment exceeds the outstanding balance" });
 
+      const idempotencyKey = req.body.idempotencyKey
+        ? String(req.body.idempotencyKey).trim().slice(0, 120)
+        : null;
+      if (idempotencyKey) {
+        const existing = await db(
+          `SELECT id, amount, payment_method FROM customer_credit_ledger
+           WHERE company_id = $1 AND idempotency_key = $2 LIMIT 1`,
+          [req.user.companyId, idempotencyKey]
+        );
+        if (existing.rows.length) {
+          return res.status(409).json({
+            success: false,
+            message: "Customer payment has already been processed",
+            data: { entryId: existing.rows[0].id, duplicate: true },
+          });
+        }
+      }
+
       const tx = buildPaymentTransaction({
         amount: req.body.amount,
         paymentMethod: method,
@@ -799,8 +928,8 @@ export default function createCustomersRouter({
       const inserted = await db(
         `
         INSERT INTO customer_credit_ledger
-          (company_id, store_id, customer_id, transaction_type, amount, reference_type, description, payment_method, created_by)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+          (company_id, store_id, customer_id, transaction_type, amount, reference_type, reference_id, description, payment_method, idempotency_key, created_by)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
         RETURNING id, created_at
         `,
         [
@@ -810,8 +939,10 @@ export default function createCustomersRouter({
           tx.transaction_type,
           tx.amount,
           tx.reference_type,
+          req.body.referenceId || null,
           tx.description,
           tx.payment_method,
+          idempotencyKey,
           tx.created_by,
         ]
       );
@@ -866,6 +997,23 @@ export default function createCustomersRouter({
         return res.status(409).json({ success: false, message: "Debit note exceeds the outstanding balance" });
       }
 
+      const idempotencyKey = req.body.idempotencyKey
+        ? String(req.body.idempotencyKey).trim().slice(0, 120)
+        : null;
+      if (idempotencyKey) {
+        const existing = await db(
+          "SELECT id FROM customer_credit_ledger WHERE company_id = $1 AND idempotency_key = $2 LIMIT 1",
+          [req.user.companyId, idempotencyKey]
+        );
+        if (existing.rows.length) {
+          return res.status(409).json({
+            success: false,
+            message: "Customer adjustment has already been processed",
+            data: { entryId: existing.rows[0].id, duplicate: true },
+          });
+        }
+      }
+
       const tx = buildAdjustmentTransaction({
         adjustmentType: type,
         amount: req.body.amount,
@@ -876,8 +1024,8 @@ export default function createCustomersRouter({
       await db(
         `
         INSERT INTO customer_credit_ledger
-          (company_id, store_id, customer_id, transaction_type, amount, reference_type, description, created_by)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+          (company_id, store_id, customer_id, transaction_type, amount, reference_type, reference_id, description, idempotency_key, created_by)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
         `,
         [
           req.user.companyId,
@@ -886,7 +1034,9 @@ export default function createCustomersRouter({
           tx.transaction_type,
           tx.amount,
           tx.reference_type,
+          req.body.referenceId || null,
           tx.description,
+          idempotencyKey,
           tx.created_by,
         ]
       );
@@ -900,6 +1050,117 @@ export default function createCustomersRouter({
     } catch (error) {
       console.error("Customer credit adjustment error:", error);
       res.status(500).json({ success: false, message: "Unable to record adjustment" });
+    }
+  });
+
+  /*
+   * GET /api/customers/:id/credit/ledger — filtered, paginated ledger view.
+   * Identifiers are fixed in this query; all user-controlled values are
+   * parameterised and customer/company/store access is re-checked above.
+   */
+  router.get("/customers/:id/credit/ledger", authenticate, authorize("customer.view"), async (req, res) => {
+    try {
+      const customer = await loadCustomerForCredit(req, res);
+      if (!customer) return;
+
+      const pageValue = Number.parseInt(req.query.page, 10);
+      const pageSizeValue = Number.parseInt(req.query.pageSize, 10);
+      const page = Number.isFinite(pageValue) && pageValue > 0 ? pageValue : 1;
+      const pageSize = Math.min(
+        Number.isFinite(pageSizeValue) && pageSizeValue > 0 ? pageSizeValue : 25,
+        100
+      );
+      const params = [req.user.companyId, req.params.id];
+      const filters = ["company_id = $1", "customer_id = $2"];
+      let index = 3;
+
+      const companyAdmin = await canViewCompanyCustomers(req.user);
+      if (!companyAdmin && req.user.storeId) {
+        filters.push(`store_id = $${index}`);
+        params.push(req.user.storeId);
+        index += 1;
+      }
+      if (req.query.storeId) {
+        filters.push(`store_id = $${index}`);
+        params.push(String(req.query.storeId));
+        index += 1;
+      }
+      if (req.query.entryType) {
+        const supported = ["credit_sale", "payment", "credit_note", "debit_note", "opening"];
+        const entryType = String(req.query.entryType).toLowerCase();
+        if (!supported.includes(entryType)) {
+          return res.status(400).json({ success: false, message: "Unsupported customer ledger entry type" });
+        }
+        filters.push(`transaction_type = $${index}`);
+        params.push(entryType);
+        index += 1;
+      }
+      if (req.query.direction) {
+        const direction = String(req.query.direction).toLowerCase();
+        if (!["debit", "credit"].includes(direction)) {
+          return res.status(400).json({ success: false, message: "Ledger direction must be debit or credit" });
+        }
+        const types = direction === "debit"
+          ? ["payment", "debit_note"]
+          : ["credit_sale", "credit_note", "opening"];
+        filters.push(`transaction_type = ANY($${index}::text[])`);
+        params.push(types);
+        index += 1;
+      }
+      if (req.query.from) {
+        filters.push(`created_at >= $${index}`);
+        params.push(String(req.query.from));
+        index += 1;
+      }
+      if (req.query.to) {
+        filters.push(`created_at < ($${index}::date + INTERVAL '1 day')`);
+        params.push(String(req.query.to));
+        index += 1;
+      }
+      if (req.query.search) {
+        filters.push(`(
+          COALESCE(description, '') ILIKE $${index}
+          OR COALESCE(reference_type, '') ILIKE $${index}
+          OR COALESCE(reference_id::text, '') ILIKE $${index}
+        )`);
+        params.push(`%${String(req.query.search).trim()}%`);
+        index += 1;
+      }
+
+      const where = filters.join(" AND ");
+      const countResult = await db(
+        `SELECT COUNT(*)::int AS total FROM customer_credit_ledger WHERE ${where}`,
+        params
+      );
+      const total = Number(countResult.rows[0]?.total || 0);
+      const pages = total === 0 ? 0 : Math.ceil(total / pageSize);
+      const offset = (page - 1) * pageSize;
+      const rows = await db(
+        `SELECT l.id, l.transaction_type, l.amount, l.balance_after,
+          l.reference_type, l.reference_id, l.description, l.payment_method,
+          l.store_id, l.created_by, u.full_name AS created_by_name, l.created_at,
+          SUM(l.amount * CASE WHEN l.transaction_type IN ('payment','debit_note') THEN -1 ELSE 1 END)
+            OVER (ORDER BY l.created_at, l.id) AS running_balance
+         FROM customer_credit_ledger l
+         LEFT JOIN users u ON u.id = l.created_by
+         WHERE ${where.replaceAll("company_id", "l.company_id").replaceAll("customer_id", "l.customer_id").replaceAll("store_id", "l.store_id").replaceAll("transaction_type", "l.transaction_type").replaceAll("created_at", "l.created_at").replaceAll("description", "l.description").replaceAll("reference_type", "l.reference_type").replaceAll("reference_id", "l.reference_id")}
+         ORDER BY l.created_at DESC, l.id DESC
+         LIMIT $${index} OFFSET $${index + 1}`,
+        [...params, pageSize, offset]
+      );
+      res.json({
+        success: true,
+        data: rows.rows,
+        records: rows.rows,
+        page,
+        pageSize,
+        total,
+        pages,
+        customer: { id: customer.id, name: customer.name },
+      });
+    } catch (error) {
+      console.error("Customer credit ledger error:", error);
+      res.status(500).json({ success: false, message: "Unable to load customer ledger" });
     }
   });
 
@@ -933,6 +1194,250 @@ export default function createCustomersRouter({
       console.error("Customer statement error:", error);
       res.status(500).json({ success: false, message: "Unable to build statement" });
     }
+  });
+
+  router.get("/customer-segments", authenticate, authorize("customer.view"), async (req, res) => {
+    try {
+      const result = await db(
+        `SELECT s.id, s.company_id, s.name, s.description, s.active,
+          COUNT(m.customer_id)::int AS member_count
+         FROM customer_segments s
+         LEFT JOIN customer_segment_members m ON m.segment_id = s.id
+         WHERE s.company_id = $1
+         GROUP BY s.id
+         ORDER BY s.name`,
+        [req.user.companyId]
+      );
+      res.json({ success: true, data: result.rows });
+    } catch (error) {
+      console.error("List customer segments error:", error);
+      res.status(500).json({ success: false, message: "Unable to load customer segments" });
+    }
+  });
+
+  router.post("/customer-segments", authenticate, authorize("customer.edit"), async (req, res) => {
+    const name = String(req.body.name || "").trim();
+    if (!name) return res.status(400).json({ success: false, message: "Segment name is required" });
+    try {
+      const result = await db(
+        `INSERT INTO customer_segments (company_id, name, description, active)
+         VALUES ($1, $2, $3, true)
+         RETURNING id, company_id, name, description, active`,
+        [req.user.companyId, name, req.body.description || null]
+      );
+      res.status(201).json({ success: true, data: result.rows[0] });
+    } catch (error) {
+      if (error.code === "23505") return res.status(409).json({ success: false, message: "Segment already exists" });
+      console.error("Create customer segment error:", error);
+      res.status(500).json({ success: false, message: "Unable to create customer segment" });
+    }
+  });
+
+  router.put("/customer-segments/:id", authenticate, authorize("customer.edit"), async (req, res) => {
+    try {
+      const result = await db(
+        `UPDATE customer_segments SET
+          name = COALESCE($1, name), description = COALESCE($2, description),
+          active = COALESCE($3, active), updated_at = CURRENT_TIMESTAMP
+         WHERE id = $4 AND company_id = $5
+         RETURNING id, company_id, name, description, active`,
+        [req.body.name == null ? null : String(req.body.name).trim(), req.body.description, req.body.active, req.params.id, req.user.companyId]
+      );
+      if (!result.rows.length) return res.status(404).json({ success: false, message: "Segment not found" });
+      res.json({ success: true, data: result.rows[0] });
+    } catch (error) {
+      if (error.code === "23505") return res.status(409).json({ success: false, message: "Segment already exists" });
+      console.error("Update customer segment error:", error);
+      res.status(500).json({ success: false, message: "Unable to update customer segment" });
+    }
+  });
+
+  router.get("/customer-segments/:id/members", authenticate, authorize("customer.view"), async (req, res) => {
+    const result = await db(
+      `SELECT c.id, c.name, c.phone, c.email, c.active, m.created_at AS member_since
+       FROM customer_segment_members m
+       INNER JOIN customers c ON c.id = m.customer_id
+       WHERE m.segment_id = $1 AND m.company_id = $2
+       ORDER BY c.name`,
+      [req.params.id, req.user.companyId]
+    );
+    res.json({ success: true, data: { members: result.rows } });
+  });
+
+  router.post("/customer-segments/:id/members", authenticate, authorize("customer.edit"), async (req, res) => {
+    const customerIds = Array.isArray(req.body.customerIds) ? req.body.customerIds : [req.body.customerId];
+    const result = await db(
+      `INSERT INTO customer_segment_members (company_id, segment_id, customer_id)
+       SELECT $1, $2, c.id FROM customers c
+       WHERE c.company_id = $1 AND c.id = ANY($3::uuid[])
+       ON CONFLICT (segment_id, customer_id) DO NOTHING
+       RETURNING customer_id`,
+      [req.user.companyId, req.params.id, customerIds.filter(Boolean)]
+    );
+    res.json({ success: true, assigned: result.rows.length });
+  });
+
+  router.delete("/customer-segments/:id/members/:customerId", authenticate, authorize("customer.edit"), async (req, res) => {
+    const result = await db(
+      `DELETE FROM customer_segment_members
+       WHERE segment_id = $1 AND customer_id = $2 AND company_id = $3`,
+      [req.params.id, req.params.customerId, req.user.companyId]
+    );
+    res.json({ success: true, removed: result.rowCount || 0 });
+  });
+
+  router.post("/customers/import/preview", authenticate, authorize("customer.edit"), async (req, res) => {
+    const sourceRows = parseCsv(req.body.csv);
+    const existing = await db(
+      `SELECT id, name, phone, email, credit_enabled, credit_limit FROM customers WHERE company_id = $1 AND active = true`,
+      [req.user.companyId]
+    );
+    const rows = sourceRows.map((row, index) => {
+      const phone = row.phone || null;
+      const email = row.email || null;
+      const invalid = (phone && !/^\+?\d{7,15}$/.test(phone)) || (email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email));
+      const match = existing.rows.find((customer) => (email && customer.email === email) || (phone && customer.phone === phone));
+      return { row: index + 2, ...row, valid: !invalid, action: invalid ? "invalid" : match ? "update" : "create", matchCustomer: match ? { id: match.id, name: match.name } : null, errors: invalid ? ["Invalid email or phone"] : [] };
+    });
+    res.json({ success: true, data: { total: rows.length, creates: rows.filter((row) => row.action === "create").length, updates: rows.filter((row) => row.action === "update").length, invalid: rows.filter((row) => row.action === "invalid").length, rows } });
+  });
+
+  router.post("/customers/import", authenticate, authorize("customer.edit"), async (req, res) => {
+    const rows = Array.isArray(req.body.rows) ? req.body.rows : [];
+    if (rows.some((row) => row.valid === false || row.action === "invalid")) {
+      return res.status(422).json({ success: false, message: "Import contains invalid rows" });
+    }
+    if (rows.some((row) => row.action === "update" && (!row.matchCustomer?.id || !String(row.matchCustomer.id).startsWith(req.user.companyId.slice(0, 1))))) {
+      const check = await db(`SELECT id FROM customers WHERE id = $1 AND company_id = $2`, [rows.find((row) => row.action === "update")?.matchCustomer?.id, req.user.companyId]);
+      if (!check.rows.length) return res.status(400).json({ success: false, message: "Import customer does not belong to this company" });
+    }
+    const client = pool?.connect ? await pool.connect() : null;
+    try {
+      let created = 0;
+      let updated = 0;
+      for (const row of rows) {
+        if (row.action === "update") {
+          const result = await db(
+            `UPDATE customers SET
+              name = COALESCE($1, name), phone = COALESCE($2, phone), email = COALESCE($3, email),
+              address = COALESCE($4, address), postcode = COALESCE($5, postcode), notes = COALESCE($6, notes),
+              credit_enabled = COALESCE($7, credit_enabled), credit_limit = COALESCE($8, credit_limit)
+             WHERE id = $9 AND company_id = $10
+             RETURNING id, name, phone, email`,
+            [row.name, row.phone, row.email, row.address, row.postcode, row.notes, row.creditEnabled, row.creditLimit, row.matchCustomer.id, req.user.companyId]
+          );
+          if (!result.rows.length) return res.status(400).json({ success: false, message: "Import customer does not belong to this company" });
+          updated += 1;
+        } else {
+          await db(
+            `INSERT INTO customers (company_id, name, phone, email, address, postcode, notes, credit_enabled, credit_limit)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+             RETURNING id, name, phone, email`,
+            [req.user.companyId, row.name, row.phone, row.email, row.address, row.postcode, row.notes, row.creditEnabled ?? false, row.creditLimit]
+          );
+          created += 1;
+        }
+      }
+      res.json({ success: true, data: { created, updated } });
+    } finally {
+      client?.release();
+    }
+  });
+
+  router.get("/customers/export", authenticate, authorize("customer.view"), async (req, res) => {
+    const result = await db(
+      `SELECT c.name, c.phone, c.email, c.address, c.postcode, c.notes,
+        c.credit_enabled, c.credit_limit, COALESCE(clb.balance, 0) AS loyalty_balance
+       FROM customers c
+       LEFT JOIN customer_loyalty_balances clb ON clb.customer_id = c.id AND clb.company_id = c.company_id
+       WHERE c.company_id = $1 ORDER BY c.name`,
+      [req.user.companyId]
+    );
+    const headers = ["name", "phone", "email", "address", "postcode", "notes", "credit_enabled", "credit_limit", "loyalty_balance"];
+    const csv = [headers.join(","), ...result.rows.map((row) => headers.map((header) => String(row[header] ?? "").replaceAll(",", " ")).join(","))].join("\n");
+    res.type("text/csv").send(csv);
+  });
+
+  router.post("/gift-cards", authenticate, authorize("customer.edit"), async (req, res) => {
+    const value = validateIssueValue(req.body.value);
+    if (!value.ok) return res.status(400).json({ success: false, message: value.reason });
+    const code = normaliseGiftCardCode(req.body.code);
+    if (!code) return res.status(400).json({ success: false, message: "Gift card code is required" });
+    try {
+      const card = await db(
+        `INSERT INTO gift_cards (company_id, code, reference_number, customer_id, status, initial_value, expires_at, issued_by)
+         VALUES ($1, $2, $3, $4, 'active', $5, $7, $6)
+         RETURNING id, code`,
+        [req.user.companyId, code, req.body.referenceNumber || null, req.body.customerId || null, req.body.value, req.user.id, req.body.expiresAt || null]
+      );
+      await db(
+        `INSERT INTO gift_card_transactions (company_id, gift_card_id, transaction_type, amount, balance_after, reference_type, description, store_id, created_by)
+         VALUES ($1, $2, 'issue', $3, $3, 'issue', 'Gift card issued', $4, $5)`,
+        [req.user.companyId, card.rows[0].id, req.body.value, req.user.storeId, req.user.id]
+      );
+      res.status(201).json({ success: true, data: { ...card.rows[0], balance: Number(req.body.value) } });
+    } catch (error) {
+      if (error.code === "23505") return res.status(409).json({ success: false, message: "Gift card code already exists" });
+      console.error("Issue gift card error:", error);
+      res.status(500).json({ success: false, message: "Unable to issue gift card" });
+    }
+  });
+
+  router.get("/gift-cards", authenticate, authorize("customer.view"), async (req, res) => {
+    const result = await db(
+      `SELECT g.id, g.code, g.reference_number, g.customer_id, c.name AS customer_name,
+        g.status, g.initial_value, g.expires_at, COALESCE(SUM(CASE WHEN t.transaction_type = 'redeem' THEN -t.amount ELSE t.amount END), 0) AS balance
+       FROM gift_cards g LEFT JOIN customers c ON c.id = g.customer_id
+       LEFT JOIN gift_card_transactions t ON t.gift_card_id = g.id
+       WHERE g.company_id = $1 GROUP BY g.id, c.name ORDER BY g.issued_at DESC`,
+      [req.user.companyId]
+    );
+    res.json({ success: true, data: result.rows });
+  });
+
+  router.get("/gift-cards/:id", authenticate, authorize("customer.view"), async (req, res) => {
+    const result = await db(
+      `SELECT g.id, g.code, g.status, g.expires_at,
+        COALESCE(SUM(CASE WHEN t.transaction_type = 'redeem' THEN -t.amount ELSE t.amount END), 0) AS balance
+       FROM gift_cards g LEFT JOIN gift_card_transactions t ON t.gift_card_id = g.id
+       WHERE g.id = $1 AND g.company_id = $2 GROUP BY g.id`,
+      [req.params.id, req.user.companyId]
+    );
+    if (!result.rows.length) return res.status(404).json({ success: false, message: "Gift card not found" });
+    const transactions = await db(
+      `SELECT * FROM gift_card_transactions WHERE gift_card_id = $1 AND company_id = $2 ORDER BY created_at ASC`,
+      [req.params.id, req.user.companyId]
+    );
+    res.json({ success: true, data: { ...result.rows[0], transactions: transactions.rows } });
+  });
+
+  router.post("/gift-cards/lookup", authenticate, authorize("customer.view"), async (req, res) => {
+    const lookup = codeLookupClause(req.body.code, 2);
+    const result = await db(lookup.sql, [...lookup.params, req.user.companyId]);
+    if (!result.rows.length) return res.status(404).json({ success: false, message: "Gift card not found" });
+    res.json({ success: true, data: result.rows[0] });
+  });
+
+  router.post("/gift-cards/:id/topup", authenticate, authorize("customer.edit"), async (req, res) => {
+    const value = validateTopUp(req.body.amount);
+    if (!value.ok) return res.status(400).json({ success: false, message: value.reason });
+    const card = await db(`SELECT id, code, status, expires_at FROM gift_cards WHERE id = $1 AND company_id = $2`, [req.params.id, req.user.companyId]);
+    if (!card.rows.length) return res.status(404).json({ success: false, message: "Gift card not found" });
+    if (card.rows[0].status !== "active") return res.status(409).json({ success: false, message: "Gift card is not active" });
+    await db(`INSERT INTO gift_card_transactions (company_id, gift_card_id, transaction_type, amount, balance_after, reference_type, description, store_id, created_by) VALUES ($1, $2, 'topup', $3, $3, 'topup', 'Gift card top up', $4, $5)`, [req.user.companyId, req.params.id, req.body.amount, req.user.storeId, req.user.id]);
+    const txs = await db(`SELECT * FROM gift_card_transactions WHERE gift_card_id = $1 AND company_id = $2 ORDER BY created_at ASC`, [req.params.id, req.user.companyId]);
+    const balance = txs.rows.reduce((total, tx) => total + (tx.transaction_type === "redeem" ? -Number(tx.amount) : Number(tx.amount)), 0);
+    res.json({ success: true, data: { balance } });
+  });
+
+  router.post("/gift-cards/:id/block", authenticate, authorize("customer.edit"), async (req, res) => {
+    const result = await db(
+      `UPDATE gift_cards SET status = CASE WHEN $1 THEN 'blocked' ELSE 'active' END
+       WHERE id = $2 AND company_id = $3 RETURNING id, code, status`,
+      [req.body.blocked !== false, req.params.id, req.user.companyId]
+    );
+    if (!result.rows.length) return res.status(404).json({ success: false, message: "Gift card not found" });
+    res.json({ success: true, data: result.rows[0] });
   });
 
   return router;

@@ -1,9 +1,17 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { BarChart3, Bell, Calculator, ChevronDown, CreditCard, Database, FileText, Grid3X3, Home, KeyRound, LogOut, Package, Percent, Plug, Receipt, RefreshCw, Settings, ShoppingBag, Store, Tag, UserCircle, Users, X } from "lucide-react";
+import { BarChart3, Bell, Calculator, CreditCard, Database, FileText, Grid3X3, Home, KeyRound, Package, Percent, Plug, Receipt, RefreshCw, Settings, ShoppingBag, Store, Tag, Users, X } from "lucide-react";
 import { apiRequest } from "../../services/api.js";
 import { parseAppPath, buildAppPath } from "../../utils/adminRoutes.js";
+import { buildSwitcherApps } from "../../utils/adminApps.js";
+import { normalizePreferences, preferencesDiffer } from "../../utils/adminPreferences.js";
+import {
+  loadCachedPreferences,
+  fetchPreferences,
+  savePreferences,
+} from "../../services/adminPreferencesService.js";
 import BottomStatusBar from "../../components/BottomStatusBar.jsx";
 import AdminNavDock from "../../components/AdminNavDock.jsx";
+import AdminShell from "../../components/AdminShell.jsx";
 import Dashboard from "../dashboard/Dashboard.jsx";
 import ProductsAdmin from "../products/ProductsAdmin.jsx";
 import GlobalProductsAdmin from "../products/GlobalProductsAdmin.jsx";
@@ -19,11 +27,16 @@ import PurchasesAdmin from "../purchases/PurchasesAdmin.jsx";
 import SalesAdmin from "../sales/SalesAdmin.jsx";
 import ReportsAdmin from "../reports/ReportsAdmin.jsx";
 import ReportPage, { REPORT_MENU_ITEMS } from "../reports/ReportPage.jsx";
+import CustomReportsAdmin from "../reports/CustomReportsAdmin.jsx";
 import ReturnsAdmin, { SupplierReturnsAdmin } from "../returns/ReturnsAdmin.jsx";
 import CustomersAdmin from "../customers/CustomersAdmin.jsx";
 import OnlineOrdersAdmin from "../online/OnlineOrdersAdmin.jsx";
 import OnlineOrdersPrep from "../online/OnlineOrdersPrep.jsx";
 import StoresAdmin from "../stores/StoresAdmin.jsx";
+import AttendanceAdmin from "../employees/AttendanceAdmin.jsx";
+import LicensingAdmin from "../superadmin/LicensingAdmin.jsx";
+import BusinessDivisionsAdmin from "../businessDivisions/BusinessDivisionsAdmin.jsx";
+import AuditLogAdmin from "../audit/AuditLogAdmin.jsx";
 
 /*
  * T10V: report pages live at /app/reports/<slug>. The slug is the report
@@ -40,10 +53,47 @@ function slugifyReportKey(key) {
  * section tab). Single source used by initial sync and navigation.
  */
 function pathForPage(nextPage, settingsTab = null) {
+  if (nextPage === "My Reports") return "/app/reports/custom";
   if (REPORT_MENU_ITEMS.some((item) => item.key === nextPage)) {
     return `/app/reports/${slugifyReportKey(nextPage)}`;
   }
   return buildAppPath(nextPage, { settingsTab });
+}
+
+/*
+ * The catalogue owns module definitions; this small adapter only maps the
+ * existing navigation labels to those definitions. Routes and permissions
+ * remain owned by AdminLayout and the backend respectively.
+ */
+const CATALOG_MODULE_BY_PAGE = {
+  Dashboard: "retail_pos",
+  Sales: "retail_pos",
+  Returns: "retail_pos",
+  "Supplier Returns": "retail_pos",
+  Payments: "retail_pos",
+  Products: "products",
+  "Global Products": "products",
+  Categories: "products",
+  Purchases: "suppliers",
+  Suppliers: "suppliers",
+  Inventory: "inventory",
+  Replenishment: "inventory",
+  Customers: "customers",
+  Employees: "staff",
+  Stores: "staff",
+  Reports: "reports",
+  "My Reports": "reports",
+  "Order Prep": "online_orders",
+  Integrations: "integrations",
+  Accounting: "integrations",
+};
+
+export function filterNavigationByCatalog(items, catalogKeys) {
+  if (!(catalogKeys instanceof Set)) return items;
+  return items.filter(([page]) => {
+    const moduleKey = CATALOG_MODULE_BY_PAGE[page];
+    return !moduleKey || catalogKeys.has(moduleKey);
+  });
 }
 
 export default function AdminLayout({
@@ -53,6 +103,7 @@ export default function AdminLayout({
   initialPage = "Dashboard",
   initialSettingsTab = null,
   initialReportKey = null,
+  entitlements = {},
 }) {
   /*
    * T10V: the page state is synchronised with the URL. The initial page is
@@ -68,6 +119,7 @@ export default function AdminLayout({
     if (parsed.view === "pos") return { page: "Dashboard", settingsTab: null, reportKey: null, valid: true };
     if (parsed.view === "unknown") return { page: initialPage, settingsTab: initialSettingsTab, reportKey: initialReportKey, valid: false };
     if (parsed.page === "REPORT") {
+      if (parsed.reportKey === "custom") return { page: "My Reports", settingsTab: null, reportKey: null, valid: true };
       /* A granular report deep link: /app/reports/<key-slug>. */
       const reportKey = REPORT_MENU_ITEMS.find((item) => slugifyReportKey(item.key) === parsed.reportKey)?.key;
       if (reportKey) return { page: reportKey, settingsTab: null, reportKey: null, valid: true };
@@ -122,32 +174,18 @@ export default function AdminLayout({
     /* eslint-disable-next-line react-hooks/exhaustive-deps */
   }, []);
 
-  /* Compact top-bar profile menu (T5B). Data comes from the existing session
-     user prop — no extra API call. Profile opens the existing "Users &
-     Permissions" settings tab (change password / user management); Settings
-     reuses the same navigation action as the T5A gear button. */
-  const [profileOpen, setProfileOpen] = useState(false);
-  const profileRef = useRef(null);
-  /* T10Y-followup: standalone Reset Password dialog (top-right header). */
+  /* Top-right Reset Password dialog (T10Y-followup) — opened from the shell
+     profile menu; the profile menu itself now lives in AdminShell. */
   const [resetPwOpen, setResetPwOpen] = useState(false);
-  useEffect(() => {
-    if (!profileOpen) return undefined;
-    const handlePointerDown = (event) => {
-      if (profileRef.current && !profileRef.current.contains(event.target)) setProfileOpen(false);
-    };
-    const handleKeyDown = (event) => {
-      if (event.key === "Escape") setProfileOpen(false);
-    };
-    document.addEventListener("mousedown", handlePointerDown);
-    document.addEventListener("keydown", handleKeyDown);
-    return () => {
-      document.removeEventListener("mousedown", handlePointerDown);
-      document.removeEventListener("keydown", handleKeyDown);
-    };
-  }, [profileOpen]);
 
-  const [onlinePermissions, setOnlinePermissions] = useState({ isAdmin: false, permissions: [] });
+  const [onlinePermissions, setOnlinePermissions] = useState({ isAdmin: false, permissions: [], entitlements });
   const [reportsLoaded, setReportsLoaded] = useState(false);
+  /* null means the runtime catalogue has not loaded or failed; in either case
+     retain the existing permission-filtered navigation as the safe fallback. */
+  const [catalogKeys, setCatalogKeys] = useState(null);
+  /* Raw runtime catalog entries for the app switcher (same response; the
+     switcher presents only what the server already authorised). */
+  const [catalogEntries, setCatalogEntries] = useState([]);
   /* T10W: dock quick-access pages configured in Settings → Store & Till.
      null = not loaded yet → the dock falls back to its default layout. */
   const [dockQuickAccess, setDockQuickAccess] = useState(null);
@@ -162,6 +200,20 @@ export default function AdminLayout({
   }, []);
   useEffect(() => {
     let alive = true;
+    apiRequest("/api/platform/runtime/app-catalog")
+      .then((data) => {
+        if (!alive || !data?.success || !Array.isArray(data.data)) return;
+        setCatalogKeys(new Set(data.data.map((entry) => entry?.module_key || entry?.key).filter(Boolean)));
+        setCatalogEntries(data.data);
+      })
+      .catch(() => {
+        /* Catalogue availability must never blank the existing navigation. */
+        if (alive) setCatalogKeys(null);
+      });
+    return () => { alive = false; };
+  }, []);
+  useEffect(() => {
+    let alive = true;
     apiRequest("/api/auth/me/permissions").then((data) => {
       if (alive && data.success) {
         setOnlinePermissions(data.data);
@@ -171,6 +223,27 @@ export default function AdminLayout({
       }
     }).catch((error) => { console.error("Online order permissions:", error); if (alive) setReportsLoaded(true); });
     return () => { alive = false; };
+  }, []);
+
+  /*
+   * Admin presentation preferences (NEW, user-level): layout preset,
+   * appearance and accent. Cached value paints instantly; the server row
+   * (GET /api/auth/me/preferences) reconciles across devices. The DEFAULT
+   * Light tokens equal the original hard-coded palette, so the shell and
+   * every page look exactly as before until the user chooses otherwise.
+   */
+  const [prefs, setPrefs] = useState(() => loadCachedPreferences() || normalizePreferences(null));
+  useEffect(() => {
+    let alive = true;
+    fetchPreferences().then((loaded) => {
+      if (!alive || !loaded) return;
+      setPrefs((current) => (preferencesDiffer(current, loaded) ? loaded : current));
+    });
+    return () => { alive = false; };
+  }, []);
+  const updatePrefs = useCallback((next) => {
+    setPrefs(normalizePreferences(next));
+    savePreferences(next); /* fire-and-forget; local mirror keeps it sticky */
   }, []);
 
   /*
@@ -191,6 +264,8 @@ export default function AdminLayout({
   const visibleReportItems = REPORT_MENU_ITEMS.filter((item) => canViewReport(item.permission));
   /* Overview / Summary cards page requires reports.summary.view per T10B granular catalogue. */
   const canViewOverview = canViewReport("reports.summary.view");
+  const canViewCustomReports = canViewReport("reports.custom.view");
+  if (canViewCustomReports) visibleReportItems.unshift({ key: "My Reports", title: "My Reports" });
   /* Users with ANY of the 13 granular reports.*.view codes can discover Reports.
      Admin/Owner bypass: if isAdmin we unconditionally show Reports.
      Also: if permissions are still loading (reportsLoaded=false) we KEEP the
@@ -200,6 +275,7 @@ export default function AdminLayout({
     !reportsLoaded ||
     canViewOverview ||
     visibleReportItems.length > 0 ||
+    canViewCustomReports ||
     onlinePermissions.isAdmin ||
     onlinePermissions.permissions.some((code) => code.startsWith("reports."));
 
@@ -243,7 +319,7 @@ export default function AdminLayout({
     loadOnlineOrderCount();
   }, [loadOnlineOrderCount]);
 
-  const items = [
+  const permissionFilteredItems = [
     ["Dashboard", Home],
     ["Sales", FileText],
     /* T9M-SMALL: Returns respects the existing permission system —
@@ -269,6 +345,9 @@ export default function AdminLayout({
     ["Customers", Users],
     ["Employees", Users],
     ["Stores", Store],
+    ...(onlinePermissions.isAdmin || onlinePermissions.permissions.includes("business_division.view") ? [["Business Divisions", Grid3X3]] : []),
+    /* T10-AUDIT: Audit Log — gated by the audit.view permission (admin bypass). */
+    ...(onlinePermissions.isAdmin || onlinePermissions.permissions.includes("audit.view") ? [["Audit Log", FileText]] : []),
     ["Payments", CreditCard],
     ...(onlinePermissions.isAdmin || onlinePermissions.permissions.includes("online_orders.view")
       ? [["Order Prep", ShoppingBag]] : []),
@@ -278,17 +357,58 @@ export default function AdminLayout({
     /* T9O: Accounting Integration — same permission mechanism, accounting-focused UI. */
     ...(onlinePermissions.isAdmin || onlinePermissions.permissions.includes("integration.manage")
       ? [["Accounting", Calculator]] : []),
+    /* Settings — reachable by EVERY signed-in user, matching the existing
+     * Settings surface's own authorization model: SettingsAdmin always
+     * prepends the per-user "Your account" → Appearance section, so every
+     * caller has at least one real Settings surface. The company/privileged
+     * sections are gated INSIDE SettingsAdmin (Platform needs
+     * isAdmin||isSuperadmin, Server / API Configuration needs isSuperadmin,
+     * Customer Loyalty needs the entitlement) and each endpoint keeps
+     * enforcing its own authorization. Navigation is discoverability, never
+     * the security boundary, so this entry grants nothing on its own.
+     * Deliberately unconditional rather than Superadmin-only: hiding it would
+     * remove the per-user Appearance surface that ships to everyone. */
+    ["Settings", Settings],
     ["Reports", BarChart3],
+    ...(onlinePermissions.isSuperadmin ? [["Licensing", KeyRound]] : []),
   ];
+  const items = filterNavigationByCatalog(permissionFilteredItems, catalogKeys);
+  const catalogFilteredReportItems = filterNavigationByCatalog(
+    canViewReports ? (canViewOverview ? [{ key: "Reports", title: "Overview" }, ...visibleReportItems] : visibleReportItems).map((item) => [item.key, null]) : [],
+    catalogKeys
+  ).map(([key]) => (key === "Reports" ? { key, title: "Overview" } : visibleReportItems.find((item) => item.key === key))).filter(Boolean);
+
+  /*
+   * App switcher entries: derived from the SAME runtime catalog response the
+   * navigation filter already consumed (server-side installed/enablement/
+   * package/licence/permission gating). Presentation only — it never grants
+   * access; unknown catalog keys render under their own key with no route.
+   */
+  const switcherApps = buildSwitcherApps(catalogEntries);
+
+  /* App-switcher route navigation: the switcher targets module routes (e.g.
+     /app/products). No route renames; the shared navigate() resolves the
+     page from the same URL the address bar shows. */
+  const navigateAppRoute = useCallback((route) => {
+    if (!route || typeof window === "undefined") return;
+    if (window.location.pathname !== route) {
+      window.history.pushState({}, "", route);
+    }
+    const resolved = resolveRoute();
+    setPage(resolved.page);
+    if (resolved.page === "Settings" && resolved.settingsTab) setSettingsTab(resolved.settingsTab);
+    /* eslint-disable-next-line react-hooks/exhaustive-deps */
+  }, []);
 
   return (
     <div className="h-screen bg-slate-100 flex relative">
-      {/* NAVIGATION — floating dock, bottom-centre of the status bar.
-         Consumes the SAME permission-filtered items list the sidebar used,
-         so visibility per user/role is identical. */}
+      {/* NAVIGATION — the existing onePOS floating Dockbar, bottom-centre of
+         the status bar. PRESERVED UNCHANGED (functionality, quick access,
+         launcher, Open Till). Consumes the SAME permission-filtered items
+         list as before, so visibility per user/role is identical. */}
       <AdminNavDock
         items={items}
-        reportItems={canViewReports ? (canViewOverview ? [{ key: "Reports", title: "Overview" }, ...visibleReportItems] : visibleReportItems) : []}
+        reportItems={canViewReports ? catalogFilteredReportItems : []}
         page={page}
         onNavigate={navigate}
         onOpenTill={onPOS}
@@ -297,198 +417,35 @@ export default function AdminLayout({
 
       <ChangePasswordModal open={resetPwOpen} onClose={() => setResetPwOpen(false)} />
 
-      {/* MAIN */}
-      <main className="flex-1 min-w-0 flex flex-col">
-        <header className="h-14 bg-white border-b flex items-center justify-between gap-3 px-4 lg:px-6 shrink-0">
-          <div className="min-w-0">
-            <div className="font-semibold truncate">
-              {page}
-            </div>
-
-            <div className="text-xs text-slate-400 hidden xl:block">
-              London Store
-            </div>
-          </div>
-
-          <div className="flex items-center gap-1.5 lg:gap-3 shrink-0">
-            <button
-              onClick={openOnlineOrders}
-              aria-label="Online Orders"
-              title="Online Orders"
-              className="relative px-2.5 py-2 lg:px-4 bg-slate-100 text-slate-800 border border-slate-200 rounded-md text-sm hover:bg-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500"
-            >
-              <span className="flex items-center gap-2">
-                <ShoppingBag size={16} />
-                <span className="hidden lg:inline">Online Orders</span>
-                {onlineOrderCount > 0 && (
-                  <span className="absolute -top-1.5 -right-1.5 min-w-[18px] h-[18px] px-1 bg-red-600 text-white text-[11px] font-bold rounded-full flex items-center justify-center">
-                    {onlineOrderCount > 99 ? "99+" : onlineOrderCount}
-                  </span>
-                )}
-              </span>
-            </button>
-
-            <button
-              onClick={onPOS}
-              aria-label="Open Till"
-              title="Open Till"
-              className="px-2.5 py-2 lg:px-4 bg-blue-600 text-white rounded-md text-sm hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
-            >
-              <span className="flex items-center gap-2">
-                <Store size={16} />
-                <span className="hidden lg:inline">Open Till</span>
-              </span>
-            </button>
-
-            <button
-              onClick={() => {
-                setProductCreateRequested(false);
-                navigate("Settings", { settingsTab: "General" });
-              }}
-              title="Settings"
-              aria-label="Settings"
-              className={`p-2 hover:bg-slate-100 rounded focus:outline-none focus:ring-2 focus:ring-blue-500 ${
-                page === "Settings" ? "bg-slate-100 text-slate-900" : "text-slate-600"
-              }`}
-            >
-              <Settings size={18} />
-            </button>
-
-            <button
-              onClick={() => setResetPwOpen(true)}
-              aria-label="Reset Password"
-              title="Reset Password"
-              className="p-2 hover:bg-slate-100 rounded focus:outline-none focus:ring-2 focus:ring-blue-500 text-slate-600"
-            >
-              <KeyRound size={18} />
-            </button>
-
-            <button
-              onClick={onLogout}
-              aria-label="Log out"
-              title="Log out"
-              className="p-2 hover:bg-slate-100 rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
-            >
-              <LogOut size={18} />
-            </button>
-
-            {/* Compact user/profile menu — reuses the existing session user prop. */}
-            {(() => {
-              const displayName = user?.fullName || user?.name || user?.username || "User";
-              const roleLabel = user?.role || "";
-              const initials = displayName
-                .split(/\s+/)
-                .filter(Boolean)
-                .slice(0, 2)
-                .map((part) => part[0])
-                .join("")
-                .toUpperCase() || "?";
-              return (
-                <div className="relative" ref={profileRef}>
-                  <button
-                    onClick={() => setProfileOpen((open) => !open)}
-                    aria-haspopup="menu"
-                    aria-expanded={profileOpen}
-                    aria-label="User menu"
-                    title={displayName}
-                    className={`flex items-center gap-2 pl-1.5 pr-1.5 py-1 rounded-md border text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 ${
-                      profileOpen ? "bg-slate-100 border-slate-300" : "border-slate-200 hover:bg-slate-50"
-                    }`}
-                  >
-                    <span className="w-7 h-7 shrink-0 rounded-full bg-blue-700 text-white text-[11px] font-semibold flex items-center justify-center uppercase">
-                      {initials}
-                    </span>
-                    <span className="hidden xl:block text-left leading-tight min-w-0">
-                      <span className="block font-medium text-slate-800 max-w-[140px] truncate">{displayName}</span>
-                      {roleLabel && <span className="block text-[11px] text-slate-400 max-w-[140px] truncate">{roleLabel}</span>}
-                    </span>
-                    <ChevronDown size={14} className="text-slate-400 shrink-0" />
-                  </button>
-
-                  {profileOpen && (
-                    <div
-                      role="menu"
-                      aria-label="User menu"
-                      className="absolute right-0 top-full mt-2 w-56 bg-white border border-slate-200 rounded-lg shadow-lg py-1 z-50"
-                    >
-                      <div className="px-3 py-2 border-b border-slate-100">
-                        <div className="text-sm font-semibold text-slate-800 truncate">{displayName}</div>
-                        <div className="text-xs text-slate-500 truncate">
-                          {user?.username || ""}{user?.storeName ? ` · ${user.storeName}` : ""}
-                        </div>
-                      </div>
-                      <button
-                        role="menuitem"
-                        onClick={() => {
-                          setProfileOpen(false);
-                          navigate("Settings", { settingsTab: "Users & Permissions" });
-                        }}
-                        className="w-full text-left px-3 py-2 text-sm text-slate-700 hover:bg-slate-50 flex items-center gap-2"
-                      >
-                        <UserCircle size={15} /> Profile
-                      </button>
-                      <button
-                        role="menuitem"
-                        onClick={() => {
-                          setProfileOpen(false);
-                          navigate("Settings", { settingsTab: "General" });
-                        }}
-                        className="w-full text-left px-3 py-2 text-sm text-slate-700 hover:bg-slate-50 flex items-center gap-2"
-                      >
-                        <Settings size={15} /> Settings
-                      </button>
-                      <div className="border-t border-slate-100 my-1" />
-                      <button
-                        role="menuitem"
-                        onClick={() => {
-                          setProfileOpen(false);
-                          onLogout();
-                        }}
-                        className="w-full text-left px-3 py-2 text-sm text-red-600 hover:bg-red-50 flex items-center gap-2"
-                      >
-                        <LogOut size={15} /> Logout
-                      </button>
-                    </div>
-                  )}
-                </div>
-              );
-            })()}
-          </div>
-        </header>
-
-        {/* Non-blocking new-online-order notification (never blocks the UI). */}
-        {onlineOrderToast && (
-          <button
-            onClick={openOnlineOrders}
-            className="absolute top-20 right-6 z-50 bg-white border border-slate-200 shadow-lg rounded-lg px-4 py-3 text-sm text-left hover:border-blue-400"
-          >
-            <span className="flex items-start gap-2">
-              <Bell size={16} className="text-blue-600 mt-0.5" />
-              <span>
-                <span className="font-medium">{onlineOrderToast.message}</span>
-                {onlineOrderToast.externalOrderId ? (
-                  <span className="block text-xs text-slate-500 mt-0.5">
-                    Order {onlineOrderToast.externalOrderId} - click to view
-                  </span>
-                ) : (
-                  <span className="block text-xs text-slate-500 mt-0.5">Click to open Online Orders</span>
-                )}
-              </span>
-              <X
-                size={14}
-                className="text-slate-400 ml-2 mt-0.5"
-                onClick={(event) => {
-                  event.stopPropagation();
-                  setOnlineOrderToast(null);
-                }}
-              />
-            </span>
-          </button>
-        )}
-
-        <div className="p-6 flex-1 overflow-y-auto" style={{ paddingBottom: "84px" }}>
-          {page ===
-          "Dashboard" ? (
+      {/*
+        PROFESSIONAL ADMIN SHELL — header (brand, app switcher, search, quick
+        actions, preferences, profile) + responsive sidebar + page frame.
+        The frame renders the EXISTING page components below untouched; the
+        Dockbar and BottomStatusBar remain part of the layout as before.
+      */}
+      <AdminShell
+        page={page}
+        apps={switcherApps}
+        items={items}
+        reportItems={canViewReports ? catalogFilteredReportItems : []}
+        prefs={prefs}
+        onPrefsChange={updatePrefs}
+        onNavigate={navigate}
+        onNavigateAppRoute={navigateAppRoute}
+        onOpenTill={onPOS}
+        onLogout={onLogout}
+        onOpenSettings={(tab) => {
+          setProductCreateRequested(false);
+          navigate("Settings", { settingsTab: tab || "General" });
+        }}
+        onResetPassword={() => setResetPwOpen(true)}
+        onlineOrderCount={onlineOrderCount}
+        onOpenOnlineOrders={openOnlineOrders}
+        user={user}
+        storeName="London Store"
+      >
+        {page ===
+        "Dashboard" ? (
             <Dashboard
               canViewReports={canViewReports}
               onNavigate={navigate}
@@ -527,13 +484,16 @@ export default function AdminLayout({
             <PurchasesAdmin />
           ) : page ===
             "Suppliers" ? (
-            <SuppliersAdmin />
+            <SuppliersAdmin permissions={onlinePermissions.permissions} isAdmin={onlinePermissions.isAdmin} />
           ) : page ===
             "Customers" ? (
-            <CustomersAdmin />
+            <CustomersAdmin entitlements={onlinePermissions.entitlements} permissions={onlinePermissions.permissions} isAdmin={onlinePermissions.isAdmin} />
           ) : page ===
             "Stores" ? (
             <StoresAdmin />
+          ) : page ===
+            "Business Divisions" ? (
+            <BusinessDivisionsAdmin />
           ) : page ===
             "Integrations" ? (
             <IntegrationsAdmin />
@@ -548,7 +508,24 @@ export default function AdminLayout({
             <OnlineOrdersPrep permissions={onlinePermissions} />
           ) : page ===
             "Settings" ? (
-            <SettingsAdmin key={settingsTab} initialTab={settingsTab} isAdmin={onlinePermissions.isAdmin} />
+            <SettingsAdmin key={settingsTab} initialTab={settingsTab} isAdmin={onlinePermissions.isAdmin} isSuperadmin={onlinePermissions.isSuperadmin} entitlements={onlinePermissions.entitlements} />
+          ) : page ===
+            "Licensing" ? (
+            onlinePermissions.isSuperadmin ? <LicensingAdmin /> : <div className="bg-white rounded-xl border p-10 text-center">Access denied</div>
+            ) : page ===
+             "Employees" ? (
+             <AttendanceAdmin />
+           ) : page ===
+             "Audit Log" ? (
+             onlinePermissions.isAdmin || onlinePermissions.permissions.includes("audit.view")
+               ? <AuditLogAdmin />
+               : <div className="bg-white rounded-xl border p-10 text-center">
+                   <h2 className="text-xl font-bold">Access denied</h2>
+                   <p className="text-sm text-slate-400 mt-2">You do not have permission to view the audit log.</p>
+                 </div>
+           ) : page ===
+            "My Reports" ? (
+            canViewCustomReports ? <CustomReportsAdmin /> : <div className="bg-white rounded-xl border p-10 text-center">Access denied</div>
           ) : page ===
             "Reports" ? (
             canViewReports ? (
@@ -580,8 +557,37 @@ export default function AdminLayout({
               </p>
             </div>
           )}
-        </div>
-      </main>
+      </AdminShell>
+
+      {/* Non-blocking new-online-order notification (never blocks the UI). */}
+      {onlineOrderToast && (
+        <button
+          onClick={openOnlineOrders}
+          className="fixed top-20 right-6 z-50 bg-white border border-slate-200 shadow-lg rounded-lg px-4 py-3 text-sm text-left hover:border-blue-400"
+        >
+          <span className="flex items-start gap-2">
+            <Bell size={16} className="text-blue-600 mt-0.5" />
+            <span>
+              <span className="font-medium">{onlineOrderToast.message}</span>
+              {onlineOrderToast.externalOrderId ? (
+                <span className="block text-xs text-slate-500 mt-0.5">
+                  Order {onlineOrderToast.externalOrderId} - click to view
+                </span>
+              ) : (
+                <span className="block text-xs text-slate-500 mt-0.5">Click to open Online Orders</span>
+              )}
+            </span>
+            <X
+              size={14}
+              className="text-slate-400 ml-2 mt-0.5"
+              onClick={(event) => {
+                event.stopPropagation();
+                setOnlineOrderToast(null);
+              }}
+            />
+          </span>
+        </button>
+      )}
       <BottomStatusBar storeName="London Store" />
     </div>
   );

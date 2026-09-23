@@ -1,6 +1,7 @@
 import express from "express";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
+import { provisionDefaultCompanyPackages } from "../services/packageRegistry.js";
 
 const router = express.Router();
 
@@ -159,6 +160,11 @@ export default function createAuthRouter(pool) {
         ]
       );
 
+      await provisionDefaultCompanyPackages(client, {
+        companyId: company.id,
+        installedBy: userResult.rows[0].id,
+      });
+
       await client.query("COMMIT");
 
       res.status(201).json({
@@ -215,6 +221,7 @@ export default function createAuthRouter(pool) {
           u.company_id,
           u.store_id,
           u.role_id,
+          u.jarves_enabled,
           c.name AS company_name,
           s.name AS store_name,
           r.name AS role_name
@@ -304,7 +311,8 @@ export default function createAuthRouter(pool) {
           companyId: user.company_id,
           companyName: user.company_name,
           storeId: user.store_id,
-          storeName: user.store_name
+          storeName: user.store_name,
+          jarvesEnabled: user.jarves_enabled === true
         }
       });
 
@@ -348,6 +356,7 @@ export default function createAuthRouter(pool) {
           u.full_name,
           u.company_id,
           u.store_id,
+          u.jarves_enabled,
           r.name AS role_name,
           c.name AS company_name,
           s.name AS store_name
@@ -431,6 +440,7 @@ export default function createAuthRouter(pool) {
         `
         SELECT
           u.role_id,
+          u.jarves_enabled,
           r.name AS role_name
         FROM users u
         LEFT JOIN roles r
@@ -489,7 +499,8 @@ export default function createAuthRouter(pool) {
         success: true,
         data: {
           isAdmin,
-          permissions
+          permissions,
+          jarvesEnabled: result.rows[0].jarves_enabled === true
         }
       });
 

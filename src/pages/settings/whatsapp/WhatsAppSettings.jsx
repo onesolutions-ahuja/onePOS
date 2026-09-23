@@ -54,9 +54,9 @@ function DeliveryHistory() {
         : "bg-slate-100 text-slate-500";
 
   return (
-    <div className="bg-white border border-slate-200 rounded-xl p-5">
+    <div className="onepos-card onepos-card-body">
       <div className="flex items-center justify-between mb-3">
-        <h3 className="font-semibold">Recent invoice deliveries</h3>
+        <h3 className="onepos-card-title">Recent invoice deliveries</h3>
         <button
           type="button"
           onClick={loadHistory}
@@ -333,7 +333,7 @@ function WhatsAppSettings({ onMessage, onError }) {
     }
   };
 
-  if (loading) return <div className="p-8 text-center text-slate-400">Loading WhatsApp settings...</div>;
+  if (loading) return <div className="onepos-empty"><span className="onepos-empty-title">Loading WhatsApp settings…</span></div>;
   if (!config || !form) return null;
 
   const tokenConfigured = Boolean(config.access_token_configured);
@@ -364,7 +364,7 @@ function WhatsAppSettings({ onMessage, onError }) {
   return (
     <div className="space-y-5 max-w-3xl">
       {/* Header: integration ON/OFF + automatic sending, as separate controls */}
-      <div className="bg-white border border-slate-200 rounded-xl p-5">
+      <div className="onepos-card onepos-card-body">
         <div className="flex items-center justify-between flex-wrap gap-3">
           <div className="flex items-center gap-2">
             <MessageCircle size={18} className="text-emerald-600" />
@@ -430,7 +430,7 @@ function WhatsAppSettings({ onMessage, onError }) {
       </div>
 
       {/* Provider / configuration */}
-      <div className="bg-white border border-slate-200 rounded-xl p-5">
+      <div className="onepos-card onepos-card-body">
         <h3 className="font-semibold mb-4">Provider configuration (Meta WhatsApp Cloud API)</h3>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           {input("phoneNumberId", "Phone Number ID", { required: true, placeholder: config.phone_number_id || "e.g. 123456789012345" })}
@@ -493,7 +493,7 @@ function WhatsAppSettings({ onMessage, onError }) {
                 type="button"
                 onClick={() => saveWith()}
                 disabled={saving}
-                className="h-9 px-4 bg-blue-600 text-white rounded-lg text-sm font-medium disabled:opacity-50 flex items-center gap-2"
+                className="onepos-btn onepos-btn-primary"
               >
                 <Save size={15} /> {saving ? "Saving…" : "Save changes"}
               </button>
@@ -512,7 +512,7 @@ function WhatsAppSettings({ onMessage, onError }) {
               onClick={() => saveWith({ enabled: true })}
               disabled={!activationReady || saving}
               title={activationReady ? "Save and activate WhatsApp" : "Run a successful connection test first"}
-              className="h-9 px-4 bg-emerald-600 text-white rounded-lg text-sm font-medium disabled:opacity-40 disabled:cursor-not-allowed"
+              className="onepos-btn onepos-btn-primary"
             >
               {saving ? "Saving…" : "Save & Activate"}
             </button>
@@ -528,7 +528,7 @@ function WhatsAppSettings({ onMessage, onError }) {
       </div>
 
       {/* Test invoice: preview + real test send */}
-      <div className="bg-white border border-slate-200 rounded-xl p-5">
+      <div className="onepos-card onepos-card-body">
         <h3 className="font-semibold mb-1">Send test invoice</h3>
         <p className="text-xs text-slate-500 mb-4">
           <strong>Preview</strong> builds the exact message via the existing onePOS delivery contract and shows it —
@@ -589,7 +589,7 @@ function WhatsAppSettings({ onMessage, onError }) {
                   ? "Activate WhatsApp first"
                   : "Send a real WhatsApp invoice to the demo number"
               }
-              className="h-9 px-4 bg-emerald-600 text-white rounded-lg text-sm font-medium disabled:opacity-40 disabled:cursor-not-allowed"
+              className="onepos-btn onepos-btn-primary"
             >
               {testSendBusy ? "Sending…" : "Send real test invoice"}
             </button>

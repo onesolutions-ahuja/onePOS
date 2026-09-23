@@ -2,6 +2,7 @@ import { useState } from "react";
 import useReportData from "./shared/useReportData.js";
 import { getSales, getProducts, getPayments } from "../../services/reports.js";
 import ReportHeader from "./ReportHeader.jsx";
+import SalesReportsModule from "./SalesReportsModule.jsx";
 import SalesReport from "./SalesReport.jsx";
 import PaymentsReport from "./PaymentsReport.jsx";
 import ProductsReport from "./ProductsReport.jsx";
@@ -25,6 +26,7 @@ import { toLocalDateString } from "./shared/quickDateRanges.js";
  */
 export const REPORT_MENU_ITEMS = [
   { key: "Sales Report", title: "Sales by Day", subtitle: "Daily sales totals for the selected range.", permission: "reports.sales.view" },
+  { key: "Sales Reports", title: "Sales Reports", subtitle: "Sales by day, store, operator and product — with discounts, VAT, net and payment methods.", permission: "reports.sales.view" },
   { key: "Payments Report", title: "Payments", subtitle: "Payments broken down by method.", permission: "reports.payments.view" },
   { key: "Top Products Report", title: "Top Products", subtitle: "Best-selling products for the selected range.", permission: "reports.products.view" },
   { key: "Customers Report", title: "Customers", subtitle: "Customer spend and returns.", permission: "reports.customers.view" },
@@ -83,13 +85,13 @@ export default function ReportPage({ reportKey }) {
     "Unable to load report"
   );
 
-  if (isPropDriven && loading) return <div className="p-10 text-center text-slate-400">Loading report...</div>;
+  if (isPropDriven && loading) return <div className="onepos-empty">Loading report...</div>;
   if (isPropDriven && error) {
     return (
-      <div className="bg-white border rounded-xl p-8 max-w-xl">
+      <div className="onepos-card onepos-card-body max-w-xl">
         <h1 className="font-bold text-red-700">Unable to load report</h1>
         <p className="text-sm mt-2">{error}</p>
-        <button onClick={reload} className="mt-4 px-4 py-2 bg-blue-600 text-white rounded text-sm">Retry</button>
+        <button onClick={reload} className="onepos-btn onepos-btn-primary mt-4">Retry</button>
       </div>
     );
   }
@@ -97,6 +99,7 @@ export default function ReportPage({ reportKey }) {
   let content = null;
   switch (reportKey) {
     case "Sales Report": content = <SalesReport daily={data || []} />; break;
+    case "Sales Reports": content = <SalesReportsModule from={from} to={to} />; break;
     case "Payments Report": content = <PaymentsReport payments={data || []} />; break;
     case "Top Products Report": content = <ProductsReport products={data || []} />; break;
     case "Customers Report": content = <CustomersReport from={from} to={to} />; break;
@@ -111,9 +114,11 @@ export default function ReportPage({ reportKey }) {
   return (
     <div>
       {isDateless ? (
-        <div className="mb-5">
-          <h1 className="text-2xl font-bold">{item?.title}</h1>
-          <p className="text-sm text-slate-500 mt-1">{item?.subtitle}</p>
+        <div className="onepos-page-header">
+          <div>
+            <h1 className="onepos-page-title">{item?.title}</h1>
+            <p className="onepos-page-subtitle">{item?.subtitle}</p>
+          </div>
         </div>
       ) : (
         <ReportHeader

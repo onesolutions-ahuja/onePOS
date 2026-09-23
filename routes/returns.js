@@ -1,6 +1,8 @@
 import express from "express";
 import { dispatchIntegrationEvent } from "../services/integrationDispatcher.js";
 import { validateSalesReturn } from "../src/services/salesReturn.js";
+import { upsertBatchRow, syncBatchMovement } from "../services/inventory.js";
+import { registerExchangeRoutes } from "./exchanges.js";
 
 /*
  * T9M-SMALL - Sales Returns (customer + supplier) built on the existing
@@ -99,6 +101,103 @@ export default function createReturnsRouter({
     return round2(payments.reduce((sum, p) => sum + Math.max(0, round2(p.amount - (Number(refundedByMethod.get(p.method)) || 0))), 0));
   }
 
+  async function resolveSaleRef(client, req, rawReference) {
+    const reference = String(rawReference || "").trim();
+    if (!reference) return null;
+    const params = [req.user.companyId, reference];
+    const storeClause = req.user.storeId ? ` AND store_id = $3` : "";
+    if (req.user.storeId) params.push(req.user.storeId);
+    const result = await client.query(
+      `SELECT id, company_id, store_id
+       FROM sales
+       WHERE company_id = $1
+         AND (id::text = $2 OR receipt_number = $2)
+         ${storeClause}
+       LIMIT 1`,
+      params
+    );
+    return result.rows[0] || null;
+  }
+
+  async function lookupSaleLines(client, saleId) {
+    const result = await client.query(
+      `SELECT si.id, si.product_id, si.quantity, si.total, pr.track_stock,
+              COALESCE(returns.returned_quantity, 0) AS returned_quantity
+       FROM sale_items si
+       LEFT JOIN products pr ON pr.id = si.product_id
+       LEFT JOIN (
+         SELECT sri.sale_item_id, SUM(sri.quantity) AS returned_quantity
+         FROM stock_return_items sri
+         INNER JOIN stock_returns sr ON sr.id = sri.return_id
+         WHERE sr.sale_id = $1
+           AND sr.return_type = 'CUSTOMER'
+           AND sr.status = 'COMPLETED'
+         GROUP BY sri.sale_item_id
+       ) returns ON returns.sale_item_id = si.id
+       WHERE si.sale_id = $1
+       ORDER BY si.id`,
+      [saleId]
+    );
+    return new Map(result.rows.map((row) => {
+      const quantity = Number(row.quantity) || 0;
+      const returnedQuantity = Number(row.returned_quantity) || 0;
+      return [String(row.id), {
+        id: row.id,
+        productId: row.product_id,
+        trackStock: row.track_stock !== false,
+        remainingQuantity: Math.max(0, round2(quantity - returnedQuantity)),
+        unitRefundValue: quantity > 0 ? round2(Number(row.total) / quantity) : 0,
+      }];
+    }));
+  }
+
+  async function totalRefundedForSale(client, saleId) {
+    const result = await client.query(
+      "SELECT COALESCE(SUM(amount), 0) AS refunded FROM refunds WHERE sale_id = $1",
+      [saleId]
+    );
+    return Number(result.rows[0]?.refunded) || 0;
+  }
+
+  async function refundedByMethodForSale(client, saleId) {
+    const result = await client.query(
+      `SELECT payment_method, COALESCE(SUM(amount), 0) AS refunded
+       FROM refunds
+       WHERE sale_id = $1
+       GROUP BY payment_method`,
+      [saleId]
+    );
+    return new Map(result.rows.map((row) => [row.payment_method, Number(row.refunded) || 0]));
+  }
+
+  async function loadSaleVat(client, companyId) {
+    const result = await client.query(
+      "SELECT default_vat_rate FROM company_settings WHERE company_id = $1",
+      [companyId]
+    );
+    return Number(result.rows[0]?.default_vat_rate) || 0;
+  }
+
+  async function loadExchangeProduct(client, companyId, productId) {
+    const result = await client.query(
+      `SELECT id, company_id, name, price, vat_rate, vat_applicable, track_stock, batch_tracking, active, sku
+       FROM products
+       WHERE id = $1 AND company_id = $2 AND active = true
+       LIMIT 1`,
+      [productId, companyId]
+    );
+    return result.rows[0] || null;
+  }
+
+  function catalogueUnitValue(product, fallbackVatRate) {
+    const price = Number(product?.price);
+    if (!Number.isFinite(price) || price < 0) return 0;
+    if (product?.vat_applicable === false) return round2(price);
+    // Catalogue prices are gross in the POS schema; the fallback rate is
+    // retained for compatibility with older product rows.
+    return round2(price);
+  }
+
   /**
    * Load a sale FOR RETURN (authoritative data for both the UI and the
    * validation inside the create transaction): header + items + per-item
@@ -129,6 +228,7 @@ export default function createReturnsRouter({
               si.original_unit_price, si.original_tax, si.original_total,
               si.tax, si.total,
               pr.track_stock,
+              pr.batch_tracking,
               COALESCE(agg.returned_quantity, 0) AS returned_quantity
        FROM sale_items si
        LEFT JOIN products pr ON pr.id = si.product_id
@@ -374,6 +474,37 @@ export default function createReturnsRouter({
     }
   );
 
+  /* --------------------------------- GET /exchanges/mode ------------- */
+  /*
+   * Effective exchange mode for the till UI. Read from the EXISTING
+   * company_settings row (exchange_mode: receipt | normal | both); unknown
+   * or missing values fall back to 'both' so old databases keep working.
+   */
+  router.get(
+    "/returns/exchanges/mode",
+    authenticate,
+    authorize(...RETURN_PERMISSIONS_CREATE),
+    async (req, res) => {
+      try {
+        let mode = "both";
+        try {
+          const settings = await db(
+            "SELECT exchange_mode FROM company_settings WHERE company_id=$1",
+            [req.user.companyId]
+          );
+          const raw = settings.rows[0]?.exchange_mode;
+          if (["receipt", "normal", "both"].includes(raw)) mode = raw;
+        } catch {
+          mode = "both"; // column predates this install — default open
+        }
+        return res.json({ success: true, data: { mode } });
+      } catch (error) {
+        console.error("Load exchange mode error:", error);
+        return res.status(500).json({ success: false, message: "Unable to load exchange mode" });
+      }
+    }
+  );
+
   /* -------------------------------------------- POST /returns/customer */
 
   router.post(
@@ -507,10 +638,11 @@ export default function createReturnsRouter({
           // Stock back into inventory via the EXISTING movement mechanism.
           // track_stock=false products skip the ledger like POS sales do.
           if (source.trackStock) {
+            const returnStoreId = storeScoped ? storeId : loaded.sale.store_id;
             await createInventoryMovement(client, {
               companyId: req.user.companyId,
               productId: item.productId,
-              storeId: storeScoped ? storeId : loaded.sale.store_id,
+              storeId: returnStoreId,
               movementType: "CUSTOMER_RETURN",
               quantityChange: quantity,
               referenceType: "SALE_RETURN",
@@ -518,6 +650,24 @@ export default function createReturnsRouter({
               reason: item.reason || reason,
               createdBy: req.user.id,
             });
+            /*
+             * Batch tracking: returned goods may not be reshelvable into
+             * their original batch (batch often unknown on a return), so
+             * batch-tracked products land in a per-return "RETURNS" batch
+             * at the return's store — visible, reportable, and manually
+             * mergeable/wastable via the batch API. Non-batch products are
+             * untouched.
+             */
+            if (source.batch_tracking) {
+              await upsertBatchRow(client, {
+                companyId: req.user.companyId,
+                storeId: returnStoreId,
+                productId: item.productId,
+                batchNumber: `RETURNS-${returnId.slice(0, 8).toUpperCase()}`,
+                expiryDate: null,
+                quantity,
+              });
+            }
           }
 
           refundAmount += source.unitRefundValue * quantity;
@@ -710,7 +860,7 @@ export default function createReturnsRouter({
 
         const parent = await client.query(
           `SELECT id, store_id, supplier_id FROM purchases
-           WHERE id=$1 AND company_id=$2 AND status='RECEIVED' ${storeScoped ? "AND store_id=$3" : ""} FOR UPDATE`,
+           WHERE id=$1 AND company_id=$2 AND status IN ('PARTIALLY_RECEIVED','RECEIVED') ${storeScoped ? "AND store_id=$3" : ""} FOR UPDATE`,
           storeScoped ? [purchaseId, req.user.companyId, storeId] : [purchaseId, req.user.companyId]
         );
         if (!parent.rows.length) throw new Error("Purchase not found for this store");
@@ -738,7 +888,7 @@ export default function createReturnsRouter({
             throw new Error("Invalid return line");
           }
           const source = await client.query(
-            "SELECT id, product_id, quantity FROM purchase_items WHERE id=$1 AND purchase_id=$2",
+            "SELECT id, product_id, quantity, received_quantity, unit_cost FROM purchase_items WHERE id=$1 AND purchase_id=$2",
             [item.purchaseItemId, purchaseId]
           );
           if (!source.rows.length || source.rows[0].product_id !== item.productId) {
@@ -751,7 +901,7 @@ export default function createReturnsRouter({
              WHERE sr.return_type='SUPPLIER' AND sr.status='COMPLETED' AND sr.purchase_id=$1 AND sri.purchase_item_id=$2`,
             [purchaseId, item.purchaseItemId]
           );
-          const remaining = round2(Number(source.rows[0].quantity) - Number(returned.rows[0].quantity));
+          const remaining = round2(Number(source.rows[0].received_quantity || 0) - Number(returned.rows[0].quantity));
           if (round2(quantity) > remaining) {
             throw new Error("Return quantity exceeds the remaining returnable quantity");
           }
@@ -770,6 +920,30 @@ export default function createReturnsRouter({
             reason: item.reason || reason,
             createdBy: req.user.id,
           });
+          const productInfo = await client.query(
+            "SELECT batch_tracking FROM products WHERE id=$1 AND company_id=$2",
+            [item.productId, req.user.companyId]
+          );
+          await syncBatchMovement(client, {
+            companyId: req.user.companyId,
+            storeId: storeScoped ? storeId : parent.rows[0].store_id,
+            productId: item.productId,
+            quantityChange: -quantity,
+            batchTracked: productInfo.rows[0]?.batch_tracking === true,
+          });
+          const credit = round2(Number((await client.query(
+            "SELECT unit_cost FROM purchase_items WHERE id=$1", [item.purchaseItemId]
+          )).rows[0]?.unit_cost || 0) * quantity);
+          if (parent.rows[0].supplier_id && credit > 0) {
+            await client.query(
+              `INSERT INTO supplier_ledger_entries
+                (company_id,supplier_id,store_id,entry_type,reference_type,reference_id,amount,debit,description,created_by)
+               VALUES ($1,$2,$3,'RETURN_CREDIT','PURCHASE_RETURN',$4,$5,false,$6,$7)`,
+              [req.user.companyId, parent.rows[0].supplier_id,
+                storeScoped ? storeId : parent.rows[0].store_id, returnId, credit,
+                reason || "Supplier purchase return", req.user.id]
+            );
+          }
         }
 
         await client.query("COMMIT");
@@ -792,6 +966,18 @@ export default function createReturnsRouter({
     }
   );
 
+  /* ---- EXCHANGE: POST /returns/exchanges + shared helpers live in
+     routes/exchanges.js (same permissions/idempotency/refund/stock
+     foundations — one router, one returns system). ---- */
+  registerExchangeRoutes({
+    router, db, pool, authenticate, authorize, tenantScope, nextReturnNumber, loadSalePayments,
+    allocateRefund, refundedByMethodForSale,
+    totalRefundedForSale, resolveSaleRef, lookupSaleLines, loadSaleVat,
+    loadExchangeProduct, catalogueUnitValue, writeAudit, createInventoryMovement,
+  });
+
+  /* --------------------------------- GET /supplier-returns/available */
+
   /* --------------------------------- GET /supplier-returns/available */
 
   router.get(
@@ -810,14 +996,14 @@ export default function createReturnsRouter({
         const result = await db(
           `SELECT p.id AS purchase_id, p.reference_number, p.purchase_date, p.supplier_name,
                   pi.id AS purchase_item_id, pi.product_id, pr.name AS product_name,
-                  pi.quantity AS received_quantity,
+                          pi.received_quantity,
                   COALESCE((SELECT SUM(ri.quantity) FROM stock_return_items ri
                             INNER JOIN stock_returns r ON r.id = ri.return_id
                             WHERE r.return_type='SUPPLIER' AND r.status='COMPLETED' AND r.purchase_id=p.id AND ri.purchase_item_id=pi.id),0) AS returned_quantity
            FROM purchases p
            INNER JOIN purchase_items pi ON pi.purchase_id = p.id
            INNER JOIN products pr ON pr.id = pi.product_id
-           WHERE p.company_id = $1 ${storeClause} AND p.status = 'RECEIVED'
+           WHERE p.company_id = $1 ${storeClause} AND p.status IN ('PARTIALLY_RECEIVED','RECEIVED')
            ORDER BY p.purchase_date DESC, p.created_at DESC`,
           params
         );

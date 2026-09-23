@@ -1,3 +1,4 @@
+import { withDomainSave } from "../services/platformDomainRecords.js";
 import express from "express";
 import {
   JARVES_ALLOWANCE_RESULTS,
@@ -12,6 +13,17 @@ export default function createAdminRouter({
   pool,
   canViewCompanyCustomers,
   bcrypt,
+  savePlatformRecord = null,
+  /*
+   * Administrative gate: Administrator/Admin/Owner roles AND a Platform
+   * Superadmin (the platform operator must be able to administer company-level
+   * surfaces even though its own role is not named "Administrator"). The rule
+   * is resolved once in server.js — this router only asks.
+   *
+   * Defaults to the company-admin check alone, so any existing caller or test
+   * that does not supply it keeps exactly today's behaviour.
+   */
+  hasCompanyAdminAccess = async (req) => canViewCompanyCustomers(req.user),
 }) {
   const router = express.Router();
 
@@ -344,7 +356,7 @@ export default function createAdminRouter({
    * PUT /api/admin/stores/:id
    */
   router.put("/admin/stores/:id", authenticate, authorize("store.edit"), async (req, res) => {
-    try { const result = await db("UPDATE stores SET name=$1, code=$2, address_line1=$3, city=$4, postcode=$5, phone=$6, active=$7, updated_at=NOW() WHERE id=$8 AND company_id=$9 RETURNING id,name,code,address_line1,city,postcode,phone,active", [req.body.name, req.body.code || null, req.body.addressLine1 || null, req.body.city || null, req.body.postcode || null, req.body.phone || null, req.body.active !== false, req.params.id, req.user.companyId]); if (!result.rows.length) return res.status(404).json({ success: false, message: "Store not found" }); res.json({ success: true, data: result.rows[0] }); } catch (error) { res.status(500).json({ success: false, message: "Unable to update store" }); }
+    try { const result = await withDomainSave({ pool, db, savePlatformRecord, key: "store", req, id: req.params.id, write: (db) => db("UPDATE stores SET name=$1, code=$2, address_line1=$3, city=$4, postcode=$5, phone=$6, active=$7, updated_at=NOW() WHERE id=$8 AND company_id=$9 RETURNING id,name,code,address_line1,city,postcode,phone,active", [req.body.name, req.body.code || null, req.body.addressLine1 || null, req.body.city || null, req.body.postcode || null, req.body.phone || null, req.body.active !== false, req.params.id, req.user.companyId]) }); if (!result.rows.length) return res.status(404).json({ success: false, message: "Store not found" }); res.json({ success: true, data: result.rows[0] }); } catch (error) { if (error.code === "PLATFORM_RECORD_INVALID") return res.status(error.status).json({ success: false, code: error.code, message: error.message }); res.status(500).json({ success: false, message: "Unable to update store" }); }
   });
 
   /*
@@ -358,7 +370,7 @@ export default function createAdminRouter({
    * Admin/Owner only (canViewCompanyCustomers), like till management.
    */
   router.post("/admin/stores/:id/self-checkout-key", authenticate, async (req, res) => {
-    if (!(await canViewCompanyCustomers(req.user))) return res.status(403).json({ success: false, message: "Administrator permission required" });
+    if (!(await hasCompanyAdminAccess(req))) return res.status(403).json({ success: false, message: "Administrator permission required" });
     try {
       const store = await db("SELECT id FROM stores WHERE id = $1 AND company_id = $2", [req.params.id, req.user.companyId]);
       if (!store.rows.length) return res.status(404).json({ success: false, message: "Store not found" });
@@ -384,7 +396,7 @@ export default function createAdminRouter({
    * PUT /api/admin/tills/:id
    */
   router.put("/admin/tills/:id", authenticate, async (req, res) => {
-    if (!(await canViewCompanyCustomers(req.user))) return res.status(403).json({ success: false, message: "Administrator permission required" });
+    if (!(await hasCompanyAdminAccess(req))) return res.status(403).json({ success: false, message: "Administrator permission required" });
     try { const result = await db("UPDATE terminals t SET name=$1, terminal_number=$2, device_identifier=$3, active=$4 FROM stores s WHERE t.id=$5 AND t.store_id=s.id AND s.company_id=$6 RETURNING t.id,t.name,t.terminal_number,t.device_identifier,t.active", [req.body.name, req.body.terminalNumber || null, req.body.deviceIdentifier || null, req.body.active !== false, req.params.id, req.user.companyId]); if (!result.rows.length) return res.status(404).json({ success: false, message: "Till not found" }); res.json({ success: true, data: result.rows[0] }); } catch (error) { res.status(500).json({ success: false, message: "Unable to update till" }); }
   });
 
@@ -392,7 +404,7 @@ export default function createAdminRouter({
    * POST /api/admin/users
    */
   router.post("/admin/users", authenticate, authorize("user.create"), async (req, res) => {
-    if (!(await canViewCompanyCustomers(req.user))) return res.status(403).json({ success: false, message: "Administrator permission required" });
+    if (!(await hasCompanyAdminAccess(req))) return res.status(403).json({ success: false, message: "Administrator permission required" });
     const { username, fullName, email = null, password, roleId = null, storeId = null } = req.body;
     if (!username || !fullName || !password) return res.status(400).json({ success: false, message: "Username, full name and password are required" });
     try {
@@ -406,9 +418,9 @@ export default function createAdminRouter({
       );
       if (!assignment.rows[0].valid_role || !assignment.rows[0].valid_store) return res.status(400).json({ success: false, message: "Role or store does not belong to this company" });
       const hash = await bcrypt.hash(password, 12);
-      const result = await db("INSERT INTO users (company_id,store_id,role_id,username,password_hash,full_name,email) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id,username,full_name,email,active,store_id,role_id", [req.user.companyId, storeId || null, roleId || null, String(username).trim().toLowerCase(), hash, String(fullName).trim(), email || null]);
+      const result = await withDomainSave({ pool, db, savePlatformRecord, key: "employee", req, write: (db) => db("INSERT INTO users (company_id,store_id,role_id,username,password_hash,full_name,email) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id,username,full_name,email,active,store_id,role_id", [req.user.companyId, storeId || null, roleId || null, String(username).trim().toLowerCase(), hash, String(fullName).trim(), email || null]) });
       res.status(201).json({ success: true, data: result.rows[0] });
-    } catch (error) { res.status(error.code === "23505" ? 409 : 500).json({ success: false, message: error.code === "23505" ? "Username already exists" : "Unable to create user" }); }
+    } catch (error) { if (error.code === "PLATFORM_RECORD_INVALID") return res.status(error.status).json({ success: false, code: error.code, message: error.message }); res.status(error.code === "23505" ? 409 : 500).json({ success: false, message: error.code === "23505" ? "Username already exists" : "Unable to create user" }); }
   });
 
   /*
@@ -428,10 +440,10 @@ export default function createAdminRouter({
       const passwordClause = req.body.password ? ", password_hash = $8" : "";
       const params = [req.body.fullName, req.body.email || null, req.body.roleId || null, req.body.storeId || null, req.body.active !== false, req.params.id, req.user.companyId];
       if (req.body.password) params.push(await bcrypt.hash(req.body.password, 12));
-      const result = await db(`UPDATE users SET full_name=$1,email=$2,role_id=$3,store_id=$4,active=$5,updated_at=NOW()${passwordClause} WHERE id=$6 AND company_id=$7 RETURNING id,username,full_name,email,active,store_id,role_id`, params);
+      const result = await withDomainSave({ pool, db, savePlatformRecord, key: "employee", req, id: req.params.id, write: (db) => db(`UPDATE users SET full_name=$1,email=$2,role_id=$3,store_id=$4,active=$5,updated_at=NOW()${passwordClause} WHERE id=$6 AND company_id=$7 RETURNING id,username,full_name,email,active,store_id,role_id`, params) });
       if (!result.rows.length) return res.status(404).json({ success: false, message: "User not found" });
       res.json({ success: true, data: result.rows[0] });
-    } catch (error) {
+    } catch (error) { if (error.code === "PLATFORM_RECORD_INVALID") return res.status(error.status).json({ success: false, code: error.code, message: error.message });
       res.status(500).json({ success: false, message: "Unable to update user" });
     }
   });
@@ -482,14 +494,14 @@ export default function createAdminRouter({
     const { name, code, addressLine1, city, postcode, phone } = req.body || {};
     if (!name) return res.status(400).json({ success: false, message: 'Store name is required' });
     try {
-      const result = await db(
+      const result = await withDomainSave({ pool, db, savePlatformRecord, key: "store", req, write: (db) => db(
         `INSERT INTO stores (company_id, name, code, address_line1, city, postcode, phone)
          VALUES ($1, $2, $3, $4, $5, $6, $7)
          RETURNING id, name, code, address_line1, city, postcode, phone, active, created_at`,
         [req.user.companyId, name, code || null, addressLine1 || null, city || null, postcode || null, phone || null]
-      );
+      ) });
       res.status(201).json({ success: true, data: result.rows[0] });
-    } catch (error) {
+    } catch (error) { if (error.code === "PLATFORM_RECORD_INVALID") return res.status(error.status).json({ success: false, code: error.code, message: error.message });
       res.status(500).json({ success: false, message: 'Unable to create store' });
     }
   });
@@ -514,7 +526,7 @@ export default function createAdminRouter({
    * Returns today's sales, transaction count and low-stock item count for a store.
    */
   router.get('/admin/stores/:id/stats', authenticate, async (req, res) => {
-    if (!(await canViewCompanyCustomers(req.user))) return res.status(403).json({ success: false, message: 'Administrator permission required' });
+    if (!(await hasCompanyAdminAccess(req))) return res.status(403).json({ success: false, message: "Administrator permission required" });
     try {
       const storeCheck = await db('SELECT 1 FROM stores WHERE id=$1 AND company_id=$2', [req.params.id, req.user.companyId]);
       if (!storeCheck.rows.length) return res.status(404).json({ success: false, message: 'Store not found' });

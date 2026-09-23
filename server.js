@@ -10,13 +10,20 @@ import { initializeDatabase } from "./database/init.js";
 import { createAuditWriter } from "./services/auditLog.js";
 import { createSessionToken, createAuthenticate } from "./services/session.js";
 import createTillRouter from "./routes/till.js";
+import createHeldSalesRouter from "./routes/heldSales.js";
 import createCustomersRouter from "./routes/customers.js";
 import createProductsRouter from "./routes/products.js";
+import createProductFeaturesRouter from "./routes/productFeatures.js";
+import createPricingRouter from "./routes/pricing.js";
 import createEanLookupRouter from "./routes/eanLookup.js";
 import createSuppliersRouter from "./routes/suppliers.js";
 import createPurchasesRouter from "./routes/purchases.js";
+import createSupplierAccountsRouter from "./routes/supplierAccounts.js";
 import createInventoryRouter from "./routes/inventory.js";
+import createInventoryBatchesRouter from "./routes/inventoryBatches.js";
+
 import createSalesRouter from "./routes/sales.js";
+import createLayawaysRouter from "./routes/layaways.js";
 import createSelfCheckoutRouter, { createSelfCheckoutModeGate } from "./routes/selfCheckout.js";
 import createScanGoRouter from "./routes/scanAndGo.js";
 import createReturnsRouter from "./routes/returns.js";
@@ -26,6 +33,10 @@ import createSettingsRouter from "./routes/settings.js";
 import createWhatsAppSettingsRouter from "./routes/whatsapp.js";
 import createInvoiceDeliveryRouter from "./routes/invoiceDelivery.js";
 import createAdminRouter from "./routes/admin.js";
+import createBusinessDivisionsRouter from "./routes/businessDivisions.js";
+import createAttendanceRouter from "./routes/attendance.js"; // Staff clock in/out — routes/attendance.js
+import createAuditRouter from "./routes/audit.js"; // T10-AUDIT: central audit log API
+
 import createIntegrationsRouter from "./routes/integrations.js";
 import createDashboardRouter from "./routes/dashboard.js";
 import createGlobalProductsRouter from "./routes/globalProducts.js";
@@ -34,9 +45,20 @@ import createOnlineRouter from "./routes/online.js";
 import createCustomerAuthRouter from "./routes/customerAuth.js";
 import createAccountingExportRouter from "./routes/accountingExport.js"; // T10V - accounting integration export
 import createJarvisRouter from "./routes/jarvis.js"; // JARVIS V1 - authenticated AI assistant questions
+import createSuperadminRouter from "./routes/superadmin.js";
+import createPlatformRouter from "./routes/platform.js";
+import createPackagesRouter from "./routes/packages.js";
+import { saveDomainConfiguration } from "./services/platformDomainRecords.js";
+import createAdvancedPlatformRouter from "./routes/advancedPlatform.js";
+import { initializePlatformMetadata } from "./services/platformMetadata.js";
+import { getCompanyEntitlements } from "./services/licensing.js";
+import { requireEntitlement } from "./services/licensing.js";
 import { createJarvis } from "./services/jarvis/index.js";
 import { createJarvisTools } from "./services/jarvis/tools/index.js"; // JARVES V2 - read-only Sales tool
 import { createJarvesAccessChecker } from "./services/jarvis/licensing.js"; // JARVES V2 - licence gate
+import { companyAdministrativeAccess, isPlatformSuperadmin, permissionAllows } from "./services/authorization.js";
+import { createTenantPoolManager, getRequestHostname, resolveTenantFromHostname } from "./services/tenantResolver.js";
+import { createTenantDatabaseRouter, createRequestDatabaseMiddleware, getRequestDatabaseContext, getRequestPool } from "./services/tenantDatabase.js";
 /* Inventory primitives live in services/inventory.js (shared with every
  * stock writer: POS sales, purchases, returns, adjustments). */
 import {
@@ -113,7 +135,31 @@ const pool = process.env.DATABASE_URL
     })
   : null;
 
+const tenantPoolManager = createTenantPoolManager({
+  env: process.env,
+  PoolFactory: Pool,
+  poolOptions: {
+    connectionTimeoutMillis: 15000,
+    idle_in_transaction_session_timeout: 30000,
+    lock_timeout: 15000,
+    statement_timeout: 120000,
+  },
+});
+
 app.locals.pool = pool;
+app.locals.tenantPoolManager = tenantPoolManager;
+const tenantDatabaseRouter = pool
+  ? createTenantDatabaseRouter({ controlPool: pool, sharedPool: pool, PoolFactory: Pool, env: process.env })
+  : null;
+app.locals.tenantDatabaseRouter = tenantDatabaseRouter;
+
+app.use((req, res, next) => {
+  const hostname = getRequestHostname(req);
+  const tenant = resolveTenantFromHostname(hostname, process.env, { defaultTenantKey: "default" });
+  req.tenant = tenant;
+  req.tenantPool = pool;
+  next();
+});
 /* T10P: Scan & Go checkout deducts stock through the SAME inventory ledger
  * helper the till and online orders use (no second inventory mechanism). */
 app.locals.createInventoryMovement = createInventoryMovement;
@@ -144,12 +190,17 @@ process.on("uncaughtException", (error) => {
   console.error("Uncaught exception (server kept alive):", error);
 });
 
-async function db(query, params = []) {
-  if (!pool) {
+async function db(query, params = [], reqOverride = null) {
+  const request = reqOverride || null;
+  const requestContext = getRequestDatabaseContext();
+  const tenantPool = requestContext?.pool || request?.tenantPool || (request ? tenantPoolManager.getPoolForRequest(request) : null);
+  const chosenPool = tenantPool || pool;
+
+  if (!chosenPool) {
     throw new Error("DATABASE_URL is not configured");
   }
 
-  return pool.query(query, params);
+  return chosenPool.query(query, params);
 }
 
 const paymentProviders = new Map();
@@ -182,7 +233,16 @@ const writeAudit = createAuditWriter({ db });
 */
 
 const createToken = createSessionToken;
-const authenticate = createAuthenticate();
+const authenticate = createAuthenticate({
+  onAuthenticated: async (req, res, next) => {
+    if (!tenantDatabaseRouter || req.user?.isSuperadmin === true) {
+      req.tenantDatabase = { companyId: req.user?.companyId || null, mode: "ONEPOS_MANAGED", pool };
+      req.tenantPool = pool;
+      return next();
+    }
+    return createRequestDatabaseMiddleware({ router: tenantDatabaseRouter })(req, res, next);
+  },
+});
 
 /*
 |--------------------------------------------------------------------------
@@ -236,6 +296,57 @@ async function getRolePermissionCodes(roleId) {
   return result.rows.map((row) => row.code);
 }
 
+/*
+ * Platform Superadmin resolution for request-scoped checks.
+ *
+ * The session token already carries `isSuperadmin` (services/session.js), but
+ * an authoritative check re-reads the row so a revoked flag cannot keep working
+ * until the token expires. The answer is cached on the request for that request
+ * only, because store-scope checks run inside loops (reports iterate every
+ * store) and must not fan out into one query per store.
+ *
+ * The predicate itself lives in services/authorization.js — this is only the
+ * database resolution of it.
+ */
+async function isSuperadminRequest(req) {
+  const user = req?.user;
+  if (!user?.id) return false;
+  if (user.__superadminChecked === true) return user.__superadmin === true;
+  const result = await db(
+    "SELECT is_superadmin FROM users WHERE id=$1 AND active=true",
+    [user.id]
+  );
+  user.__superadmin = isPlatformSuperadmin({ isSuperadmin: result.rows[0]?.is_superadmin === true });
+  user.__superadminChecked = true;
+  return user.__superadmin;
+}
+
+/*
+ * Company-administrative access for the caller's OWN company.
+ *
+ * The single predicate behind the "Administrator permission required" gates.
+ * Held by Administrator/Admin/Owner roles AND by a Platform Superadmin: the
+ * platform operator must be able to administer company-level surfaces (stores,
+ * tills, users, customer edits) even though its own role is not named
+ * "Administrator", and the runtime-access model must not reject it with a 403
+ * on a page it is allowed to reach.
+ *
+ * Deliberately NOT the same thing as canViewCompanyCustomers(), which ALSO
+ * drives DATA SCOPE decisions (company-wide vs store-restricted reads) in
+ * customers.js and reports.js. Widening that helper would silently change
+ * query scope, so the administrative gate is its own explicitly named
+ * predicate.
+ *
+ * The company context is always req.user's own — this never grants cross-tenant
+ * access.
+ */
+async function hasCompanyAdminAccess(req) {
+  return companyAdministrativeAccess({
+    isCompanyAdminRole: await canViewCompanyCustomers(req.user),
+    isSuperadmin: await isSuperadminRequest(req),
+  });
+}
+
 function authorize(...permissionCodes) {
   return async (req, res, next) => {
     if (!req.user) {
@@ -246,14 +357,14 @@ function authorize(...permissionCodes) {
     }
 
     try {
-      const isAdmin = await canViewCompanyCustomers(req.user);
-      if (isAdmin) {
+      const isSuperadmin = await isSuperadminRequest(req);
+      if (isSuperadmin) {
         return next();
       }
 
       const codes = await getRolePermissionCodes(req.user.roleId);
 
-      if (permissionCodes.some((code) => codes.includes(code))) {
+      if (permissionAllows({ permissions: codes, requiredPermissions: permissionCodes })) {
         return next();
       }
 
@@ -313,11 +424,28 @@ async function canViewCompanyCustomers(user) {
 }
 
 async function canAccessStore(user, storeId) {
+  if (!storeId) return false;
+
   // Admin/Owner bypass
   if (await canViewCompanyCustomers(user)) {
     return true;
   }
-  
+
+  /*
+   * Platform Superadmin: may operate on any store that belongs to the CURRENT
+   * company context — managing the platform inside a company includes that
+   * company's stores. The company boundary is NEVER crossed (the store is
+   * verified against user.companyId, never assumed), so Company A data can
+   * never be reached from a Company B context, and no store is fabricated.
+   */
+  if (await isSuperadminRequest({ user })) {
+    const store = await db(
+      "SELECT 1 FROM stores WHERE id=$1 AND company_id=$2 LIMIT 1",
+      [storeId, user.companyId]
+    );
+    return store.rows.length > 0;
+  }
+
   // Check if store is in user's assigned stores
   if (!user.assignedStoreIds || !Array.isArray(user.assignedStoreIds)) {
     return false;
@@ -386,7 +514,15 @@ app.post("/api/auth/login", async (req, res) => {
       });
     }
 
-    const result = await db(
+    const loginPool = req.tenantPool || tenantPoolManager.getPoolForRequest(req) || pool;
+    if (!loginPool) {
+      return res.status(503).json({
+        success: false,
+        message: "Tenant database is not configured",
+      });
+    }
+
+    const result = await loginPool.query(
       `
       SELECT
         u.id,
@@ -397,6 +533,7 @@ app.post("/api/auth/login", async (req, res) => {
         u.store_id,
         u.role_id,
         u.active,
+        u.is_superadmin,
         r.name AS role_name
       FROM users u
       LEFT JOIN roles r ON r.id = u.role_id
@@ -434,7 +571,7 @@ app.post("/api/auth/login", async (req, res) => {
       });
     }
 
-    await db(
+    await loginPool.query(
       `
       UPDATE users
       SET last_login_at = NOW()
@@ -455,6 +592,7 @@ app.post("/api/auth/login", async (req, res) => {
         role: user.role_name,
         companyId: user.company_id,
         storeId: user.store_id,
+        isSuperadmin: user.is_superadmin === true,
       },
     });
   } catch (error) {
@@ -483,6 +621,7 @@ app.get("/api/auth/me", authenticate, async (req, res) => {
         u.full_name,
         u.company_id,
         u.store_id,
+        u.is_superadmin,
         r.name AS role_name
       FROM users u
       LEFT JOIN roles r ON r.id = u.role_id
@@ -509,6 +648,7 @@ app.get("/api/auth/me", authenticate, async (req, res) => {
         role: user.role_name,
         companyId: user.company_id,
         storeId: user.store_id,
+        isSuperadmin: user.is_superadmin === true,
       },
     });
   } catch (error) {
@@ -529,9 +669,10 @@ app.get("/api/auth/me", authenticate, async (req, res) => {
 | GET /api/auth/me/permissions
 |
 | Read-only convenience for UI gating — reports the SAME permission model
-| the server-side `authorize()` helper enforces: Administrator/Admin/Owner
-| roles bypass permission checks (reported via `isAdmin`), every other role
-| reports the codes granted through role_permissions. It never grants
+| the server-side `authorize()` helper enforces: Superadmin and
+| Administrator/Admin/Owner roles bypass permission checks (reported via
+| `isAdmin`), every other role reports the codes granted through
+| role_permissions. It never grants
 | anything on its own; every endpoint keeps enforcing its own checks.
 | (T10B-SMALL: the frontend AdminLayout calls this to show/hide gated
 | sidebar entries such as Reports, Returns, Order Prep and Integrations.)
@@ -539,10 +680,14 @@ app.get("/api/auth/me", authenticate, async (req, res) => {
 
 app.get("/api/auth/me/permissions", authenticate, async (req, res) => {
   try {
-    const isAdmin = await canViewCompanyCustomers(req.user);
+    /* One shared resolution of the Platform Superadmin rule (cached per
+       request), so this endpoint, `authorize` and the runtime catalogue can
+       never disagree. */
+    const isSuperadmin = await isSuperadminRequest(req);
+    const isAdmin = isSuperadmin || await canViewCompanyCustomers(req.user);
 
     let permissions = [];
-    if (!isAdmin && req.user.roleId) {
+    if (!isSuperadmin && req.user.roleId) {
       permissions = await getRolePermissionCodes(req.user.roleId);
     }
 
@@ -551,6 +696,8 @@ app.get("/api/auth/me/permissions", authenticate, async (req, res) => {
       data: {
         isAdmin,
         permissions,
+        isSuperadmin,
+        entitlements: await getCompanyEntitlements(db, req.user.companyId),
       },
     });
   } catch (error) {
@@ -560,6 +707,84 @@ app.get("/api/auth/me/permissions", authenticate, async (req, res) => {
       success: false,
       message: "Unable to retrieve permissions",
     });
+  }
+});
+
+/*
+|--------------------------------------------------------------------------
+| CURRENT USER UI PREFERENCES (onePOS Admin presentation)
+|--------------------------------------------------------------------------
+|
+| GET  /api/auth/me/preferences  — the caller's own presentation preferences
+| PUT  /api/auth/me/preferences  — update them
+|
+| Per-USER (not per-company) storage of layout preset / appearance / accent
+| choices, so each user picks their own admin presentation without changing
+| anybody else's interface. Pure presentation: no permissions are encoded or
+| checked here beyond authentication, and a user can only ever touch their
+| own row. A 500 is returned when the database is unreachable — the client
+| falls back to its localStorage mirror in that case.
+*/
+
+const USER_PREF_FIELDS = Object.freeze({
+  preset: ["modern", "enterprise", "compact"],
+  appearance: ["light", "dark", "system"],
+  accent: ["teal", "blue", "purple", "green", "orange", "red"],
+  sidebarCollapsed: "boolean",
+});
+
+function normalizeUserPreferences(raw) {
+  const source = raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {};
+  const preferences = {};
+  for (const [field, allowed] of Object.entries(USER_PREF_FIELDS)) {
+    if (allowed === "boolean") {
+      preferences[field] = source[field] === true;
+      continue;
+    }
+    preferences[field] = allowed.includes(source[field]) ? source[field] : allowed[0];
+  }
+  return preferences;
+}
+
+app.get("/api/auth/me/preferences", authenticate, async (req, res) => {
+  try {
+    if (!pool) return res.json({ success: true, data: normalizeUserPreferences(null) });
+    const result = await db(
+      "SELECT preferences FROM user_preferences WHERE user_id=$1",
+      [req.user.id]
+    );
+    res.json({
+      success: true,
+      data: normalizeUserPreferences(result.rows[0]?.preferences),
+    });
+  } catch (error) {
+    console.error("Current user preferences error:", error);
+    res.status(500).json({ success: false, message: "Unable to retrieve preferences" });
+  }
+});
+
+app.put("/api/auth/me/preferences", authenticate, async (req, res) => {
+  try {
+    const preferences = normalizeUserPreferences(req.body);
+    if (!pool) return res.json({ success: true, data: preferences });
+    const result = await db(
+      `
+      INSERT INTO user_preferences (user_id, preferences, updated_at)
+      VALUES ($1, $2::jsonb, NOW())
+      ON CONFLICT (user_id) DO UPDATE SET
+        preferences = EXCLUDED.preferences,
+        updated_at = NOW()
+      RETURNING preferences
+      `,
+      [req.user.id, JSON.stringify(preferences)]
+    );
+    res.json({
+      success: true,
+      data: normalizeUserPreferences(result.rows[0]?.preferences),
+    });
+  } catch (error) {
+    console.error("Save user preferences error:", error);
+    res.status(500).json({ success: false, message: "Unable to save preferences" });
   }
 });
 
@@ -659,7 +884,10 @@ app.use(
     db,
     pool,
     canViewCompanyCustomers,
+    hasCompanyAdminAccess,
     associateCustomerWithStore,
+    savePlatformRecord: saveDomainConfiguration,
+    requireLoyaltyEntitlement: requireEntitlement(db, "loyalty"),
   })
 );
 
@@ -674,7 +902,15 @@ app.use(
 app.use("/api", createEanLookupRouter({ authenticate, db }));
 
 /* T10D: Self-Checkout session routes (enter/exit the restricted mode). */
-app.use("/api", createSelfCheckoutRouter({ authenticate, authorize, db, bcrypt, writeAudit }));
+app.use("/api", createSelfCheckoutRouter({
+  authenticate,
+  authorize,
+  db,
+  bcrypt,
+  writeAudit,
+  requireSelfCheckoutEntitlement: requireEntitlement(db, "self_checkout"),
+  getCompanyEntitlements: (companyId) => getCompanyEntitlements(db, companyId),
+}));
 
 /* T10P: Scan & Go — customer scan sessions (token-authenticated, store/company
  * resolved server-side from the session; see routes/scanAndGo.js). */
@@ -700,10 +936,27 @@ app.use(
     jarvis,
     getRolePermissionCodes,
     jarvesAccess,
+    entitlementAccess: (companyId) => getCompanyEntitlements(db, companyId),
   })
 );
+app.use("/api", createSuperadminRouter({ authenticate, db, pool, tenantDatabaseRouter, env: process.env }));
+app.use("/api", createPlatformRouter({ authenticate, authorize, db, pool, canViewCompanyCustomers }));
+app.use("/api", createPackagesRouter({ authenticate, authorize, db, pool }));
+app.use("/api", createAdvancedPlatformRouter({ authenticate, authorize, db }));
 
-app.use("/api", createSettingsRouter({ authenticate, authorize, db, pool, writeAudit, testPaymentTerminal }));
+app.use("/api", createSettingsRouter({
+  authenticate,
+  authorize,
+  db,
+  pool,
+  writeAudit,
+  testPaymentTerminal,
+  requireLoyaltyEntitlement: (req, res, next) => {
+    const keys = ["loyaltyEnabled", "loyaltyEarningRate", "loyaltyMinSaleTotal", "loyaltyRedeemValuePerPoint", "loyaltyMinPointsRedeem"];
+    if (!keys.some((key) => Object.prototype.hasOwnProperty.call(req.body || {}, key))) return next();
+    return requireEntitlement(db, "loyalty")(req, res, next);
+  },
+}));
 app.use("/api", createCustomerAuthRouter); /* routes/customerAuth.js exports a router instance (self-contained) */
 app.use("/api", createWhatsAppSettingsRouter({ authenticate, authorize, db, pool, writeAudit }));
 app.use("/api", createInvoiceDeliveryRouter({ authenticate, authorize, db, pool, writeAudit }));
@@ -737,7 +990,22 @@ app.use(
     pool,
     createInventoryMovement,
     writeAudit,
+    canAccessStore,
+    savePlatformRecord: saveDomainConfiguration,
   })
+);
+app.use(
+  "/api",
+  createProductFeaturesRouter({
+    authenticate,
+    authorize,
+    db,
+    pool,
+  })
+);
+app.use(
+  "/api",
+  createPricingRouter({ authenticate, authorize, db, pool })
 );
 
 /*
@@ -768,6 +1036,21 @@ app.use(
   })
 );
 
+/*
+ * BATCH / EXPIRY TRACKING — store-level batch API (same access model,
+ * same movement primitive; batches never bypass the authoritative stock).
+ */
+app.use(
+  "/api",
+  createInventoryBatchesRouter({
+    authenticate,
+    authorize,
+    db,
+    pool,
+    canAccessStore,
+  })
+);
+
 /* T10H: read-only replenishment suggestions (planning layer, no writes). */
 app.use("/api", createReplenishmentRouter({ authenticate, authorize, db }));
 
@@ -794,6 +1077,8 @@ app.use(
     authenticate,
     authorize,
     db,
+    pool,
+    savePlatformRecord: saveDomainConfiguration,
   })
 );
 
@@ -820,16 +1105,59 @@ app.use(
     db,
     pool,
     createInventoryMovement,
+    savePlatformRecord: saveDomainConfiguration,
   })
 );
+app.use(
+  "/api",
+  createSupplierAccountsRouter({ authenticate, authorize, db, pool })
+);
 
-app.use("/api", createSalesRouter({ authenticate, authorize, db, pool, createInventoryMovement, associateCustomerWithStore, writeAudit, getRolePermissionCodes, canViewCompanyCustomers, selfCheckoutMode: (req) => req.user?.mode === "self_checkout" }));
+app.use("/api", createSalesRouter({ authenticate, authorize, db, pool, requestPool: getRequestPool, createInventoryMovement, associateCustomerWithStore, writeAudit, getRolePermissionCodes, canViewCompanyCustomers, selfCheckoutMode: (req) => req.user?.mode === "self_checkout" }));
+app.use("/api", createLayawaysRouter({ authenticate, authorize, db, pool, createInventoryMovement }));
 
 app.use("/api", createReturnsRouter({ authenticate, authorize, db, pool, createInventoryMovement, writeAudit }));
 
-app.use("/api", createAdminRouter({ authenticate, authorize, db, pool, canViewCompanyCustomers, bcrypt }));
+app.use("/api", createAdminRouter({ authenticate, authorize, db, pool, canViewCompanyCustomers, hasCompanyAdminAccess, bcrypt, savePlatformRecord: saveDomainConfiguration }));
+app.use("/api", createBusinessDivisionsRouter({ authenticate, authorize, db, pool }));
 
-app.use("/api", createReportsRouter({ authenticate, authorize, db }));
+/*
+|--------------------------------------------------------------------------
+| STAFF ATTENDANCE (CLOCK IN / CLOCK OUT)
+|--------------------------------------------------------------------------
+|
+| Attendance sessions are recorded against the EXISTING users / companies /
+| stores (no separate employee identity). Clock in/out times and worked
+| duration are always set server-side (NOW() + timestamp arithmetic) — the
+| client never supplies them. Management visibility is gated by the
+| attendance.view permission with the same admin/owner bypass everywhere
+| else uses; records are company-scoped and store-restricted through the
+| existing canViewCompanyCustomers / canAccessStore helpers.
+*/
+app.use(
+  "/api",
+  createAttendanceRouter({
+    authenticate,
+    db,
+    canViewCompanyCustomers,
+    canAccessStore,
+    writeAudit,
+  })
+);
+
+/* T10-AUDIT: central audit log (read-only) — see routes/audit.js. */
+app.use(
+  "/api",
+  createAuditRouter({
+    authenticate,
+    authorize,
+    db,
+    canViewCompanyCustomers,
+    canAccessStore,
+  })
+);
+
+app.use("/api", createReportsRouter({ authenticate, authorize, db, canAccessStore, canViewCompanyCustomers }));
 
 /*
 |--------------------------------------------------------------------------
@@ -892,41 +1220,16 @@ app.use(
 );
 
 
-app.get("/api/held-sales", authenticate, authorize("sale.hold"), async (req, res) => {
-  try {
-    const result = await db(
-      `SELECT id, customer_id, items, discount_type, discount_value, notes, created_at FROM held_sales WHERE company_id=$1 AND store_id=$2 AND user_id=$3 ORDER BY created_at DESC`,
-      [req.user.companyId, req.user.storeId, req.user.id]
-    );
-    res.json({ success: true, data: result.rows });
-  } catch (error) {
-    console.error("Load held sales error:", error);
-    res.status(500).json({ success: false, message: "Unable to load held sales" });
-  }
-});
-
-app.post("/api/held-sales", authenticate, authorize("sale.hold"), async (req, res) => {
-  const { items, miscLines, customerId = null, discountType = null, discountValue = 0, notes = null } = req.body;
-  if (!Array.isArray(items) || !items.length) return res.status(400).json({ success: false, message: "Cannot hold an empty sale" });
-  try {
-    const result = await db(
-      `INSERT INTO held_sales (company_id,store_id,user_id,customer_id,items,discount_type,discount_value,notes) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id,created_at`,
-      [req.user.companyId, req.user.storeId, req.user.id, customerId, JSON.stringify({ items, miscLines: Array.isArray(miscLines) ? miscLines : [] }), discountType, Number(discountValue) || 0, notes || null]
-    );
-    res.status(201).json({ success: true, message: "Sale held", data: result.rows[0] });
-  } catch (error) {
-    console.error("Hold sale error:", error);
-    res.status(500).json({ success: false, message: "Unable to hold sale" });
-  }
-});
-
-app.delete("/api/held-sales/:id", authenticate, authorize("sale.hold"), async (req, res) => {
-  try {
-    const result = await db("DELETE FROM held_sales WHERE id=$1 AND company_id=$2 AND store_id=$3 AND user_id=$4 RETURNING id", [req.params.id, req.user.companyId, req.user.storeId, req.user.id]);
-    if (!result.rows.length) return res.status(404).json({ success: false, message: "Held sale not found" });
-    res.json({ success: true, message: "Held sale removed" });
-  } catch (error) { res.status(500).json({ success: false, message: "Unable to remove held sale" }); }
-});
+/*
+|--------------------------------------------------------------------------
+| HELD SALES (SUSPENDED TRANSACTIONS) — hardened (routes/heldSales.js)
+|--------------------------------------------------------------------------
+|
+| Atomic resume claim (POST /api/held-sales/:id/resume), optional
+| store-wide listing (?scope=store), payload limits. Same authentication,
+| sale.hold permission gate and company/store/user scoping as before.
+*/
+app.use("/api", createHeldSalesRouter({ authenticate, authorize, db }));
 
 /*
 |--------------------------------------------------------------------------
@@ -1280,6 +1583,8 @@ app.get("/api/setup/database", async (req, res) => {
       ["payment.manage", "Manage Payments"],
       ["integration.manage", "Manage Integrations"],
       ["settings.manage", "Manage Settings"],
+      ["package.manage", "Manage Packages"],
+      ["module.access.manage", "Manage Module Access"],
       ["online_orders.view", "View Online Orders"],
       ["online_orders.manage", "Manage Online Orders"],
       ["online_orders.configure", "Configure Online Platforms"],
@@ -1412,6 +1717,7 @@ async function startServer() {
         await db("SELECT NOW()");
 
         await initializeDatabase(pool);
+        await initializePlatformMetadata(pool, { includeOperationalObjects: true });
 
         console.log("onePOS: database ready");
       } catch (dbError) {

@@ -2,6 +2,94 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ==========================================================================
+   onePOS Admin presentation tokens — :root FALLBACKS.
+   These default values are the original Light palette; the admin shell rewrites
+   them at runtime per user preference (src/utils/adminPreferences.js). The POS
+   / till and marketing site keep these defaults unless an admin preference is
+   applied. slate-50..900 in tailwind.config.js point at these variables.
+   ========================================================================== */
+
+:root {
+  --onepos-surface: hsl(210 20% 97%);
+  --onepos-surface-muted: hsl(210 20% 98%);
+  --onepos-surface-alt: hsl(210 14% 93%);
+  --onepos-surface-raised: hsl(0 0% 100%);
+  --onepos-surface-hover: hsl(210 13% 91%);
+  --onepos-border: hsl(210 14% 89%);
+  --onepos-border-strong: hsl(210 10% 84%);
+  --onepos-text-heading: hsl(215 25% 16%);
+  --onepos-text-primary: hsl(215 23% 21%);
+  --onepos-text-body: hsl(214 15% 33%);
+  --onepos-text-secondary: hsl(212 11% 44%);
+  --onepos-text-secondary-strong: hsl(212 16% 38%);
+  --onepos-text-muted: hsl(210 8% 63%);
+  --onepos-shadow: 0 1px 2px rgba(16, 42, 39, 0.06), 0 1px 3px rgba(16, 42, 39, 0.04);
+  --onepos-accent-50: #eef7f6;
+  --onepos-accent-100: #d7ecea;
+  --onepos-accent-200: #b0d9d5;
+  --onepos-accent-300: #82c1bb;
+  --onepos-accent-400: #4fa69e;
+  --onepos-accent-500: #2f8a82;
+  --onepos-accent-600: #176f6a;
+  --onepos-accent-700: #125a56;
+  --onepos-accent-800: #104744;
+  --onepos-accent-900: #0d3b39;
+  --onepos-page-gap: 22px;
+  --onepos-control-height: 38px;
+  --onepos-radius: 12px;
+  --onepos-radius-sm: 8px;
+  --onepos-sidebar-width: 248px;
+  --onepos-sidebar-width-collapsed: 68px;
+  --onepos-header-height: 58px;
+  /* Structural primitives (defaults = Modern + Light; the shell rewrites them
+     per user preset/appearance/accent). */
+  --onepos-section-gap: 20px;
+  --onepos-card-pad: 18px;
+  --onepos-form-gap: 16px;
+  --onepos-toolbar-height: 52px;
+  --onepos-card-radius: 16px;
+  --onepos-modal-radius: 16px;
+  --onepos-nav-item-height: 40px;
+  --onepos-nav-item-radius: 10px;
+  --onepos-nav-font-size: 13.5px;
+  --onepos-nav-indent: 10px;
+  --onepos-nav-bar-width: 0px;
+  --onepos-icon-size: 18px;
+  --onepos-icon-chip-size: 30px;
+  --onepos-icon-chip-radius: 9px;
+  --onepos-icon-chip-bg: var(--onepos-accent-50);
+  --onepos-icon-chip-color: var(--onepos-accent-700);
+  --onepos-icon-chip-border: transparent;
+  --onepos-shadow-card: var(--onepos-shadow);
+  --onepos-shadow-raised: 0 10px 30px -12px rgba(16, 42, 39, 0.28), 0 2px 8px rgba(16, 42, 39, 0.08);
+  --onepos-card-border-width: 1px;
+  --onepos-card-bg: var(--onepos-surface-raised);
+  --onepos-card-border: var(--onepos-border);
+  --onepos-rail-border: var(--onepos-border);
+  --onepos-header-bg: var(--onepos-surface-raised);
+  --onepos-header-shadow: 0 1px 2px rgba(16, 42, 39, 0.05);
+  --onepos-header-blur: 0px;
+  --onepos-table-head-transform: none;
+  --onepos-table-head-weight: 600;
+  --onepos-table-head-size: 12px;
+  --onepos-table-font-size: 13.5px;
+  --onepos-table-hover: var(--onepos-accent-50);
+  /* Sidebar palette + navigation foreground tokens. Readable by construction:
+     the foreground is chosen against its own background (see
+     src/utils/adminPreferences.js → sidebarTokens). */
+  --onepos-sidebar-bg: hsl(205 30% 99%);
+  --onepos-sidebar-fg: hsl(215 26% 26%);
+  --onepos-sidebar-fg-muted: hsl(212 12% 47%);
+  --onepos-sidebar-hover: hsl(205 26% 95%);
+  --onepos-sidebar-active-bg: var(--onepos-accent-50);
+  --onepos-sidebar-active-fg: var(--onepos-accent-700);
+  --onepos-sidebar-bar: transparent;
+  --onepos-sidebar-ring: hsl(175 70% 45% / 0.45);
+  --onepos-sidebar-brand: hsl(215 28% 22%);
+  /* --onepos-table-cell-y: per-preset row padding, driven by data attribute below. */
+}
+
 html,
 body,
 #root {
@@ -13,8 +101,8 @@ body,
 body {
   font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
     "Segoe UI", sans-serif;
-  color: #1d2429;
-  background: #f5f7f6;
+  color: var(--onepos-text-primary, #1d2429);
+  background: var(--onepos-surface, #f5f7f6);
 }
 
 /* ==========================================================================
@@ -26,26 +114,42 @@ body {
 
 @layer components {
   /* ------------------------------ buttons ------------------------------ */
+  /* Buttons/inputs read the shared tokens so preset density and dark
+     appearance apply app-wide through one stylesheet (task §14/§21). */
 
   .onepos-btn {
-    @apply inline-flex items-center justify-center gap-1.5 rounded-md font-medium
+    @apply inline-flex items-center justify-center gap-1.5 font-medium
       transition-colors duration-150 outline-none select-none
       focus-visible:ring-2 focus-visible:ring-offset-1
       disabled:opacity-50 disabled:cursor-not-allowed disabled:pointer-events-none;
-    min-height: 36px;
+    min-height: var(--onepos-control-height, 38px);
     padding: 0 14px;
     font-size: 13.5px;
+    border-radius: var(--onepos-radius-sm, 8px);
   }
 
+  /* Text-on-accent comes from the accent-contrast token, NOT text-white.
+     accent-600 is dark in Light (white text = 5.1:1) but deliberately LIGHT
+     in Dark so it still reads against a dark surface — where hard-coded white
+     measured only 1.79:1. The token resolves to white in Light (pixel-
+     identical to before) and to a dark tone in Dark (9.4:1). */
   .onepos-btn-primary {
-    @apply bg-blue-600 text-white hover:bg-blue-700 active:bg-blue-800
-      focus-visible:ring-blue-500;
+    @apply focus-visible:ring-blue-500;
+    background-color: var(--onepos-accent-600);
+    color: var(--onepos-accent-contrast, #fff);
   }
+  .onepos-btn-primary:hover { background-color: var(--onepos-accent-700); }
+  .onepos-btn-primary:active { background-color: var(--onepos-accent-800); }
 
   .onepos-btn-secondary {
-    @apply bg-white text-slate-800 border border-slate-300
-      hover:bg-slate-50 hover:border-slate-400
-      focus-visible:ring-blue-500;
+    @apply border focus-visible:ring-blue-500;
+    background-color: var(--onepos-surface-raised);
+    color: var(--onepos-text-primary);
+    border-color: var(--onepos-border-strong);
+  }
+  .onepos-btn-secondary:hover {
+    background-color: var(--onepos-surface-muted);
+    border-color: var(--onepos-text-muted);
   }
 
   .onepos-btn-danger {
@@ -55,7 +159,7 @@ body {
 
   /* Compact variant for dense toolbars and table action rows. */
   .onepos-btn-sm {
-    min-height: 30px;
+    min-height: calc(var(--onepos-control-height, 38px) - 8px);
     padding: 0 10px;
     font-size: 12.5px;
   }
@@ -63,15 +167,20 @@ body {
   /* ------------------------------- inputs ------------------------------ */
 
   .onepos-input {
-    @apply bg-white text-slate-800 border border-slate-300 rounded-md
-      outline-none transition-shadow duration-150 placeholder:text-slate-400
-      focus:border-blue-500 focus:ring-2 focus:ring-blue-500/25
-      disabled:bg-slate-50 disabled:text-slate-400;
-    height: 36px;
+    @apply border outline-none transition-shadow duration-150
+      focus:ring-2 focus:ring-blue-500/25 disabled:text-slate-400;
+    background-color: var(--onepos-surface-raised);
+    color: var(--onepos-text-primary);
+    border-color: var(--onepos-border-strong);
+    border-radius: var(--onepos-radius-sm, 8px);
+    height: var(--onepos-control-height, 38px);
     padding: 0 10px;
     font-size: 13.5px;
     width: 100%;
   }
+  .onepos-input::placeholder { color: var(--onepos-text-muted); }
+  .onepos-input:focus { border-color: var(--onepos-accent-500); }
+  .onepos-input:disabled { background-color: var(--onepos-surface-muted); }
   textarea.onepos-input {
     height: auto;
     min-height: 68px;
@@ -93,13 +202,24 @@ body {
 
   /* ------------------------------- cards ------------------------------- */
 
+  /* Cards — radius, border weight/colour, background and depth all come from
+     the preset tokens: Modern = large radius + layered shadow + soft border;
+     Enterprise = small radius + hairline strong border + no shadow;
+     Compact = minimal radius, no shadow, tight padding. */
   .onepos-card {
-    @apply bg-white border border-slate-200 rounded-xl;
-    box-shadow: 0 1px 2px rgba(16, 42, 39, 0.05);
+    @apply border;
+    background-color: var(--onepos-card-bg, var(--onepos-surface-raised));
+    border-color: var(--onepos-card-border, var(--onepos-border));
+    border-width: var(--onepos-card-border-width, 1px);
+    border-radius: var(--onepos-card-radius, 12px);
+    box-shadow: var(--onepos-shadow-card, none);
   }
   .onepos-card-header {
-    @apply px-4 py-3 border-b border-slate-200 flex items-center justify-between gap-3;
+    @apply border-b flex items-center justify-between gap-3;
+    padding: calc(var(--onepos-card-pad, 16px) * 0.75) var(--onepos-card-pad, 16px);
+    border-color: var(--onepos-card-border, var(--onepos-border));
   }
+  .onepos-card-body { padding: var(--onepos-card-pad, 16px); }
   .onepos-card-title {
     @apply font-semibold text-slate-800;
     font-size: 14.5px;
@@ -130,22 +250,36 @@ body {
 
   /* ------------------------------- tables ------------------------------ */
 
+  /* Tables: density comes from the --onepos-table-cell-y token, which the
+     preset data-attribute blocks below set (compact rows = more records). */
+  /* Tables — row density (--onepos-table-cell-y), header treatment and hover
+     wash are preset tokens: Modern = comfortable rows, un-uppercased soft
+     header, accent-tinted hover; Enterprise = conventional business grid with
+     an uppercase header and neutral hover; Compact = dense rows, maximum
+     records visible. */
   .onepos-table {
     @apply w-full border-collapse;
-    font-size: 13px;
+    font-size: var(--onepos-table-font-size, 13px);
   }
   .onepos-table thead th {
-    @apply text-left font-semibold text-slate-500 uppercase bg-slate-50 border-b border-slate-200;
-    font-size: 11px;
+    @apply text-left border-b;
+    color: var(--onepos-text-secondary);
+    background-color: var(--onepos-surface-muted);
+    border-color: var(--onepos-border);
+    text-transform: var(--onepos-table-head-transform, none);
+    font-weight: var(--onepos-table-head-weight, 600);
+    font-size: var(--onepos-table-head-size, 11px);
     letter-spacing: 0.03em;
-    padding: 8px 12px;
+    padding: var(--onepos-table-cell-y, 8px) 12px;
   }
   .onepos-table tbody td {
-    @apply border-b border-slate-100 text-slate-700 align-middle;
-    padding: 8px 12px;
+    @apply border-b align-middle;
+    color: var(--onepos-text-body);
+    border-color: var(--onepos-border);
+    padding: var(--onepos-table-cell-y, 8px) 12px;
   }
   .onepos-table tbody tr:hover {
-    @apply bg-blue-50/40;
+    background-color: var(--onepos-table-hover, var(--onepos-accent-50));
   }
 
   /* ------------------------------- alerts ------------------------------ */
@@ -170,12 +304,19 @@ body {
   /* ---------------------------- page headers --------------------------- */
 
   .onepos-page-title {
-    @apply font-bold text-slate-900;
+    @apply font-bold;
+    color: var(--onepos-text-heading);
     font-size: 19px;
     line-height: 1.3;
   }
+  /* Enterprise separates page headers from content with a rule; Modern and
+     Compact rely on spacing alone. */
+  [data-onepos-preset="enterprise"] .onepos-page-title {
+    padding-bottom: 8px;
+    border-bottom: 2px solid var(--onepos-border-strong);
+  }
   .onepos-page-subtitle {
-    @apply text-slate-500;
+    color: var(--onepos-text-secondary);
     font-size: 13px;
     margin-top: 2px;
   }
@@ -184,11 +325,67 @@ body {
     font-size: 14px;
   }
 
+  /* Page header — "title + description + primary action". Every module used to
+     hand-roll this with its own mb-5/flex classes, which is why spacing drifted
+     between pages. The gap now comes from the preset token, so Modern breathes
+     and Compact tightens without any page owning the number. */
+  .onepos-page-header {
+    @apply flex flex-wrap items-end justify-between gap-3;
+    margin-bottom: var(--onepos-page-gap, 22px);
+  }
+  .onepos-page-header-actions {
+    @apply flex flex-wrap items-center gap-2;
+  }
+
+  /* Toolbar — search + filters + secondary actions. Height is the preset's
+     --onepos-toolbar-height (52/46/40) so density is uniform across modules. */
+  .onepos-toolbar {
+    @apply flex flex-wrap items-center gap-2 border-b;
+    min-height: var(--onepos-toolbar-height, 52px);
+    padding: calc(var(--onepos-card-pad, 18px) * 0.7) var(--onepos-card-pad, 18px);
+    border-color: var(--onepos-border);
+    background-color: var(--onepos-surface-muted);
+  }
+
+  /* Icon chip — the one icon container for the admin. Modern renders a tinted
+     accent chip; Enterprise and Compact resolve to a transparent, monochrome
+     container purely because their tokens say so. */
+  .onepos-icon-chip {
+    @apply inline-grid place-items-center shrink-0;
+    width: var(--onepos-icon-chip-size, 30px);
+    height: var(--onepos-icon-chip-size, 30px);
+    border-radius: var(--onepos-icon-chip-radius, 9px);
+    background-color: var(--onepos-icon-chip-bg, transparent);
+    color: var(--onepos-icon-chip-color, inherit);
+    border: 1px solid var(--onepos-icon-chip-border, transparent);
+  }
+
+  /* Stat / KPI card — used by the dashboard and every report summary. */
+  .onepos-stat {
+    @apply border;
+    background-color: var(--onepos-card-bg, var(--onepos-surface-raised));
+    border-color: var(--onepos-card-border, var(--onepos-border));
+    border-radius: var(--onepos-card-radius, 12px);
+    box-shadow: var(--onepos-shadow-card, none);
+    padding: var(--onepos-card-pad, 18px);
+  }
+  .onepos-stat-label {
+    color: var(--onepos-text-secondary);
+    font-size: 12px;
+  }
+  .onepos-stat-value {
+    @apply font-bold;
+    color: var(--onepos-text-heading);
+    font-size: 20px;
+    line-height: 1.35;
+    margin-top: 2px;
+  }
+
   /* ----------------------------- empty states -------------------------- */
 
   .onepos-empty {
     @apply flex flex-col items-center justify-center text-center text-slate-400;
-    padding: 36px 16px;
+    padding: calc(var(--onepos-card-pad, 16px) * 2.2) 16px;
   }
   .onepos-empty-title {
     @apply text-slate-600 font-medium;
@@ -198,15 +395,381 @@ body {
   /* ------------------------------- tabs -------------------------------- */
 
   .onepos-tab {
-    @apply px-3 py-2 whitespace-nowrap border-b-2 border-transparent text-slate-500
-      hover:text-slate-800 transition-colors outline-none
+    @apply whitespace-nowrap border-b-2 border-transparent transition-colors outline-none
       focus-visible:ring-2 focus-visible:ring-blue-500/40;
+    padding: calc(var(--onepos-control-height, 38px) * 0.22) 12px;
+    color: var(--onepos-text-secondary);
     font-size: 13px;
   }
+  .onepos-tab:hover { color: var(--onepos-text-primary); }
   .onepos-tab-active {
-    @apply border-blue-600 text-blue-700 font-medium;
+    @apply font-medium;
+    border-color: var(--onepos-accent-600);
+    color: var(--onepos-accent-600);
+  }
+
+  /* Vertical section rail (Settings and similar configuration workspaces).
+     Selected state uses the accent tokens — never a literal blue — so it
+     follows Light/Dark/Accent, and its height follows the preset density. */
+  .onepos-settings-tab {
+    @apply transition-colors outline-none rounded-md;
+    height: calc(var(--onepos-nav-item-height, 34px) - 4px);
+    padding: 0 8px;
+    font-size: 13px;
+    color: var(--onepos-sidebar-fg-muted, var(--onepos-text-secondary));
+  }
+  .onepos-settings-tab:hover {
+    background-color: var(--onepos-surface-muted);
+    color: var(--onepos-text-primary);
+  }
+  .onepos-settings-tab-active,
+  .onepos-settings-tab-active:hover {
+    @apply font-medium;
+    background-color: var(--onepos-accent-600);
+    color: var(--onepos-accent-contrast, #fff);
   }
 }
+
+/* ==========================================================================
+   Layout/density preset density hooks — token-only, no duplicated CSS.
+   The shell sets data-onepos-preset on <html>; these blocks feed the shared
+   --onepos-table-cell-y (and friends) so existing tables densify without a
+   single page being rewritten.
+   ========================================================================== */
+
+[data-onepos-preset="modern"] { --onepos-table-cell-y: 8px; }
+[data-onepos-preset="enterprise"] { --onepos-table-cell-y: 6px; }
+[data-onepos-preset="compact"] { --onepos-table-cell-y: 4px; }
+
+/* ==========================================================================
+   Admin shell (header + sidebar) — presentation classes for the shared
+   professional Admin frame. Business pages render UNCHANGED inside it.
+   ========================================================================== */
+
+/* ---------------------------------------------------------------- */
+/* SHELL WIDTH CONTRACT (the desktop gutter fix).                    */
+/*                                                                   */
+/* .onepos-shell is a flex ITEM inside AdminLayout's                   */
+/* `<div class="h-screen bg-slate-100 flex relative">`. A flex item   */
+/* with default `flex: 0 1 auto` sizes itself to its CONTENT, so the   */
+/* shell shrink-wrapped to its widest child and left large blank       */
+/* gutters on desktop. It must claim the full main-axis space:         */
+/*   flex: 1 1 auto  → grow into all remaining width                   */
+/*   width: 100%    → full width if the parent is ever not a flex box  */
+/*   min-width: 0   → allow the shell (and its flex children) to       */
+/*                    shrink below content size instead of overflowing */
+/* No max-width and no centring is applied at shell level — page       */
+/* content may still bring its own sensible max-widths.                */
+.onepos-shell {
+  display: flex; flex: 1 1 auto; width: 100%; min-width: 0; max-width: none; margin: 0;
+  height: 100vh; height: 100dvh; position: relative; overflow: hidden;
+  background-color: var(--onepos-surface);
+  /* Modern gets a very subtle layered canvas; other presets stay flat. */
+  background-image: none;
+}
+.onepos-shell-main { flex: 1 1 0%; min-width: 0; display: flex; flex-direction: column; }
+.onepos-shell-header {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  flex-shrink: 0;
+  height: var(--onepos-header-height, 58px);
+  color: var(--onepos-text-primary);
+  background-color: var(--onepos-header-bg, var(--onepos-surface-raised));
+  backdrop-filter: blur(var(--onepos-header-blur, 0px));
+  -webkit-backdrop-filter: blur(var(--onepos-header-blur, 0px));
+  border-bottom: 1px solid var(--onepos-rail-border, var(--onepos-border));
+  box-shadow: var(--onepos-header-shadow, none);
+  padding-left: 14px; padding-right: 14px;
+  padding-top: env(safe-area-inset-top);
+  padding-left: max(14px, env(safe-area-inset-left));
+  padding-right: max(14px, env(safe-area-inset-right));
+}
+.onepos-shell-content {
+  flex: 1 1 0%; min-height: 0; overflow-y: auto;
+  padding: var(--onepos-page-gap, 22px);
+  padding-bottom: 84px; /* clear the fixed onePOS Dockbar + status bar */
+  padding-left: max(var(--onepos-page-gap, 22px), env(safe-area-inset-left));
+  padding-right: max(var(--onepos-page-gap, 22px), env(safe-area-inset-right));
+}
+
+.onepos-sidebar {
+  display: flex; flex-direction: column; flex-shrink: 0;
+  width: var(--onepos-sidebar-width, 248px);
+  background-color: var(--onepos-sidebar-bg);
+  color: var(--onepos-sidebar-fg);
+  border-right: 1px solid var(--onepos-rail-border, var(--onepos-border));
+  overflow: hidden;
+}
+.onepos-sidebar[data-collapsed="true"] { width: var(--onepos-sidebar-width-collapsed, 68px); }
+.onepos-sidebar-brand {
+  color: var(--onepos-sidebar-brand, var(--onepos-sidebar-fg));
+  opacity: 1;
+}
+
+/* Navigation items read the sidebar palette tokens — never hard-coded
+   one-off colours — so they stay readable in every preset/appearance/accent
+   combination, including the Light + Modern airy sidebar. */
+.onepos-sidebar-item {
+  display: flex; align-items: center; gap: var(--onepos-nav-indent, 10px);
+  width: 100%; text-align: left;
+  border-radius: var(--onepos-nav-item-radius, 10px);
+  padding: 0 var(--onepos-nav-indent, 10px);
+  height: var(--onepos-nav-item-height, 40px);
+  font-size: var(--onepos-nav-font-size, 13.5px);
+  position: relative;
+  color: var(--onepos-sidebar-fg);
+  opacity: 1;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+.onepos-sidebar-item:hover {
+  background-color: var(--onepos-sidebar-hover);
+  color: var(--onepos-sidebar-active-fg);
+}
+.onepos-sidebar-item:focus-visible {
+  outline: 2px solid var(--onepos-sidebar-ring);
+  outline-offset: 1px;
+}
+.onepos-sidebar-item[aria-current="page"] {
+  background-color: var(--onepos-sidebar-active-bg);
+  color: var(--onepos-sidebar-active-fg);
+  font-weight: 500;
+}
+/* The active marker: a rounded pill (Modern) or a left accent bar
+   (Enterprise 3px / Compact 2px) — width comes from the preset token. */
+.onepos-sidebar-item[aria-current="page"]::before {
+  content: ""; position: absolute; left: 0; top: 6px; bottom: 6px;
+  width: var(--onepos-nav-bar-width, 0px);
+  border-radius: 999px;
+  background-color: var(--onepos-sidebar-bar);
+}
+.onepos-sidebar-group-label {
+  font-size: 10px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase;
+  color: var(--onepos-sidebar-fg-muted);
+  opacity: 1;
+  padding: 0 var(--onepos-nav-indent, 10px);
+  margin: var(--onepos-section-gap, 14px) 0 4px;
+}
+
+/* Preset icon treatment: Modern shows accent-tinted rounded chips, Enterprise
+   a restrained neutral chip, Compact a tiny muted one. No page markup change —
+   every admin icon is wrapped in .onepos-nav-icon by the shell. */
+.onepos-nav-icon {
+  display: grid; place-items: center; flex-shrink: 0;
+  width: var(--onepos-icon-chip-size, 30px);
+  height: var(--onepos-icon-chip-size, 30px);
+  border-radius: var(--onepos-icon-chip-radius, 9px);
+  background-color: var(--onepos-icon-chip-bg, transparent);
+  color: var(--onepos-icon-chip-color, inherit);
+  border: 1px solid var(--onepos-icon-chip-border, transparent);
+}
+/* One icon size token controls every admin icon (SVG scales with the preset). */
+.onepos-nav-icon > svg {
+  width: var(--onepos-icon-size, 18px);
+  height: var(--onepos-icon-size, 18px);
+}
+
+/* Nested (report) navigation rows: same item language, one step quieter. */
+.onepos-sidebar-item-sub {
+  color: var(--onepos-sidebar-fg-muted);
+  font-size: calc(var(--onepos-nav-font-size, 13.5px) - 1px);
+  height: calc(var(--onepos-nav-item-height, 40px) - 6px);
+  padding-left: calc(var(--onepos-nav-indent, 10px) + 18px);
+}
+.onepos-sidebar-item-sub:hover { color: var(--onepos-sidebar-active-fg); }
+
+/* Collapsed rail: icons only, centred. */
+.onepos-sidebar[data-collapsed="true"] .onepos-sidebar-item {
+  justify-content: center;
+  padding-left: 0;
+  padding-right: 0;
+}
+
+/* Compact navigation rail is dark by identity — its hover/active washes are
+   tokenised, so nothing depends on the old hard-coded white alphas. */
+.onepos-sidebar-iconbtn {
+  display: grid; place-items: center;
+  border-radius: var(--onepos-nav-item-radius, 8px);
+  color: var(--onepos-sidebar-fg);
+}
+.onepos-sidebar-iconbtn:hover { background-color: var(--onepos-sidebar-hover); }
+.onepos-sidebar-iconbtn:focus-visible { outline: 2px solid var(--onepos-sidebar-ring); outline-offset: 1px; }
+
+/* ------------------------------------------------------------------ */
+/* Utility remap (scoped to the admin shell ONLY).                     */
+/*                                                                     */
+/* Existing pages are written with rounded-xl / rounded-lg / rounded-md  */
+/* and shadow utilities. Inside the admin shell those follow the         */
+/* selected preset's surface language, so Dashboard / Products /         */
+/* Settings / Platform all change with the preset without any page        */
+/* being rewritten. Scoped to .onepos-shell, so the Till and the          */
+/* marketing site are never affected.                                     */
+/* ------------------------------------------------------------------ */
+.onepos-shell .rounded-xl,
+.onepos-shell .rounded-2xl { border-radius: var(--onepos-card-radius, 16px); }
+.onepos-shell .rounded-lg { border-radius: var(--onepos-radius, 8px); }
+.onepos-shell .rounded-md { border-radius: var(--onepos-radius-sm, 6px); }
+.onepos-shell .shadow-sm,
+.onepos-shell .shadow { box-shadow: var(--onepos-shadow-card, none); }
+.onepos-shell .shadow-lg,
+.onepos-shell .shadow-xl { box-shadow: var(--onepos-shadow-raised); }
+
+/* Surface bridge. Business pages were written with `bg-white` for cards,
+   tables, modals and sticky headers. Tailwind's `white` is a literal #fff and
+   cannot be tokenised without also recolouring `text-white` (which must stay
+   white on accent buttons). Scoping the remap to the shell fixes the surfaces
+   and leaves every foreground alone. In Light the token IS #fff, so this is
+   pixel-identical to today; in Dark those surfaces finally follow appearance.
+   Note the alpha variants (bg-white/10, bg-white/20) are a different class
+   token — frosted overlays on dark artwork — and are deliberately untouched. */
+.onepos-shell .bg-white { background-color: var(--onepos-surface-raised); }
+
+/* Local-variable bridge for the Platform studio. Those editors were written
+   against seven CSS variables that were NEVER DEFINED anywhere, so all ~275
+   usages silently fell back to hard-coded hex (#ffffff / #e5e7eb / #2563eb
+   /#6b7280 / #1f2937). Declaring them once here adopts all fourteen files —
+   including the hard-coded blue primary — onto the shared tokens, so the
+   Platform studio finally follows preset, appearance and accent like the rest
+   of the admin. Scoped to the shell so nothing else is affected. */
+.onepos-shell {
+  --card-background: var(--onepos-surface-raised);
+  --muted-background: var(--onepos-surface-muted);
+  --hover-background: var(--onepos-surface-hover);
+  --border-color: var(--onepos-border);
+  --text-primary: var(--onepos-text-primary);
+  --text-secondary: var(--onepos-text-secondary);
+  --primary-color: var(--onepos-accent-600);
+}
+
+/* Preset-scoped finishing touches that cannot be a single token. */
+[data-onepos-preset="modern"] .onepos-shell {
+  background-image: linear-gradient(180deg, hsl(0 0% 100% / 0.6), transparent 240px);
+}
+[data-onepos-preset="modern"] .onepos-shell-content > * { }
+[data-onepos-preset="modern"] .onepos-nav-icon { box-shadow: inset 0 0 0 1px hsl(0 0% 100% / 0.6); }
+[data-onepos-preset="enterprise"] .onepos-nav-icon { border-radius: var(--onepos-icon-chip-radius); }
+[data-onepos-preset="enterprise"] .onepos-shell-header { border-bottom-width: 1px; }
+[data-onepos-preset="compact"] .onepos-nav-icon { color: inherit; }
+
+/* Mobile drawer (off-canvas sidebar) — one shell, responsive by breakpoint. */
+.onepos-sidebar-drawer {
+  position: fixed; inset: 0; z-index: 70; display: flex;
+}
+.onepos-sidebar-drawer-backdrop { position: absolute; inset: 0; background: rgba(8, 20, 24, 0.5); }
+.onepos-sidebar-drawer-panel {
+  position: relative; height: 100%; width: min(var(--onepos-sidebar-width, 248px), 84vw);
+  background-color: var(--onepos-sidebar-bg); color: var(--onepos-sidebar-fg);
+  border-right: 1px solid var(--onepos-border);
+  display: flex; flex-direction: column;
+  padding-top: env(safe-area-inset-top); padding-bottom: env(safe-area-inset-bottom);
+}
+
+/* ------------------------------------------------------------------ */
+/* Record modal (shared Create / Edit / View dialog)                    */
+/*                                                                     */
+/* ONE dialog chrome for ordinary record operations. Everything — the   */
+/* surface, border, radius, shadow, padding and controls — comes from    */
+/* the shared tokens, so the modal inherits Modern / Enterprise / Compact */
+/* and Light / Dark / Accent without any preset branching.              */
+/*                                                                     */
+/* Desktop/tablet: centred dialog, dimmed background, body scrolls      */
+/* internally. Small screens: the SAME element becomes a full-screen    */
+/* safe-area-aware sheet (no separate mobile implementation).           */
+/* ------------------------------------------------------------------ */
+.onepos-modal-overlay {
+  position: fixed; inset: 0; z-index: 80;
+  display: flex; align-items: flex-end; justify-content: center;
+  background-color: rgba(8, 20, 24, 0.5);
+}
+.onepos-modal {
+  display: flex; flex-direction: column;
+  width: 100%; height: 100dvh; max-height: 100dvh;
+  background-color: var(--onepos-card-bg, var(--onepos-surface-raised));
+  color: var(--onepos-text-primary);
+  border: var(--onepos-card-border-width, 1px) solid var(--onepos-card-border, var(--onepos-border));
+  border-radius: 0;
+  box-shadow: var(--onepos-shadow-raised);
+  outline: none;
+  /* the sheet must clear status bars / camera cutouts / home indicator */
+  padding-top: env(safe-area-inset-top);
+  padding-bottom: env(safe-area-inset-bottom);
+  padding-left: env(safe-area-inset-left);
+  padding-right: env(safe-area-inset-right);
+}
+.onepos-modal-header {
+  display: flex; align-items: flex-start; justify-content: space-between; gap: 12px;
+  border-bottom: 1px solid var(--onepos-card-border, var(--onepos-border));
+  padding: calc(var(--onepos-card-pad, 18px) * 0.8) var(--onepos-card-pad, 18px);
+}
+.onepos-modal-title {
+  font-weight: 600; font-size: 15.5px; line-height: 1.35;
+  color: var(--onepos-text-heading);
+}
+.onepos-modal-subtitle { color: var(--onepos-text-secondary); font-size: 12.5px; margin-top: 2px; }
+.onepos-modal-close { padding: 6px; flex: none; }
+.onepos-modal-body {
+  flex: 1 1 auto; min-height: 0; overflow-y: auto;
+  padding: var(--onepos-card-pad, 18px);
+}
+.onepos-modal-footer {
+  display: flex; align-items: center; justify-content: flex-end; gap: 8px;
+  flex-wrap: wrap;
+  border-top: 1px solid var(--onepos-card-border, var(--onepos-border));
+  padding: calc(var(--onepos-card-pad, 18px) * 0.7) var(--onepos-card-pad, 18px);
+}
+.onepos-modal-footer-start { margin-right: auto; display: flex; align-items: center; gap: 8px; }
+
+@media (min-width: 640px) {
+  /* Tablet and up: centred dialog instead of a full-screen sheet. */
+  .onepos-modal-overlay { align-items: center; padding: 16px; }
+  .onepos-modal {
+    height: auto;
+    max-height: min(85vh, 900px);
+    border-radius: var(--onepos-modal-radius, 16px);
+    max-width: calc(100vw - 2rem);
+  }
+  .onepos-modal-sm { width: 400px; }
+  .onepos-modal-md { width: 560px; }
+  .onepos-modal-lg { width: 760px; }
+  .onepos-modal-xl { width: 920px; }
+}
+
+/* Touch safety floor.
+   Compact's control height (30px) is tuned for a mouse and a dense desktop
+   screen; on a coarse pointer or a small screen that is below a comfortable
+   touch target. The floor is enforced ONCE here for the shared controls, so no
+   component and no preset has to branch. Scoped to .onepos-shell so the
+   Till/POS surface keeps its own deliberately different touch design. */
+@media (pointer: coarse), (max-width: 639px) {
+  .onepos-shell .onepos-btn,
+  .onepos-shell .onepos-btn-sm,
+  .onepos-shell .onepos-input,
+  .onepos-modal .onepos-btn,
+  .onepos-modal .onepos-btn-sm,
+  .onepos-modal .onepos-input {
+    min-height: max(var(--onepos-control-height, 38px), 40px);
+  }
+}
+
+/* Hide the desktop sidebar below the lg breakpoint (drawer takes over).
+   Shown via .onepos-sidebar at >=1024px only. */
+@media (max-width: 1023px) {
+  .onepos-sidebar:not(.onepos-sidebar-drawer-panel) { display: none; }
+}
+
+/* ---------------------------- system appearance ----------------------- */
+/* When appearance="system", the OS colour-scheme decides Light vs Dark. The
+   shell toggles data-onepos-dark itself on matchMedia change; this block is
+   the declarative fallback for the initial paint before React mounts. */
+[data-onepos-appearance="system"] { color-scheme: light dark; }
+
+/* --------------------------- reduced motion --------------------------- */
+@media (prefers-reduced-motion: reduce) {
+  .onepos-shell *,
+  .onepos-sidebar-item { transition: none !important; }
+}
+
+/* --------------------------- dark scrollbars -------------------------- */
+[data-onepos-dark="true"] { color-scheme: dark; }
+[data-onepos-dark="true"] .onepos-card { box-shadow: var(--onepos-shadow); }
 
 /* ==========================================================================
    Toggle switch - the one consistent ON/OFF control for binary settings.
@@ -236,7 +799,7 @@ body {
 .onepos-toggle-track {
   position: absolute;
   inset: 0;
-  background: #cbd5d3;
+  background: var(--onepos-border-strong, #cbd5d3);
   border-radius: 999px;
   transition: background 0.16s ease;
   pointer-events: none;
@@ -254,7 +817,7 @@ body {
   transition: transform 0.16s ease;
 }
 .onepos-toggle input:checked + .onepos-toggle-track {
-  background: #176f6a;
+  background: var(--onepos-accent-600, #176f6a);
 }
 .onepos-toggle input:checked + .onepos-toggle-track::after {
   transform: translateX(16px);

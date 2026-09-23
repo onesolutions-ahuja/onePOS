@@ -5,6 +5,13 @@ import { getPlatformService, isOnlinePlatform } from "../services/onlineOrders/i
 import { loadPlatformConfig, decryptSecret } from "../services/onlineOrders/platformConfig.js";
 import { logPlatformApiCall } from "../services/onlineOrders/platformLogger.js";
 import { createSaleForCompletedOrder } from "../services/onlineOrders/saleCreator.js";
+import {
+  createGenericOrder,
+  getGenericOrder,
+  listGenericOrders,
+  transitionGenericOrder,
+} from "../services/onlineOrders/genericOrderService.js";
+import { syncBatchMovement } from "../services/inventory.js";
 
 /*
  * ONLINE ORDERS FOUNDATION (Uber Eats / Deliveroo)
@@ -55,7 +62,8 @@ export default function createOnlineRouter({
       `
       SELECT
         i.*,
-        p.track_stock
+        p.track_stock,
+        p.batch_tracking
       FROM online_order_items i
       LEFT JOIN products p
         ON p.id = i.product_id
@@ -123,6 +131,13 @@ export default function createOnlineRouter({
         reason: `Reserved for ${order.platform} order ${order.external_order_id}`,
         createdBy: userId,
       });
+      await syncBatchMovement(client, {
+        companyId,
+        storeId,
+        productId: item.productId || item.product_id,
+        quantityChange: -Number(item.quantity),
+        batchTracked: item.batchTracking === true || item.batch_tracking === true,
+      });
     }
   }
 
@@ -142,6 +157,14 @@ export default function createOnlineRouter({
         referenceId: order.id,
         reason: `Released reservation for ${order.platform} order ${order.external_order_id}`,
         createdBy: userId,
+      });
+      await syncBatchMovement(client, {
+        companyId,
+        storeId,
+        productId: item.product_id,
+        quantityChange: Number(item.quantity),
+        batchTracked: item.batch_tracking === true,
+        batchNumber: `ONLINE-RELEASE-${order.id.slice(0, 8).toUpperCase()}`,
       });
     }
   }
@@ -666,6 +689,21 @@ export default function createOnlineRouter({
     }
   });
 
+  router.get("/online/orders/generic", authenticate, authorize("online_orders.view"), async (req, res) => {
+    try {
+      const { status, limit = 100 } = req.query;
+      const orders = await listGenericOrders(db, req.user.companyId, {
+        status: status || null,
+        limit,
+      });
+
+      res.json({ success: true, data: orders });
+    } catch (error) {
+      console.error("List generic online orders error:", error);
+      res.status(500).json({ success: false, message: "Unable to list online orders" });
+    }
+  });
+
   router.get("/online/orders/:id", authenticate, authorize("online_orders.view"), async (req, res) => {
     try {
       const order = await loadOrder(req.params.id, req.user.companyId);
@@ -1185,7 +1223,7 @@ export default function createOnlineRouter({
         const productResult = await client.query(
           `
           SELECT
-            id, name, price, vat_rate, track_stock, stock_quantity,
+            id, name, price, vat_rate, track_stock, batch_tracking, stock_quantity,
             available_on_uber, available_on_deliveroo
           FROM products
           WHERE id = $1
@@ -1215,6 +1253,7 @@ export default function createOnlineRouter({
           productName: product.name,
           externalItemId: item.externalItemId || null,
           quantity,
+          batchTracking: product.batch_tracking === true,
           unitPrice,
           tax: Number(((unitPrice * quantity * Number(product.vat_rate || 0)) / 100).toFixed(2)),
           total: Number((unitPrice * quantity).toFixed(2)),
@@ -3105,13 +3144,256 @@ export default function createOnlineRouter({
     }
   });
 
+  /*
+   * ------------------------------------------------------------------
+   * Generic online orders (external client app)
+   * ------------------------------------------------------------------
+   */
+
+  router.post("/online/orders/generic", authenticate, authorize("online_orders.manage"), async (req, res) => {
+    if (!pool) {
+      return res.status(500).json({ success: false, message: "DATABASE_URL is not configured" });
+    }
+
+    const {
+      externalOrderId,
+      storeId,
+      customer = {},
+      fulfilmentType,
+      items,
+      notes,
+      payment,
+    } = req.body;
+
+    try {
+      const result = await createGenericOrder({
+        db,
+        pool,
+        companyId: req.user.companyId,
+        userId: req.user.id,
+        storeId: storeId || req.user.storeId,
+        externalOrderId,
+        fulfilmentType,
+        items,
+        customer,
+        notes,
+        payment,
+        createInventoryMovement,
+      });
+
+      if (result.duplicate) {
+        return res.json({
+          success: true,
+          message: "This online order has already been received",
+          data: { orderId: result.orderId, duplicate: true, status: result.status },
+        });
+      }
+
+      if (writeAudit) {
+        await writeAudit(
+          req.user.companyId,
+          req.user.id,
+          "online_order.created",
+          "online_order",
+          result.order.id,
+          { externalOrderId, fulfilmentType, itemCount: result.items.length }
+        );
+      }
+
+      res.status(201).json({
+        success: true,
+        message: "Online order received",
+        data: { order: result.order, items: result.items },
+      });
+    } catch (error) {
+      console.error("Create generic online order error:", error);
+
+      const insufficientStock = /Insufficient stock/i.test(error.message || "");
+
+      res.status(insufficientStock ? 409 : 500).json({
+        success: false,
+        message: error.message || "Unable to create online order",
+        error: error.message,
+      });
+    }
+  });
+
+  router.get("/online/orders/generic/:id", authenticate, authorize("online_orders.view"), async (req, res) => {
+    try {
+      const order = await getGenericOrder(db, req.user.companyId, req.params.id);
+
+      if (!order) {
+        return res.status(404).json({ success: false, message: "Online order not found" });
+      }
+
+      const items = await db(
+        `
+        SELECT i.*, p.track_stock
+        FROM online_order_items i
+        LEFT JOIN products p ON p.id = i.product_id
+        WHERE i.order_id = $1
+        ORDER BY i.created_at, i.id
+        `,
+        [req.params.id]
+      );
+
+      const events = await db(
+        "SELECT * FROM online_order_events WHERE order_id = $1 ORDER BY created_at, id",
+        [req.params.id]
+      );
+
+      res.json({
+        success: true,
+        data: { order, items: items.rows.map((i) => ({ ...i, track_stock: undefined })), events: events.rows },
+      });
+    } catch (error) {
+      console.error("Get generic online order error:", error);
+      res.status(500).json({ success: false, message: "Unable to load online order" });
+    }
+  });
+
+  router.post("/online/orders/generic/:id/accept", authenticate, authorize("online_orders.manage"), async (req, res) => {
+    const { reason } = req.body || {};
+    const result = await transitionGenericOrder({
+      pool,
+      companyId: req.user.companyId,
+      orderId: req.params.id,
+      userId: req.user.id,
+      toStatus: "PREPARING",
+      reason,
+      createSale: (client, context) => createSaleForCompletedOrder(client, context),
+      createInventoryMovement,
+    });
+
+    if (!result.success) {
+      return res.status(result.error === "Order not found" ? 404 : 409).json({
+        success: false,
+        message: result.error,
+      });
+    }
+
+    res.json({ success: true, message: "Order accepted - preparation started" });
+  });
+
+  router.post("/online/orders/generic/:id/ready", authenticate, authorize("online_orders.manage"), async (req, res) => {
+    const { reason } = req.body || {};
+
+    const orderResult = await db(
+      "SELECT fulfilment_type, status FROM online_orders WHERE id = $1 AND company_id = $2",
+      [req.params.id, req.user.companyId]
+    );
+
+    if (!orderResult.rows.length) {
+      return res.status(404).json({ success: false, message: "Online order not found" });
+    }
+
+    const order = orderResult.rows[0];
+    const toStatus =
+      order.fulfilment_type === "SELF_PICKUP"
+        ? "READY_FOR_PICKUP"
+        : order.fulfilment_type === "DELIVERY"
+          ? "READY_FOR_DELIVERY"
+          : "READY";
+
+    const result = await transitionGenericOrder({
+      pool,
+      companyId: req.user.companyId,
+      orderId: req.params.id,
+      userId: req.user.id,
+      toStatus,
+      reason,
+    });
+
+    if (!result.success) {
+      return res.status(result.error === "Order not found" ? 404 : 409).json({
+        success: false,
+        message: result.error,
+      });
+    }
+
+    res.json({ success: true, message: `Order marked ready (${toStatus})` });
+  });
+
+  router.post("/online/orders/generic/:id/complete", authenticate, authorize("online_orders.manage"), async (req, res) => {
+    const { reason } = req.body || {};
+
+    const orderResult = await db(
+      "SELECT fulfilment_type, status FROM online_orders WHERE id = $1 AND company_id = $2",
+      [req.params.id, req.user.companyId]
+    );
+
+    if (!orderResult.rows.length) {
+      return res.status(404).json({ success: false, message: "Online order not found" });
+    }
+
+    const order = orderResult.rows[0];
+    let toStatus;
+
+    if (order.status === "READY_FOR_PICKUP") {
+      toStatus = "COLLECTED";
+    } else if (order.status === "COMPLETED" || order.status === "CANCELLED" || order.status === "REJECTED") {
+      return res.status(409).json({
+        success: false,
+        message: `Order in status ${order.status} cannot be completed`,
+      });
+    } else {
+      toStatus = "COMPLETED";
+    }
+
+    const result = await transitionGenericOrder({
+      pool,
+      companyId: req.user.companyId,
+      orderId: req.params.id,
+      userId: req.user.id,
+      toStatus,
+      reason,
+      createSale: (client, context) => createSaleForCompletedOrder(client, context),
+    });
+
+    if (!result.success) {
+      return res.status(result.error === "Order not found" ? 404 : 409).json({
+        success: false,
+        message: result.error,
+      });
+    }
+
+    const updatedOrder = await getGenericOrder(db, req.user.companyId, req.params.id);
+
+    res.json({
+      success: true,
+      message: "Order completed",
+      data: { order: updatedOrder, ...(result.sale ? { sale: result.sale } : {}) },
+    });
+  });
+
+  router.post("/online/orders/generic/:id/cancel", authenticate, authorize("online_orders.manage"), async (req, res) => {
+    const { reason } = req.body || {};
+
+    const result = await transitionGenericOrder({
+      pool,
+      companyId: req.user.companyId,
+      orderId: req.params.id,
+      userId: req.user.id,
+      toStatus: "CANCELLED",
+      reason: reason || "Cancelled",
+      createInventoryMovement,
+    });
+
+    if (!result.success) {
+      return res.status(result.error === "Order not found" ? 404 : 409).json({
+        success: false,
+        message: result.error,
+      });
+    }
+
+    const updatedOrder = await getGenericOrder(db, req.user.companyId, req.params.id);
+
+    res.json({
+      success: true,
+      message: "Order cancelled",
+      data: { order: updatedOrder },
+    });
+  });
+
   return router;
 }
-
-
-
-
-
-
-
-

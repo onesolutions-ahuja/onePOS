@@ -33,6 +33,8 @@ export function createSelfCheckoutRouter({
   jwtSecret = process.env.JWT_SECRET || "development-secret-change-this",
   modeTtl = SCO_MODE_TTL,
   writeAudit = null,
+  requireSelfCheckoutEntitlement = null,
+  getCompanyEntitlements = null,
 }) {
   const router = express.Router();
 
@@ -58,6 +60,7 @@ export function createSelfCheckoutRouter({
   router.post(
     "/self-checkout/session",
     authenticate,
+    ...(requireSelfCheckoutEntitlement ? [requireSelfCheckoutEntitlement] : []),
     authorize("sale.create"),
     async (req, res) => {
       try {
@@ -107,6 +110,7 @@ export function createSelfCheckoutRouter({
   router.delete(
     "/self-checkout/session",
     authenticate,
+    ...(requireSelfCheckoutEntitlement ? [requireSelfCheckoutEntitlement] : []),
     authorize("sale.create"),
     async (req, res) => {
       if (typeof writeAudit === "function") {
@@ -154,6 +158,12 @@ export function createSelfCheckoutRouter({
       }
       if (!pairedStore) {
         return res.status(401).json({ success: false, message: "Invalid Self-Checkout device key" });
+      }
+      if (typeof getCompanyEntitlements === "function") {
+        const entitlements = await getCompanyEntitlements(pairedStore.company_id);
+        if (entitlements.self_checkout !== true) {
+          return res.status(403).json({ success: false, code: "FEATURE_NOT_LICENSED", message: "Self-Checkout is not licensed for this company" });
+        }
       }
 
       /* sales.user_id is NOT NULL and the mode token carries an operator

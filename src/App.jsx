@@ -3,22 +3,55 @@ import { apiRequest } from "./services/api.js";
 import { loadOfflineSession, saveOfflineSession, clearOfflineSession } from "./services/offlineStore.js";
 import { isNetworkError } from "./services/networkStatus.js";
 import { parseAppPath } from "./utils/adminRoutes.js";
+import { resolveLandingPage } from "../services/runtimeAccess.js";
 import Login from "./pages/auth/Login.jsx";
 import POS from "./pages/pos/POS.jsx";
 import AdminLayout from "./pages/admin/AdminLayout.jsx";
 import SelfCheckout from "./pages/selfCheckout/SelfCheckout.jsx";
+import JarvisCorner from "./components/jarvis/JarvisCorner.jsx";
 
 export default function App() {
   const [loggedIn, setLoggedIn] = useState(false);
   const [user, setUser] = useState(null);
   const [offlineSession, setOfflineSession] = useState(false);
   const [sessionMessage, setSessionMessage] = useState("");
+  const [entitlements, setEntitlements] = useState({});
 
   const rememberSession = async (verifiedUser) => {
     try {
       const result = await apiRequest("/api/auth/me/permissions", { signal: AbortSignal.timeout(10000) });
-      if (result.success) await saveOfflineSession(verifiedUser, result.data);
+      if (result.success) {
+        let enabledModules = new Set();
+        try {
+          const runtime = await apiRequest("/api/platform/runtime/app-catalog", { signal: AbortSignal.timeout(10000) });
+          enabledModules = new Set((runtime.data || []).map((entry) => entry.module_key || entry.key));
+        } catch { /* The server-side route remains authoritative; keep cached startup safe. */ }
+        let runtimeSettings = {};
+        try {
+          const runtime = await apiRequest("/api/settings/runtime", { signal: AbortSignal.timeout(10000) });
+          runtimeSettings = runtime.data || {};
+        } catch { /* Older servers and offline startup use the safe profile default. */ }
+        const deviceProfile = runtimeSettings.deviceProfile || localStorage.getItem("onepos_device_profile") || "admin";
+        const permissionState = {
+          ...result.data,
+          enabledModules: [...enabledModules],
+          landingPath: resolveLandingPage({
+            enabledModules,
+            permissions: result.data.permissions || [],
+            isAdmin: result.data.isAdmin === true,
+            isSuperadmin: result.data.isSuperadmin === true,
+            deviceProfile,
+            userOverride: runtimeSettings.userOverride,
+            roleDefault: runtimeSettings.roleDefault,
+            companyDefault: runtimeSettings.companyDefault,
+          }),
+        };
+        setEntitlements(permissionState.entitlements || {});
+        await saveOfflineSession(verifiedUser, permissionState);
+        return permissionState;
+      }
     } catch { /* Offline access requires previously verified permissions. */ }
+    return null;
   };
 
   const [checkingSession, setCheckingSession] =
@@ -26,6 +59,29 @@ export default function App() {
 
   const [view, setView] =
     useState("pos");
+
+  useEffect(() => {
+    if (!loggedIn) return undefined;
+
+    let cancelled = false;
+    const refreshJarvesAccess = async () => {
+      try {
+        const result = await apiRequest("/api/auth/me/permissions", {
+          signal: AbortSignal.timeout(10000),
+        });
+        if (!cancelled && result.success) setEntitlements(result.data.entitlements || {});
+      } catch {
+        /* Keep the last verified state during a temporary network outage. */
+      }
+    };
+
+    refreshJarvesAccess();
+    const timer = window.setInterval(refreshJarvesAccess, 5000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [loggedIn]);
 
   /*
    * T10D: Self-Checkout mode. Entered ONLY explicitly from the staff POS
@@ -94,6 +150,17 @@ export default function App() {
 
   const [adminInitialPage, setAdminInitialPage] = useState("Dashboard");
 
+  const applyResolvedLanding = (permissionState) => {
+    const path = permissionState?.landingPath;
+    if (!path || window.location.pathname !== "/app") return;
+    const parsed = parseAppPath(path);
+    if (parsed?.view === "admin") {
+      setAdminInitialPage(parsed.page);
+      setView("admin");
+    }
+    window.history.replaceState({}, "", path);
+  };
+
   useEffect(() => {
     routeFromPath();
     /* eslint-disable-next-line react-hooks/exhaustive-deps */
@@ -123,7 +190,11 @@ export default function App() {
 
         setLoggedIn(true);
         setUser(data.user);
-        rememberSession(data.user);
+        setEntitlements(data.user.entitlements || {});
+        rememberSession(data.user).then((permissionState) => {
+          if (permissionState)
+          if (window.location.pathname === "/app") applyResolvedLanding(permissionState);
+        });
         if (window.location.pathname === "/login") {
           window.history.replaceState({}, "", "/app");
         }
@@ -184,7 +255,9 @@ export default function App() {
           setUser(loggedInUser);
           setOfflineSession(false);
           setSessionMessage("");
-          rememberSession(loggedInUser);
+          rememberSession(loggedInUser).then((permissionState) => {
+            if (!returnPath) applyResolvedLanding(permissionState);
+          });
           setLoggedIn(true);
           /* T10V: return to the deep-linked page after sign-in when there
              was one; otherwise the till. Login must not create a history
@@ -219,36 +292,48 @@ export default function App() {
 
   if (view === "admin") {
     return (
-      <AdminLayout
-        user={user}
-        onPOS={() => {
-          setView("pos");
-          window.history.pushState({}, "", "/app");
-        }}
-        onLogout={logout}
-        initialPage={adminInitialPage}
-      />
+      <>
+        <AdminLayout
+          user={user}
+          entitlements={entitlements}
+          onPOS={() => {
+            setView("pos");
+            window.history.pushState({}, "", "/app");
+          }}
+          onLogout={logout}
+          initialPage={adminInitialPage}
+        />
+      </>
     );
   }
 
   return (
-    <POS
-      onAdmin={() => {
-        if (offlineSession) return;
-        setAdminInitialPage("Dashboard");
-        setView("admin");
-        window.history.pushState({}, "", "/app/dashboard");
-      }}
-      onOpenOnlineOrders={() => {
-        if (offlineSession) return;
-        setAdminInitialPage("Online Orders");
-        setView("admin");
-        window.history.pushState({}, "", "/app/online-orders");
-      }}
-      onStartSelfCheckout={enterSelfCheckout}
-      scoStarting={scoStarting}
-      scoError={scoError}
-      onLogout={logout}
-    />
+    <>
+      <POS
+        onAdmin={() => {
+          if (offlineSession) return;
+          setAdminInitialPage("Dashboard");
+          setView("admin");
+          window.history.pushState({}, "", "/app/dashboard");
+        }}
+        onSettings={() => {
+          if (offlineSession) return;
+          setAdminInitialPage("Settings");
+          setView("admin");
+          window.history.pushState({}, "", "/app/settings");
+        }}
+        onOpenOnlineOrders={() => {
+          if (offlineSession) return;
+          setAdminInitialPage("Online Orders");
+          setView("admin");
+          window.history.pushState({}, "", "/app/online-orders");
+        }}
+        onStartSelfCheckout={enterSelfCheckout}
+        scoStarting={scoStarting}
+        scoError={scoError}
+        onLogout={logout}
+      />
+      <JarvisCorner />
+    </>
   );
 }

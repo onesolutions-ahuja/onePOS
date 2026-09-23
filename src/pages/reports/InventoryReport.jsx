@@ -24,7 +24,7 @@ export default function InventoryReport() {
   const rows = Array.isArray(data) ? data : [];
 
   if (loading) return <ReportTable title="Inventory overview" headers={["Product","SKU / EAN","Category","Stock","Cost","Stock value","Low stock"]} rows={[]} />;
-  if (error) return <div className="p-6 text-sm text-slate-500 bg-white border rounded-xl">Unable to load inventory overview: {error}</div>;
+  if (error) return <div className="onepos-alert onepos-alert-error">Unable to load inventory overview: {error}</div>;
 
   return (
     <ReportTable

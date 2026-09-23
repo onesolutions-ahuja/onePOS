@@ -97,7 +97,7 @@ export default function EndpointTestModal({ integration, endpoint, onClose }) {
               {generatedPayload != null && (
                 <div>
                   <div className="text-xs font-medium text-slate-500 uppercase tracking-wide mb-1">Generated payload (from mappings)</div>
-                  <pre className="bg-slate-900 text-slate-100 rounded-lg p-3 text-xs overflow-x-auto">{typeof generatedPayload === "string" ? generatedPayload : JSON.stringify(generatedPayload, null, 2)}</pre>
+                  <pre className="bg-gray-900 text-gray-100 rounded-lg p-3 text-xs overflow-x-auto">{typeof generatedPayload === "string" ? generatedPayload : JSON.stringify(generatedPayload, null, 2)}</pre>
                 </div>
               )}
               <div>

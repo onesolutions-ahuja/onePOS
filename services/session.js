@@ -23,6 +23,7 @@ export function createSessionToken(user, userStores = []) {
       companyId: user.company_id,
       storeId: user.store_id,
       roleId: user.role_id,
+      isSuperadmin: user.is_superadmin === true,
       username: user.username,
       assignedStoreIds: userStores.map(us => us.store_id),
     },
@@ -35,7 +36,7 @@ export function createSessionToken(user, userStores = []) {
  * Express middleware: Bearer-token authentication. Expired/invalid tokens
  * are ALWAYS rejected - there is no silent extension of a dead session.
  */
-export function createAuthenticate() {
+export function createAuthenticate({ onAuthenticated = null } = {}) {
   return function authenticate(req, res, next) {
     const header = req.headers.authorization;
 
@@ -50,7 +51,8 @@ export function createAuthenticate() {
 
     try {
       req.user = jwt.verify(token, JWT_SECRET);
-      next();
+      if (!onAuthenticated) return next();
+      return Promise.resolve(onAuthenticated(req, res, next)).catch((error) => next(error));
     } catch {
       return res.status(401).json({
         success: false,

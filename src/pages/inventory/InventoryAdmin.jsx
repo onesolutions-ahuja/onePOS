@@ -6,7 +6,7 @@ import StockAdjustmentModal from "./StockAdjustmentModal.jsx";
 import StockByStore from "./StockByStore.jsx";
 import StockTransfers from "./StockTransfers.jsx";
 function ReconciliationModal({ data, onClose }) {
-  return <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4"><div className="bg-white rounded-xl w-[850px] max-w-full max-h-[85vh] shadow-2xl flex flex-col"><div className="p-4 border-b flex justify-between"><div><h2 className="font-bold text-lg">Stock Reconciliation</h2><p className="text-xs text-slate-500">{data.product}</p></div><button onClick={onClose} title="Close"><X size={18} /></button></div><div className="p-4 overflow-auto"><div className={`p-3 rounded text-sm mb-4 ${data.mismatch ? "bg-red-50 text-red-700" : "bg-emerald-50 text-emerald-700"}`}>{data.mismatch ? "Stock balance mismatch" : "Stock balance matches ledger"} <span className="ml-3">Current {data.currentStock} · Ledger {data.ledgerBalance}</span></div><table className="w-full"><thead><tr className="bg-slate-50">{["Date/time", "Type", "Quantity", "Balance", "Reference", "User", "Reason"].map((heading) => <th key={heading} className="text-left px-3 py-2 text-xs uppercase text-slate-500">{heading}</th>)}</tr></thead><tbody>{(data.movements || []).map((movement, index) => <tr key={`${movement.created_at}-${index}`} className="border-t"><td className="px-3 py-2 text-xs">{new Date(movement.created_at).toLocaleString()}</td><td className="px-3 py-2 text-sm font-semibold">{movement.movement_type}</td><td className="px-3 py-2 text-sm">{movement.quantity_change}</td><td className="px-3 py-2 text-sm font-semibold">{movement.balance_after}</td><td className="px-3 py-2 text-xs">{movement.reference_type || "-"}</td><td className="px-3 py-2 text-sm">{movement.username || "-"}</td><td className="px-3 py-2 text-sm">{movement.reason || "-"}</td></tr>)}</tbody></table></div></div></div>;
+  return <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4"><div className="onepos-card w-[850px] max-w-full max-h-[85vh] flex flex-col"><div className="onepos-card-header"><div><h2 className="font-bold text-lg">Stock Reconciliation</h2><p className="text-xs text-slate-500">{data.product}</p></div><button onClick={onClose} title="Close"><X size={18} /></button></div><div className="p-4 overflow-auto"><div className={`p-3 rounded text-sm mb-4 ${data.mismatch ? "bg-red-50 text-red-700" : "bg-emerald-50 text-emerald-700"}`}>{data.mismatch ? "Stock balance mismatch" : "Stock balance matches ledger"} <span className="ml-3">Current {data.currentStock} · Ledger {data.ledgerBalance}</span></div><table className="onepos-table"><thead><tr className="bg-slate-50">{["Date/time", "Type", "Quantity", "Balance", "Reference", "User", "Reason"].map((heading) => <th key={heading} className="text-left px-3 py-2 text-xs uppercase text-slate-500">{heading}</th>)}</tr></thead><tbody>{(data.movements || []).map((movement, index) => <tr key={`${movement.created_at}-${index}`} className="border-t"><td className="px-3 py-2 text-xs">{new Date(movement.created_at).toLocaleString()}</td><td className="px-3 py-2 text-sm font-semibold">{movement.movement_type}</td><td className="px-3 py-2 text-sm">{movement.quantity_change}</td><td className="px-3 py-2 text-sm font-semibold">{movement.balance_after}</td><td className="px-3 py-2 text-xs">{movement.reference_type || "-"}</td><td className="px-3 py-2 text-sm">{movement.username || "-"}</td><td className="px-3 py-2 text-sm">{movement.reason || "-"}</td></tr>)}</tbody></table></div></div></div>;
 }
 
 function InventoryAdmin() {
@@ -151,17 +151,17 @@ function InventoryAdmin() {
 
       return (
         <div>
-          <div className="flex items-center justify-between mb-5">
+          <div className="onepos-page-header">
             <div>
-              <h1 className="text-2xl font-bold">Inventory</h1>
-              <p className="text-sm text-slate-500 mt-1">
+              <h1 className="onepos-page-title">Inventory</h1>
+              <p className="onepos-page-subtitle">
                 Monitor and adjust stock for active products.
               </p>
             </div>
 
             <button
               onClick={loadProducts}
-              className="h-10 px-4 bg-white border border-slate-200 rounded-lg text-sm flex items-center gap-2 hover:bg-slate-50"
+              className="onepos-btn onepos-btn-secondary"
             >
               <RefreshCw size={16} />
               Refresh
@@ -171,32 +171,32 @@ function InventoryAdmin() {
           <div className="mb-4 inline-flex rounded-lg border border-slate-200 overflow-hidden">
             <button
               onClick={() => setStockView("products")}
-              className={`px-4 h-9 text-sm ${stockView === "products" ? "bg-slate-900 text-white" : "bg-white text-slate-600 hover:bg-slate-50"}`}
+              className={`px-4 h-9 text-sm ${stockView === "products" ? "bg-blue-600 text-white" : "bg-white text-slate-600 hover:bg-slate-50"}`}
             >
               Products
             </button>
             <button
               onClick={() => setStockView("byStore")}
-              className={`px-4 h-9 text-sm ${stockView === "byStore" ? "bg-slate-900 text-white" : "bg-white text-slate-600 hover:bg-slate-50"}`}
+              className={`px-4 h-9 text-sm ${stockView === "byStore" ? "bg-blue-600 text-white" : "bg-white text-slate-600 hover:bg-slate-50"}`}
             >
               Stock by Store
             </button>
             <button
               onClick={() => setStockView("transfers")}
-              className={`px-4 h-9 text-sm ${stockView === "transfers" ? "bg-slate-900 text-white" : "bg-white text-slate-600 hover:bg-slate-50"}`}
+              className={`px-4 h-9 text-sm ${stockView === "transfers" ? "bg-blue-600 text-white" : "bg-white text-slate-600 hover:bg-slate-50"}`}
             >
               Stock Transfers
             </button>
           </div>
 
           {message && (
-            <div className="mb-4 px-4 py-3 bg-emerald-50 border border-emerald-200 text-emerald-700 rounded-lg text-sm">
+            <div className="onepos-alert onepos-alert-success mb-4">
               {message}
             </div>
           )}
 
           {error && (
-            <div className="mb-4 px-4 py-3 bg-red-50 border border-red-200 text-red-700 rounded-lg text-sm flex items-center justify-between">
+            <div className="onepos-alert onepos-alert-error mb-4 flex items-center justify-between">
               <span>{error}</span>
               <button
                 onClick={() => setError("")}
@@ -208,8 +208,8 @@ function InventoryAdmin() {
             </div>
           )}
 
-          <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
-            <div className="p-4 border-b border-slate-200">
+          <div className="onepos-card overflow-hidden">
+            <div className="onepos-toolbar">
               <div className="flex items-center gap-3">
                 <div className="relative max-w-md flex-1">
                   <Search
@@ -220,7 +220,7 @@ function InventoryAdmin() {
                     value={search}
                     onChange={(event) => setSearch(event.target.value)}
                     placeholder="Search product, SKU or barcode..."
-                    className="w-full h-10 pl-10 pr-3 border border-slate-200 rounded-lg text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                    className="onepos-input pl-10"
                   />
                 </div>
               </div>
@@ -231,21 +231,21 @@ function InventoryAdmin() {
             ) : stockView === "transfers" ? (
               <StockTransfers />
             ) : loading ? (
-              <div className="p-12 text-center text-slate-400">
+              <div className="onepos-empty">
                 <RefreshCw size={28} className="mx-auto mb-3 animate-spin" />
                 Loading inventory...
               </div>
             ) : filteredProducts.length === 0 ? (
-              <div className="p-12 text-center text-slate-400">
+              <div className="onepos-empty">
                 <Package size={40} className="mx-auto mb-3" />
-                <div className="font-medium text-slate-600">No products found</div>
+                <div className="onepos-empty-title">No products found</div>
                 <div className="text-sm mt-1">Try a different search.</div>
               </div>
             ) : (
               <div className="overflow-x-auto">
-                <table className="w-full">
+                <table className="onepos-table">
                   <thead>
-                    <tr className="bg-slate-50 border-b border-slate-200">
+                    <tr>
                       {[
                         "Product",
                         "SKU",
@@ -386,17 +386,17 @@ function InventoryAdmin() {
 
       return (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-xl w-[1000px] max-w-full max-h-[85vh] shadow-2xl flex flex-col">
-            <div className="p-5 border-b border-slate-200 flex items-center justify-between">
+          <div className="onepos-card w-[1000px] max-w-full max-h-[85vh] flex flex-col">
+            <div className="onepos-card-header">
               <div>
                 <h2 className="font-bold text-xl">Movement History</h2>
-                <p className="text-sm text-slate-500 mt-1">{product.name}</p>
+                <p className="onepos-page-subtitle">{product.name}</p>
               </div>
               <div className="flex items-center gap-3">
                 <select
                   value={movementType}
                   onChange={(event) => onTypeChange(event.target.value)}
-                  className="h-9 px-3 border border-slate-200 rounded-lg text-sm bg-white"
+                  className="onepos-input w-auto"
                 >
                   {movementTypes.map((type) => (
                     <option key={type} value={type}>
@@ -411,11 +411,11 @@ function InventoryAdmin() {
             </div>
             <div className="overflow-auto">
               {loading ? (
-                <div className="p-12 text-center text-slate-400">Loading movement history...</div>
+                <div className="onepos-empty">Loading movement history...</div>
               ) : movements.length === 0 ? (
-                <div className="p-12 text-center text-slate-400">No movements found.</div>
+                <div className="onepos-empty">No movements found.</div>
               ) : (
-                <table className="w-full">
+                <table className="onepos-table">
                   <thead className="sticky top-0 bg-slate-50 border-b border-slate-200">
                     <tr>
                       {["Date/time", "Product", "Movement", "Quantity", "Balance", "Reason", "Reference", "User"].map((heading) => (

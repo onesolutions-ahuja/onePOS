@@ -10,6 +10,18 @@ export function getSales(from, to) {
   return apiRequest(`/api/reports/sales${buildDateQuery(from, to)}`);
 }
 
+/* Dedicated Sales Reports module — one endpoint, four groupings. */
+export function getSalesOverview({ by = "day", from, to, storeId = "", userId = "" } = {}) {
+  const qs = new URLSearchParams({
+    by,
+    dateFrom: from || "",
+    dateTo: to || "",
+    ...(storeId ? { storeId } : {}),
+    ...(userId ? { userId } : {}),
+  });
+  return apiRequest(`/api/reports/sales/overview?${qs.toString()}`);
+}
+
 export function getProducts(from, to) {
   return apiRequest(`/api/reports/products${buildDateQuery(from, to)}`);
 }
@@ -22,16 +34,14 @@ export function getCustomers(from, to) {
   return apiRequest(`/api/reports/customers${buildDateQuery(from, to)}`);
 }
 
-export function getInventoryOverview({ companyId, storeId, dateFrom = null, dateTo = null, limit = 1000, offset = 0 } = {}) {
+export function getInventoryOverview({ dateFrom = null, dateTo = null, limit = 1000, offset = 0 } = {}) {
   const params = [
-    companyId,
-    storeId,
     dateFrom || null,
     dateTo || null,
     Math.max(1, Math.min(10000, Number(limit) || 1000)),
     Math.max(0, Number(offset) || 0),
   ];
-  return apiRequest(`/api/reports/inventory-overview?companyId=${encodeURIComponent(companyId)}&storeId=${encodeURIComponent(storeId)}&dateFrom=${dateFrom || ""}&dateTo=${dateTo || ""}&limit=${params[4]}&offset=${params[5]}`);
+  return apiRequest(`/api/reports/inventory-overview?dateFrom=${dateFrom || ""}&dateTo=${dateTo || ""}&limit=${params[2]}&offset=${params[3]}`);
 }
 
 export function getInventoryMovements({

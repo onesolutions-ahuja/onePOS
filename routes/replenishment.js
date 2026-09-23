@@ -42,9 +42,24 @@ export default function createReplenishmentRouter({ authenticate, authorize, db 
             p.low_stock_level,
             p.track_stock,
             p.category_id,
-            c.name AS category_name
+            c.name AS category_name,
+            preferred_supplier.supplier_id,
+            preferred_supplier.supplier_name,
+            preferred_supplier.supplier_sku,
+            preferred_supplier.cost_price AS supplier_cost
           FROM products p
           LEFT JOIN categories c ON c.id = p.category_id
+          LEFT JOIN LATERAL (
+            SELECT sp.supplier_id, s.name AS supplier_name, sp.supplier_sku, sp.cost_price
+              FROM supplier_products sp
+              INNER JOIN suppliers s ON s.id = sp.supplier_id
+             WHERE sp.company_id = p.company_id
+               AND sp.product_id = p.id
+               AND sp.active = true
+               AND s.active = true
+             ORDER BY sp.preferred DESC, sp.effective_from DESC, sp.cost_price ASC
+             LIMIT 1
+          ) preferred_supplier ON true
           WHERE p.company_id = $1
             AND p.active = true
           `,

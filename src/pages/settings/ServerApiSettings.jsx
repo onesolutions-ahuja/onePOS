@@ -72,24 +72,24 @@ export default function ServerApiSettings({ onMessage, onError }) {
 
   return (
     <div className="space-y-5" data-testid="server-api-settings">
-      <div className="bg-white border border-slate-200 rounded-xl p-6">
-        <h2 className="text-xl font-bold">Server / API Configuration</h2>
-        <p className="text-sm text-slate-500 mt-1">
+      <div className="onepos-card onepos-card-body">
+        <h2 className="onepos-page-title">Server / API Configuration</h2>
+        <p className="onepos-page-subtitle">
           Override the default production API server for this device. Only Superadmins can change this.
         </p>
 
         <div className="mt-6 space-y-4">
           <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1">Current server</label>
+            <label className="onepos-label">Current server</label>
             <div className="h-11 px-3 border border-slate-200 rounded-lg bg-slate-50 text-slate-600 text-sm font-mono break-all">
               {current || "Production Render default (https://onepos.onrender.com)"}
             </div>
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1">
+            <label className="onepos-label">
               New server address
-              <span className="text-slate-400 font-normal ml-1">(include port if needed)</span>
+              <span className="font-normal ml-1">(include port if needed)</span>
             </label>
             <input
               value={input}
@@ -97,7 +97,7 @@ export default function ServerApiSettings({ onMessage, onError }) {
               placeholder="https://onepos.onrender.com or http://192.168.1.50:10000"
               inputMode="url"
               autoComplete="off"
-              className="w-full h-12 px-3 border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-teal-600 font-mono text-sm"
+              className="onepos-input font-mono"
               data-testid="server-address-input"
             />
             <p className="text-xs text-slate-400 mt-1">
@@ -110,7 +110,7 @@ export default function ServerApiSettings({ onMessage, onError }) {
               type="button"
               onClick={handleTest}
               disabled={testing || !input.trim()}
-              className="flex-1 h-12 rounded-lg bg-slate-700 hover:bg-slate-800 text-white font-semibold disabled:opacity-50 flex items-center justify-center gap-2"
+              className="onepos-btn onepos-btn-primary flex-1 flex items-center justify-center gap-2"
               data-testid="test-connection-button"
             >
               <RefreshCw size={16} className={testing ? "animate-spin" : ""} />
@@ -120,7 +120,7 @@ export default function ServerApiSettings({ onMessage, onError }) {
               type="button"
               onClick={handleSave}
               disabled={testing || !input.trim()}
-              className="flex-1 h-12 rounded-lg bg-teal-700 hover:bg-teal-800 text-white font-semibold disabled:opacity-50 flex items-center justify-center gap-2"
+              className="onepos-btn onepos-btn-primary flex-1"
               data-testid="save-server-button"
             >
               <Save size={16} />
@@ -130,13 +130,13 @@ export default function ServerApiSettings({ onMessage, onError }) {
         </div>
 
         {testResult && (
-          <div className={`mt-4 p-3 rounded-lg text-sm ${testResult.includes("unreachable") ? "bg-red-50 border border-red-200 text-red-700" : testResult.includes("Saved") ? "bg-amber-50 border border-amber-200 text-amber-700" : "bg-emerald-50 border border-emerald-200 text-emerald-700"}`}>
+          <div className={`mt-4 onepos-alert ${testResult.includes("unreachable") ? "onepos-alert-error" : testResult.includes("Saved") ? "onepos-alert-warning" : "onepos-alert-success"}`} role="status">
             {testResult}
           </div>
         )}
 
         {saveResult && (
-          <div className="mt-3 p-3 bg-emerald-50 border border-emerald-200 text-emerald-700 rounded-lg text-sm">
+          <div className="mt-3 onepos-alert onepos-alert-success" role="status">
             {saveResult}
           </div>
         )}

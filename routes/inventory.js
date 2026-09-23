@@ -1,5 +1,6 @@
 import express from "express";
-import { lowStockRow, resolveStockStore } from "../services/inventory.js";
+import { lowStockRow, resolveStockStore, allocateBatchConsumption, upsertBatchRow } from "../services/inventory.js";
+import { resolveBatchEntry, normaliseBatchPolicy } from "../services/batchPolicy.js";
 import { resolveAdjustmentReason } from "../services/adjustmentReasons.js";
 
 export default function createInventoryRouter({
@@ -206,6 +207,30 @@ export default function createInventoryRouter({
             .json({ success: false, message: scopeError.message });
         }
 
+        const productResult = await client.query(
+          "SELECT batch_tracking FROM products WHERE id=$1 AND company_id=$2",
+          [productId, req.user.companyId]
+        );
+        const policyResult = await client.query(
+          "SELECT batch_inventory_mode, batch_default_mfg_rule, batch_default_expiry_rule, batch_default_expiry_days FROM company_settings WHERE company_id=$1",
+          [req.user.companyId]
+        );
+        const batch = resolveBatchEntry(normaliseBatchPolicy(policyResult.rows[0]), {
+          productBatchTracking: productResult.rows[0]?.batch_tracking === true,
+          batchNumber: req.body.batchNumber,
+          manufacturingDate: req.body.manufacturingDate,
+          expiryDate: req.body.expiryDate,
+        });
+        if (quantity < 0 && batch.batchNumber) {
+          await allocateBatchConsumption(client, {
+            companyId: req.user.companyId,
+            storeId: adjustStoreId,
+            productId,
+            quantity: Math.abs(quantity),
+            mode: req.body.batchId ? "explicit" : "fefo",
+            batchId: req.body.batchId || null,
+          });
+        }
         const result = await createInventoryMovement(client, {
           companyId: req.user.companyId,
           productId,
@@ -216,6 +241,15 @@ export default function createInventoryRouter({
           notes: storedNotes,
           createdBy: req.user.id,
         });
+        if (quantity > 0 && batch.batchNumber) {
+          await upsertBatchRow(client, {
+            companyId: req.user.companyId,
+            storeId: adjustStoreId,
+            productId,
+            ...batch,
+            quantity,
+          });
+        }
 
         await client.query("COMMIT");
 
@@ -592,6 +626,11 @@ export default function createInventoryRouter({
             "INSERT INTO stock_transfer_items (transfer_id, product_id, quantity) VALUES ($1, $2, $3)",
             [transferId, line.productId, line.quantity]
           );
+          const btCheck = await client.query(
+            "SELECT batch_tracking FROM products WHERE id = $1 AND company_id = $2",
+            [line.productId, req.user.companyId]
+          );
+          const batchTracked = btCheck.rows[0] ? btCheck.rows[0].batch_tracking : false;
           /* Source side: guarded like every non-SALE movement. */
           const out = await createInventoryMovement(client, {
             companyId: req.user.companyId,
@@ -604,6 +643,20 @@ export default function createInventoryRouter({
             reason: notes || null,
             createdBy: req.user.id,
           });
+          /* Batch bookkeeping (source): debit this store's batch rows FEFO
+           * in step with the TRANSFER_OUT movement — the movement is the
+           * authoritative stock change; this keeps the batch rows
+           * consistent inside the same transaction. */
+          let sourceBatchAllocation = null;
+          if (batchTracked) {
+            sourceBatchAllocation = await allocateBatchConsumption(client, {
+              companyId: req.user.companyId,
+              storeId: fromStoreId,
+              productId: line.productId,
+              quantity: line.quantity,
+              mode: "fefo",
+            });
+          }
           /* Destination side. If THIS fails, the whole transaction (including
            * the source deduction) rolls back — atomicity. */
           const inn = await createInventoryMovement(client, {
@@ -617,6 +670,37 @@ export default function createInventoryRouter({
             reason: notes || null,
             createdBy: req.user.id,
           });
+          /* Batch bookkeeping (destination): goods arrive with their batch
+           * numbers — mirror the source allocation into the destination
+           * store's batch rows (accumulating into an existing batch of the
+           * same number is correct). Source stock that was never batched
+           * lands in a per-transfer row so nothing is silently untracked. */
+          if (batchTracked) {
+            const inbound = ((sourceBatchAllocation && sourceBatchAllocation.consumed) || []).filter(
+              (c) => c.batchNumber && !c.unbatched
+            );
+            if (inbound.length) {
+              for (const c of inbound) {
+                await upsertBatchRow(client, {
+                  companyId: req.user.companyId,
+                  storeId: toStoreId,
+                  productId: line.productId,
+                  batchNumber: c.batchNumber,
+                  expiryDate: c.expiryDate || null,
+                  quantity: c.quantity,
+                });
+              }
+            } else {
+              await upsertBatchRow(client, {
+                companyId: req.user.companyId,
+                storeId: toStoreId,
+                productId: line.productId,
+                batchNumber: `TRANSFER-${transferId.slice(0, 8).toUpperCase()}`,
+                expiryDate: null,
+                quantity: line.quantity,
+              });
+            }
+          }
           executedLines.push({
             productId: line.productId,
             productName: out.product.name,
@@ -797,4 +881,3 @@ export default function createInventoryRouter({
 
   return router;
 }
-

@@ -41,6 +41,7 @@ const SECTIONS = [
   {
     title: "Company",
     links: [
+      { label: "Help & Support", to: "/help" },
       { label: "Security & Control", to: "/security" },
       { label: "onePOS Ecosystem", to: "/ecosystem" },
       { label: "FAQ", to: "/faq" },

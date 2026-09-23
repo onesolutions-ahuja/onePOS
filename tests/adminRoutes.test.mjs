@@ -125,6 +125,7 @@ const appSrc = fs.readFileSync(new URL("../src/App.jsx", import.meta.url), "utf8
 const layoutSrc = fs.readFileSync(new URL("../src/pages/admin/AdminLayout.jsx", import.meta.url), "utf8");
 const settingsSrc = fs.readFileSync(new URL("../src/pages/settings/SettingsAdmin.jsx", import.meta.url), "utf8");
 const serverSrc = fs.readFileSync(new URL("../server.js", import.meta.url), "utf8");
+const readShellSrc = () => fs.readFileSync(new URL("../src/components/AdminShell.jsx", import.meta.url), "utf8");
 
 describe("T10V wiring — App.jsx", () => {
   test("the URL decides the starting view (refresh keeps the page)", () => {
@@ -182,7 +183,15 @@ describe("T10V wiring — AdminLayout", () => {
   test("report and settings deep links resolve", () => {
     assert.match(layoutSrc, /slugifyReportKey/, "report slug helper exists");
     assert.match(layoutSrc, /REPORT_MENU_ITEMS\.find\(\(item\) => slugifyReportKey\(item\.key\) === parsed\.reportKey\)/);
-    assert.match(layoutSrc, /navigate\("Settings", \{ settingsTab: "Users & Permissions" \}\)/, "profile menu keeps its deep tab");
+    /* T-UI-SHELL: the profile menu moved into AdminShell; the deep tab is
+       passed through onOpenSettings → navigate ("Users & Permissions" is a
+       legacy redirect inside SettingsAdmin). */
+    assert.match(
+      readShellSrc(),
+      /onOpenSettings\?\.\("Users & Permissions"\)/,
+      "profile menu keeps its deep tab (via AdminShell onOpenSettings)"
+    );
+    assert.match(layoutSrc, /onOpenSettings=\{\(tab\) => \{[\s\S]*?navigate\("Settings", \{ settingsTab: tab/);
   });
 
   test("permission gating is untouched (reports, returns, replenishment, integrations)", () => {

@@ -148,7 +148,7 @@ export default function CameraScanner({ onClose, onDetected }) {
 
   return (
     <div
-      className="fixed inset-0 z-50 bg-slate-900 flex flex-col"
+      className="fixed inset-0 z-50 bg-gray-900 flex flex-col"
       role="dialog"
       aria-label="Camera barcode scanner"
       data-testid="scan-go-camera-scanner"

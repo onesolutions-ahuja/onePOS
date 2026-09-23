@@ -164,7 +164,7 @@ function CreateTransfer({ stores, onDone, onError, onMessage }) {
         <button
           onClick={submit}
           disabled={submitting}
-          className="h-10 px-5 bg-slate-900 text-white rounded-lg text-sm disabled:opacity-50"
+          className="onepos-btn onepos-btn-primary"
         >
           {submitting ? "Transferring…" : "Submit transfer"}
         </button>
@@ -321,8 +321,8 @@ export default function StockTransfers() {
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <div className="inline-flex rounded-lg border border-slate-200 overflow-hidden">
-          <button onClick={() => setMode("history")} className={`px-4 h-9 text-sm ${mode === "history" ? "bg-slate-900 text-white" : "bg-white text-slate-600 hover:bg-slate-50"}`}>History</button>
-          <button onClick={() => setMode("create")} className={`px-4 h-9 text-sm ${mode === "create" ? "bg-slate-900 text-white" : "bg-white text-slate-600 hover:bg-slate-50"}`}>Create Transfer</button>
+          <button onClick={() => setMode("history")} className={`px-4 h-9 text-sm ${mode === "history" ? "bg-blue-600 text-white" : "bg-white text-slate-600 hover:bg-slate-50"}`}>History</button>
+          <button onClick={() => setMode("create")} className={`px-4 h-9 text-sm ${mode === "create" ? "bg-blue-600 text-white" : "bg-white text-slate-600 hover:bg-slate-50"}`}>Create Transfer</button>
         </div>
         {mode === "history" && (
           <button onClick={() => setReloadKey((k) => k + 1)} className="h-9 px-3 border border-slate-200 rounded-lg text-sm flex items-center gap-2 hover:bg-slate-50">

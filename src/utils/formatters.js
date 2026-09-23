@@ -12,6 +12,7 @@ export function normaliseProduct(product) {
     ageRestricted: product.age_restricted === true || product.ageRestricted === true,
     lowStockLevel: Number(product.low_stock_level ?? product.lowStockLevel ?? 0),
     trackStock: product.track_stock !== false && product.trackStock !== false,
+    batchTracking: product.batch_tracking === true || product.batchTracking === true,
     availableOnUber: product.available_on_uber === true || product.availableOnUber === true,
     availableOnDeliveroo: product.available_on_deliveroo === true || product.availableOnDeliveroo === true,
     uberItemId: product.uber_item_id || product.uberItemId || "",

@@ -201,6 +201,18 @@ test("unconfirmed card entries are never sent automatically", async () => {
   assert.equal(getQueueEntries()[0].paymentUnverified, true);
 });
 
+test("idempotency conflict is retained for reconciliation", async () => {
+  globalThis.fetch = async () => ({
+    ok: false,
+    status: 409,
+    json: async () => ({ success: false, code: "IDEMPOTENCY_CONFLICT" }),
+  });
+  await syncOfflineQueue();
+  const snapshot = getQueueSnapshot();
+  assert.equal(snapshot.needsReconciliation, 1);
+  assert.equal(getQueueEntries()[0].status, "needs_reconciliation");
+});
+
 test("reconnect event automatically drains retained sale", async () => {
   const previousWindow = globalThis.window;
   globalThis.window = new EventTarget();

@@ -65,5 +65,9 @@ export function replenishmentRow(product) {
     category: product.category || product.category_name || "All",
     categoryId: product.category_id || product.categoryId || null,
     trackStock: (product.track_stock ?? product.trackStock) !== false,
+    preferredSupplierId: product.supplier_id || null,
+    preferredSupplierName: product.supplier_name || null,
+    preferredSupplierSku: product.supplier_sku || null,
+    preferredSupplierCost: product.supplier_cost == null ? null : Number(product.supplier_cost),
   };
 }

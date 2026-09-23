@@ -12,6 +12,7 @@ import {
   normalizeJarvesAllowance,
   setJarvesAllowance,
 } from "../services/jarvis/licensing.js";
+import { destinationFor, isValidLandingPage, normalizeDeviceProfile } from "../services/runtimeAccess.js";
 
 export default function createSettingsRouter({
   authenticate,
@@ -20,8 +21,89 @@ export default function createSettingsRouter({
   pool,
   writeAudit,
   testPaymentTerminal,
+  requireLoyaltyEntitlement = null,
 }) {
   const router = express.Router();
+
+  router.get("/settings/runtime", authenticate, async (req, res) => {
+    try {
+      const result = await db(
+        `SELECT cs.default_landing_page, r.default_landing_page AS role_default_landing_page,
+                t.app_profile, up.preferences
+         FROM users u
+         LEFT JOIN company_settings cs ON cs.company_id=u.company_id
+         LEFT JOIN roles r ON r.id=u.role_id AND r.company_id=u.company_id
+         LEFT JOIN terminals t ON t.store_id=u.store_id AND t.active=true
+         LEFT JOIN user_preferences up ON up.user_id=u.id
+         WHERE u.id=$1 AND u.company_id=$2
+         ORDER BY t.created_at
+         LIMIT 1`,
+        [req.user.id, req.user.companyId]
+      );
+      const row = result.rows[0] || {};
+      const preferences = row.preferences && typeof row.preferences === "object" ? row.preferences : {};
+      res.json({
+        success: true,
+        data: {
+          companyDefault: destinationFor(row.default_landing_page)?.key || "dashboard",
+          roleDefault: destinationFor(row.role_default_landing_page)?.key || null,
+          deviceProfile: normalizeDeviceProfile(row.app_profile),
+          userOverride: destinationFor(preferences.landingPage)?.key || null,
+        },
+      });
+    } catch (error) {
+      console.error("Runtime settings load error:", error?.message || error);
+      res.status(500).json({ success: false, message: "Unable to load runtime settings" });
+    }
+  });
+
+  router.put("/settings/runtime", authenticate, authorize("settings.manage"), async (req, res) => {
+    const { companyDefault, roleDefault, appProfile } = req.body || {};
+    if (!isValidLandingPage(companyDefault) || (roleDefault != null && !isValidLandingPage(roleDefault))) {
+      return res.status(400).json({ success: false, message: "Landing page must be a permitted runtime destination" });
+    }
+    const profile = normalizeDeviceProfile(appProfile);
+    try {
+      await db(
+        `INSERT INTO company_settings (company_id, default_landing_page, updated_by, updated_at)
+         VALUES ($1,$2,$3,NOW())
+         ON CONFLICT (company_id) DO UPDATE SET default_landing_page=$2, updated_by=$3, updated_at=NOW()`,
+        [req.user.companyId, destinationFor(companyDefault).key, req.user.id]
+      );
+      if (roleDefault !== undefined) {
+        await db("UPDATE roles SET default_landing_page=$1 WHERE id=$2 AND company_id=$3", [roleDefault ? destinationFor(roleDefault).key : null, req.user.roleId, req.user.companyId]);
+      }
+      if (req.user.storeId) {
+        await db("UPDATE terminals SET app_profile=$1 WHERE store_id=$2 AND active=true", [profile, req.user.storeId]);
+      }
+      res.json({ success: true, data: { companyDefault, roleDefault: roleDefault || null, appProfile: profile } });
+    } catch (error) {
+      console.error("Runtime settings update error:", error?.message || error);
+      res.status(500).json({ success: false, message: "Unable to save runtime settings" });
+    }
+  });
+
+  router.patch("/settings/runtime/user", authenticate, async (req, res) => {
+    const { landingPage } = req.body || {};
+    if (landingPage != null && !isValidLandingPage(landingPage)) {
+      return res.status(400).json({ success: false, message: "Landing page must be a permitted runtime destination" });
+    }
+    try {
+      await db(
+        `INSERT INTO user_preferences (user_id, preferences, updated_at)
+         VALUES ($1, jsonb_build_object('landingPage', $2::text), NOW())
+         ON CONFLICT (user_id) DO UPDATE SET
+           preferences=CASE WHEN $2::text IS NULL THEN user_preferences.preferences - 'landingPage'
+                            ELSE jsonb_set(user_preferences.preferences, '{landingPage}', to_jsonb($2::text), true) END,
+           updated_at=NOW()`,
+        [req.user.id, landingPage == null ? null : destinationFor(landingPage).key]
+      );
+      res.json({ success: true, data: { userOverride: landingPage == null ? null : destinationFor(landingPage).key } });
+    } catch (error) {
+      console.error("User runtime setting update error:", error?.message || error);
+      res.status(500).json({ success: false, message: "Unable to save user runtime setting" });
+    }
+  });
 
   /*
    * JARVES licence control (see services/jarvis/licensing.js).
@@ -79,7 +161,7 @@ export default function createSettingsRouter({
           cs.date_format, cs.vat_enabled, cs.default_vat_rate, cs.loyalty_enabled, cs.loyalty_earning_rate,
           cs.loyalty_min_sale_total, cs.loyalty_redeem_value_per_point, cs.loyalty_min_points_redeem,
           cs.allow_negative_inventory_billing,
-          cs.scan_go_enabled, cs.online_ordering_enabled, cs.online_payment_methods,
+          cs.scan_go_enabled, cs.exchange_mode, cs.online_ordering_enabled, cs.online_payment_methods,
           cs.product_view, cs.dock_quick_access,
           cs.customer_display_enabled,
           s.id AS store_id, s.name AS store_name,
@@ -123,6 +205,10 @@ export default function createSettingsRouter({
           inventory: {
             /* T10U: negative-inventory billing safety — OFF unless explicitly enabled. */
             allowNegativeInventoryBilling: settings.allow_negative_inventory_billing === true,
+            batchInventoryMode: settings.batch_inventory_mode || "none",
+            batchDefaultMfgRule: settings.batch_default_mfg_rule || "none",
+            batchDefaultExpiryRule: settings.batch_default_expiry_rule || "none",
+            batchDefaultExpiryDays: Number(settings.batch_default_expiry_days || 365),
           },
           loyalty: {
             enabled: settings.loyalty_enabled ?? false,
@@ -136,6 +222,13 @@ export default function createSettingsRouter({
           },
           scanGo: {
             enabled: settings.scan_go_enabled ?? false,
+          },
+          exchange: {
+            /* receipt | normal | both (default). The till Exchange workflow
+               and POST /api/returns/exchanges enforce this server-side. */
+            mode: ["receipt", "normal", "both"].includes(settings.exchange_mode)
+              ? settings.exchange_mode
+              : "both",
           },
           till: {
             id: settings.till_id,
@@ -202,6 +295,28 @@ export default function createSettingsRouter({
         success: false,
         message: "Enabling negative-inventory billing requires explicit acknowledgement of the warning",
       });
+
+      router.put("/settings/batch-policy", authenticate, authorize("settings.manage"), async (req, res) => {
+        const { batchInventoryMode = "none", batchDefaultMfgRule = "none", batchDefaultExpiryRule = "none", batchDefaultExpiryDays = 365 } = req.body || {};
+        const modes = ["required_dates", "optional_dates", "none"];
+        const rules = ["none", "today", "today_plus_days"];
+        const days = Math.floor(Number(batchDefaultExpiryDays));
+        if (!modes.includes(batchInventoryMode) || !rules.includes(batchDefaultMfgRule) || !rules.includes(batchDefaultExpiryRule) || !Number.isFinite(days) || days < 0 || days > 3650) {
+          return res.status(400).json({ success: false, message: "Invalid batch inventory policy" });
+        }
+        try {
+          await db(
+            `INSERT INTO company_settings (company_id, batch_inventory_mode, batch_default_mfg_rule, batch_default_expiry_rule, batch_default_expiry_days, updated_by, updated_at)
+             VALUES ($1,$2,$3,$4,$5,$6,NOW())
+             ON CONFLICT (company_id) DO UPDATE SET batch_inventory_mode=$2, batch_default_mfg_rule=$3, batch_default_expiry_rule=$4, batch_default_expiry_days=$5, updated_by=$6, updated_at=NOW()`,
+            [req.user.companyId, batchInventoryMode, batchDefaultMfgRule, batchDefaultExpiryRule, days, req.user.id]
+          );
+          res.json({ success: true, data: { batchInventoryMode, batchDefaultMfgRule, batchDefaultExpiryRule, batchDefaultExpiryDays: days } });
+        } catch (error) {
+          console.error("Update batch policy error:", error);
+          res.status(500).json({ success: false, message: "Unable to update batch inventory policy" });
+        }
+      });
     }
 
     const client = await pool.connect();
@@ -250,7 +365,7 @@ export default function createSettingsRouter({
     }
   });
 
-  router.put("/settings", authenticate, async (req, res) => {
+  router.put("/settings", authenticate, ...(requireLoyaltyEntitlement ? [requireLoyaltyEntitlement] : []), async (req, res) => {
     const {
       companyName,
       legalName,
@@ -267,12 +382,17 @@ export default function createSettingsRouter({
       loyaltyRedeemValuePerPoint,
       loyaltyMinPointsRedeem,
       scanGoEnabled,
+      exchangeMode,
       productView,
       dockQuickAccess,
       customerDisplayEnabled,
       onlineOrderingEnabled,
       onlinePaymentMethods,
       invoicePrefixes,
+      batchInventoryMode,
+      batchDefaultMfgRule,
+      batchDefaultExpiryRule,
+      batchDefaultExpiryDays,
       logoUrl = null,
     } = req.body;
 
@@ -324,6 +444,30 @@ export default function createSettingsRouter({
     // Validate till product view (T10Q: image | compact; default image)
     if (productView !== undefined && productView !== null && !["image", "compact"].includes(productView)) {
       return res.status(400).json({ success: false, message: "Till product view must be 'image' or 'compact'" });
+    }
+
+    // Validate exchange mode (receipt | normal | both; default both)
+    const EXCHANGE_MODES = ["receipt", "normal", "both"];
+    const exchangeModeNorm = exchangeMode === undefined || exchangeMode === null
+      ? undefined
+      : String(exchangeMode).trim().toLowerCase();
+    if (exchangeModeNorm !== undefined && !EXCHANGE_MODES.includes(exchangeModeNorm)) {
+      return res.status(400).json({ success: false, message: "Exchange mode must be 'receipt', 'normal' or 'both'" });
+    }
+    const batchModes = ["required_dates", "optional_dates", "none"];
+    const dateRules = ["none", "today", "today_plus_days"];
+    if (batchInventoryMode !== undefined && !batchModes.includes(batchInventoryMode)) {
+      return res.status(400).json({ success: false, message: "Invalid batch inventory mode" });
+    }
+    if (batchDefaultMfgRule !== undefined && !dateRules.includes(batchDefaultMfgRule)) {
+      return res.status(400).json({ success: false, message: "Invalid default manufacturing date rule" });
+    }
+    if (batchDefaultExpiryRule !== undefined && !dateRules.includes(batchDefaultExpiryRule)) {
+      return res.status(400).json({ success: false, message: "Invalid default expiry date rule" });
+    }
+    const batchDays = batchDefaultExpiryDays === undefined ? null : Math.floor(Number(batchDefaultExpiryDays));
+    if (batchDays !== null && (!Number.isFinite(batchDays) || batchDays < 0 || batchDays > 3650)) {
+      return res.status(400).json({ success: false, message: "Default expiry days must be between 0 and 3650" });
     }
 
     // Validate dock quick-access list (T10W): array of known admin page
@@ -396,9 +540,9 @@ export default function createSettingsRouter({
          arm below keeps the stored value on update. */
       await client.query(
         `
-        INSERT INTO company_settings (company_id, date_format, vat_enabled, default_vat_rate, loyalty_enabled, loyalty_earning_rate, loyalty_min_sale_total, loyalty_redeem_value_per_point, loyalty_min_points_redeem, scan_go_enabled, product_view, dock_quick_access, customer_display_enabled, online_ordering_enabled, online_payment_methods, till_invoice_prefix, delivery_invoice_prefix, self_checkout_invoice_prefix, updated_by, updated_at)
-        VALUES ($1,$2,$3,$4,$5,COALESCE($6, 0.0100),$7::numeric,$8::numeric,$9::integer,$10,COALESCE($11, 'image'),COALESCE($12::jsonb, '["Dashboard", "Sales", "Products", "Inventory", "Customers", "Reports"]'::jsonb),COALESCE($13, false),$14,COALESCE($15::jsonb, '["card", "cash", "cod"]'::jsonb),COALESCE($16,'TO'),COALESCE($17,'DEL'),COALESCE($18,'SC'),$19,NOW())
-        ON CONFLICT (company_id) DO UPDATE SET date_format=$2, vat_enabled=$3, default_vat_rate=$4, loyalty_enabled=$5, loyalty_earning_rate=COALESCE($6, company_settings.loyalty_earning_rate), loyalty_min_sale_total=COALESCE($7::numeric, company_settings.loyalty_min_sale_total), loyalty_redeem_value_per_point=COALESCE($8::numeric, company_settings.loyalty_redeem_value_per_point), loyalty_min_points_redeem=COALESCE($9::integer, company_settings.loyalty_min_points_redeem), scan_go_enabled=$10, product_view=COALESCE($11, company_settings.product_view), dock_quick_access=COALESCE($12::jsonb, company_settings.dock_quick_access), customer_display_enabled=COALESCE($13, company_settings.customer_display_enabled), online_ordering_enabled=$14, online_payment_methods=COALESCE($15::jsonb, company_settings.online_payment_methods), till_invoice_prefix=COALESCE($16, company_settings.till_invoice_prefix), delivery_invoice_prefix=COALESCE($17, company_settings.delivery_invoice_prefix), self_checkout_invoice_prefix=COALESCE($18, company_settings.self_checkout_invoice_prefix), updated_by=$19, updated_at=NOW()
+        INSERT INTO company_settings (company_id, date_format, vat_enabled, default_vat_rate, loyalty_enabled, loyalty_earning_rate, loyalty_min_sale_total, loyalty_redeem_value_per_point, loyalty_min_points_redeem, scan_go_enabled, exchange_mode, product_view, dock_quick_access, customer_display_enabled, online_ordering_enabled, online_payment_methods, till_invoice_prefix, delivery_invoice_prefix, self_checkout_invoice_prefix, updated_by, updated_at)
+        VALUES ($1,$2,$3,$4,$5,COALESCE($6, 0.0100),$7::numeric,$8::numeric,$9::integer,$10,COALESCE($11, 'both'),COALESCE($12, 'image'),COALESCE($13::jsonb, '["Dashboard", "Sales", "Products", "Inventory", "Customers", "Reports"]'::jsonb),COALESCE($14, false),$15,COALESCE($16::jsonb, '["card", "cash", "cod"]'::jsonb),COALESCE($17,'TO'),COALESCE($18,'DEL'),COALESCE($19,'SC'),$20,NOW())
+        ON CONFLICT (company_id) DO UPDATE SET date_format=$2, vat_enabled=$3, default_vat_rate=$4, loyalty_enabled=$5, loyalty_earning_rate=COALESCE($6, company_settings.loyalty_earning_rate), loyalty_min_sale_total=COALESCE($7::numeric, company_settings.loyalty_min_sale_total), loyalty_redeem_value_per_point=COALESCE($8::numeric, company_settings.loyalty_redeem_value_per_point), loyalty_min_points_redeem=COALESCE($9::integer, company_settings.loyalty_min_points_redeem), scan_go_enabled=$10, exchange_mode=COALESCE($11, company_settings.exchange_mode), product_view=COALESCE($12, company_settings.product_view), dock_quick_access=COALESCE($13::jsonb, company_settings.dock_quick_access), customer_display_enabled=COALESCE($14, company_settings.customer_display_enabled), online_ordering_enabled=$15, online_payment_methods=COALESCE($16::jsonb, company_settings.online_payment_methods), till_invoice_prefix=COALESCE($17, company_settings.till_invoice_prefix), delivery_invoice_prefix=COALESCE($18, company_settings.delivery_invoice_prefix), self_checkout_invoice_prefix=COALESCE($19, company_settings.self_checkout_invoice_prefix), updated_by=$20, updated_at=NOW()
         `,
         [
           req.user.companyId,
@@ -411,6 +555,7 @@ export default function createSettingsRouter({
           loyaltyRedeemValueNorm,
           loyaltyMinPointsNorm,
           scanGoEnabled === true,
+          exchangeModeNorm || null,
           productView === "compact" ? "compact" : productView === "image" ? "image" : null,
           Array.isArray(dockQuickAccess) ? JSON.stringify(dockQuickAccess) : null,
           typeof customerDisplayEnabled === "boolean" ? customerDisplayEnabled : null,

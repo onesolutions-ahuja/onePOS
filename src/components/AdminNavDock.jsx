@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { BarChart3, LayoutGrid, Search, Store, X } from "lucide-react";
+import JarvisCorner from "./jarvis/JarvisCorner.jsx";
 
 /* Small inline icon for report submenu rows (keeps the dock self-contained). */
 function BarChartIcon() {
@@ -54,7 +55,7 @@ const GROUPS = [
   },
   {
     title: "Admin",
-    pages: ["Integrations", "Accounting", "Settings"],
+    pages: ["Integrations", "Accounting", "Settings", "Audit Log"],
   },
 ];
 
@@ -181,12 +182,8 @@ export default function AdminNavDock({ items, reportItems = [], page, onNavigate
     ? quickAccess.slice(0, MAX_QUICK_ACCESS)
     : DOCK_PRIMARY;
   const mid = Math.ceil(configured.length / 2);
-  const dockSlots = [
-    ...configured.slice(0, mid),
-    "LEFT", /* launcher slot marker — always centred */
-    ...configured.slice(mid),
-    "Open Till",
-  ];
+  const leftSlots = configured.slice(0, mid);
+  const rightSlots = [...configured.slice(mid), "Open Till"];
 
   /* close on Escape for keyboard users */
   useEffect(() => {
@@ -209,10 +206,10 @@ export default function AdminNavDock({ items, reportItems = [], page, onNavigate
   };
 
   return (
-    <div ref={rootRef} className="fixed bottom-[5px] left-1/2 -translate-x-1/2 z-50">
+    <div ref={rootRef} className="fixed bottom-[5px] inset-x-0 flex justify-center z-50">
       <nav
         aria-label="Main navigation"
-        className="flex items-center gap-1 px-2.5 py-1.5 rounded-2xl border border-white/15 shadow-2xl"
+        className="relative flex max-w-[calc(100vw-8px)] items-center gap-1 overflow-x-auto px-2.5 py-1.5 rounded-2xl border border-white/15 shadow-2xl"
         style={{
           background: "rgba(13,52,49,0.88)",
           backdropFilter: "blur(18px) saturate(160%)",
@@ -220,27 +217,8 @@ export default function AdminNavDock({ items, reportItems = [], page, onNavigate
           boxShadow: "0 14px 40px rgba(4,26,24,0.45), 0 3px 10px rgba(4,26,24,0.30), inset 0 1px 0 rgba(255,255,255,0.10)",
         }}
       >
-        {dockSlots.map((slot) => {
-          if (slot === "LEFT") {
-            return (
-              <button
-                key="launcher"
-                onClick={() => setOpen((v) => !v)}
-                aria-haspopup="menu"
-                aria-expanded={open}
-                aria-label={open ? "Close all pages menu" : "Open all pages menu"}
-                title="All pages"
-                className="mx-1.5 w-[54px] h-[46px] rounded-full grid place-items-center text-white transition-transform active:scale-95"
-                style={{
-                  background: "linear-gradient(135deg,#1a817b 0%,#176F6A 55%,#0e5f5a 100%)",
-                  boxShadow: "0 6px 16px rgba(23,111,106,0.55), inset 0 1px 0 rgba(255,255,255,0.25)",
-                }}
-              >
-                <LayoutGrid size={22} />
-              </button>
-            );
-          }
-
+        <div className="flex items-center gap-1">
+        {leftSlots.map((slot) => {
           const Icon = byName.get(slot) || (slot === "Open Till" ? Store : null);
           /* Page not available to this user (permission-filtered out) → skip. */
           if (!Icon) return null;
@@ -265,6 +243,45 @@ export default function AdminNavDock({ items, reportItems = [], page, onNavigate
             </button>
           );
         })}
+        <button
+          onClick={() => setOpen((v) => !v)}
+          aria-haspopup="menu"
+          aria-expanded={open}
+          aria-label={open ? "Close all pages menu" : "Open all pages menu"}
+          title="All pages"
+          className="mx-1.5 w-[54px] h-[46px] shrink-0 rounded-full grid place-items-center text-white transition-transform active:scale-95"
+          style={{
+            background: "linear-gradient(135deg,#1a817b 0%,#176F6A 55%,#0e5f5a 100%)",
+            boxShadow: "0 6px 16px rgba(23,111,106,0.55), inset 0 1px 0 rgba(255,255,255,0.25)",
+          }}
+        >
+          <LayoutGrid size={22} />
+        </button>
+        </div>
+        <div className="w-[66px] shrink-0" aria-hidden="true" />
+        <JarvisCorner embedded />
+        <div className="flex items-center gap-1">
+        {rightSlots.map((slot) => {
+          const Icon = byName.get(slot) || (slot === "Open Till" ? Store : null);
+          if (!Icon) return null;
+          const active = page === slot;
+          return (
+            <button
+              key={slot}
+              onClick={() => navigate(slot)}
+              aria-current={active ? "page" : undefined}
+              title={slot === "Open Till" ? "Open Till (POS)" : slot}
+              className={`relative w-[52px] h-[46px] rounded-xl grid place-items-center transition-colors ${
+                active ? "bg-white/20 text-white" : "text-emerald-50/85 hover:bg-white/10 active:bg-white/15"
+              }`}
+            >
+              <Icon size={22} />
+              {active && <span className="absolute bottom-1 left-1/2 -translate-x-1/2 w-4 h-[3px] rounded-full bg-emerald-300" />}
+              {slot === "Open Till" && <span className="absolute -bottom-[1px] inset-x-2 h-[2px] rounded-full bg-emerald-400/60" />}
+            </button>
+          );
+        })}
+        </div>
       </nav>
 
       {open && (

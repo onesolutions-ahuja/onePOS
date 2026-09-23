@@ -1,6 +1,128 @@
 import express from "express";
+import { valuationRow } from "../services/inventoryValuation.js";
+import { buildProfitReport } from "../services/profitMargin.js";
+import { buildPlatformObjectQuery, STANDARD_REPORT_SOURCES, validatePlatformReportDefinition } from "../services/reportableSources.js";
+
+export const CUSTOM_REPORT_FIELDS = [
+  { key: "date", label: "Date", sql: "(s.created_at AT TIME ZONE c.timezone)::date", groupable: true },
+  { key: "store", label: "Store", sql: "st.name", groupable: true },
+  { key: "user", label: "Operator", sql: "COALESCE(u.full_name, u.username, 'Unknown')", groupable: true },
+  { key: "product", label: "Product", sql: "p.name", groupable: true },
+  { key: "sku", label: "SKU", sql: "p.sku", groupable: true },
+  { key: "quantity", label: "Quantity sold", sql: "COALESCE(SUM(si.quantity), 0)", aggregate: true },
+  { key: "gross_sales", label: "Gross sales", sql: "COALESCE(SUM(si.total), 0)", aggregate: true },
+  { key: "net_sales", label: "Net sales", sql: "COALESCE(SUM(si.total - si.tax), 0)", aggregate: true },
+  { key: "vat", label: "VAT", sql: "COALESCE(SUM(si.tax), 0)", aggregate: true },
+  { key: "discount", label: "Discounts", sql: "COALESCE(SUM(si.discount), 0)", aggregate: true },
+  { key: "transactions", label: "Transactions", sql: "COUNT(DISTINCT s.id)", aggregate: true },
+];
+const CUSTOM_FIELD_MAP = new Map(CUSTOM_REPORT_FIELDS.map((field) => [field.key, field]));
+const CUSTOM_DATE_FILTERS = [
+  { key: "today", label: "Today" }, { key: "yesterday", label: "Yesterday" },
+  { key: "this_week", label: "This week" }, { key: "last_7_days", label: "Last 7 days" },
+  { key: "this_month", label: "This month" }, { key: "this_quarter", label: "This quarter" },
+  { key: "fiscal_year", label: "Fiscal year" }, { key: "custom", label: "Custom dates" },
+];
+
+function customDateRange(filters = []) {
+  const dateFilter = filters.find((filter) => filter && (filter.field === "date" || filter.operator));
+  const operator = dateFilter?.operator || "this_week";
+  const now = new Date();
+  const iso = (date) => date.toISOString().slice(0, 10);
+  const start = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+  if (operator === "custom") return { from: dateFilter.from || dateFilter.dateFrom || null, to: dateFilter.to || dateFilter.dateTo || null };
+  if (operator === "today") return { from: iso(start), to: iso(start) };
+  if (operator === "yesterday") { start.setUTCDate(start.getUTCDate() - 1); return { from: iso(start), to: iso(start) }; }
+  if (operator === "last_7_days") { start.setUTCDate(start.getUTCDate() - 6); return { from: iso(start), to: iso(new Date()) }; }
+  if (operator === "this_month") return { from: iso(new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1))), to: iso(new Date()) };
+  if (operator === "this_quarter") {
+    const quarterStartMonth = Math.floor(now.getUTCMonth() / 3) * 3;
+    return { from: iso(new Date(Date.UTC(now.getUTCFullYear(), quarterStartMonth, 1))), to: iso(new Date()) };
+  }
+  if (operator === "fiscal_year") return { from: iso(new Date(Date.UTC(now.getUTCFullYear(), 0, 1))), to: iso(new Date()) };
+  const day = start.getUTCDay() || 7;
+  start.setUTCDate(start.getUTCDate() - day + 1);
+  return { from: iso(start), to: iso(new Date()) };
+}
+
+export function validateCustomReportDefinition(input = {}) {
+  const definition = input || {};
+  if (definition.dataSource && !["sales", "platform_object"].includes(definition.dataSource)) throw new Error("Unsupported report data source");
+  if (definition.dataSource === "platform_object") return { ...definition, dataSource: "platform_object", objectId: String(definition.objectId || "") };
+  const fields = Array.isArray(definition.fields) ? [...new Set(definition.fields.map(String))] : [];
+  if (!fields.length || fields.some((field) => !CUSTOM_FIELD_MAP.has(field))) throw new Error("Select at least one valid report field");
+  const groupBy = Array.isArray(definition.groupBy) ? [...new Set(definition.groupBy.map(String))] : [];
+  if (groupBy.some((field) => !CUSTOM_FIELD_MAP.has(field) || !CUSTOM_FIELD_MAP.get(field).groupable)) throw new Error("Invalid grouping field");
+  if (groupBy.some((field) => !fields.includes(field))) throw new Error("Grouped fields must be selected");
+  const sort = Array.isArray(definition.sort) ? definition.sort : [];
+  if (sort.some((item) => !item || !CUSTOM_FIELD_MAP.has(String(item.field)) || !fields.includes(String(item.field)) || !["asc", "desc"].includes(String(item.direction).toLowerCase()))) throw new Error("Invalid sort field");
+  const filters = Array.isArray(definition.filters) ? definition.filters.slice(0, 10) : [];
+  const filterLogic = String(definition.filterLogic || "all").toLowerCase();
+  if (!["all", "any"].includes(filterLogic)) throw new Error("Invalid filter logic");
+  for (const filter of filters) {
+    if (!filter || (filter.field && !["date", "store", "user", "product"].includes(String(filter.field)))) throw new Error("Invalid report filter");
+    if (filter.field === "date" && filter.operator && !CUSTOM_DATE_FILTERS.some((item) => item.key === filter.operator)) throw new Error("Invalid date filter");
+    if (filter.field && filter.field !== "date" && !["equals", "in"].includes(filter.operator)) throw new Error("Invalid report filter operator");
+  }
+  return {
+    dataSource: "sales", fields, filters, filterLogic, groupBy,
+    sort: sort.map((item) => ({ field: String(item.field), direction: String(item.direction).toLowerCase() })),
+    storeIds: Array.isArray(definition.storeIds) ? [...new Set(definition.storeIds.map(String))].slice(0, 100) : [],
+    userIds: Array.isArray(definition.userIds) ? [...new Set(definition.userIds.map(String))].slice(0, 100) : [],
+  };
+}
+
+export function buildCustomSalesQuery(definition, dateRange, storeIds, userIds) {
+  const params = [dateRange.from || null, dateRange.to || null];
+  const where = [
+    "s.company_id = $3", "s.status = 'completed'",
+    "($1::date IS NULL OR (s.created_at AT TIME ZONE c.timezone)::date >= $1::date)",
+    "($2::date IS NULL OR (s.created_at AT TIME ZONE c.timezone)::date <= $2::date)",
+  ];
+  params.push(null); // company id is supplied by the caller after query construction
+  let next = 4;
+  if (storeIds.length) { where.push(`s.store_id = ANY($${next}::uuid[])`); params.push(storeIds); next += 1; }
+  if (userIds.length) { where.push(`s.user_id = ANY($${next}::uuid[])`); params.push(userIds); next += 1; }
+  const filterClauses = [];
+  for (const filter of definition.filters) {
+    if (!filter || filter.field === "date" || !["store", "user", "product"].includes(filter.field)) continue;
+    const values = (Array.isArray(filter.value) ? filter.value : [filter.value]).filter(Boolean).map(String);
+    if (!values.length) continue;
+    const column = filter.field === "store" ? "s.store_id" : filter.field === "user" ? "s.user_id" : "si.product_id";
+    filterClauses.push(`${column} ${filter.operator === "in" ? `= ANY($${next}::uuid[])` : `= $${next}`}`);
+    params.push(filter.operator === "in" ? values : values[0]); next += 1;
+  }
+  if (filterClauses.length) where.push(`(${filterClauses.join(definition.filterLogic === "any" ? " OR " : " AND ")})`);
+  const fields = definition.fields.map((key) => CUSTOM_FIELD_MAP.get(key));
+  const select = fields.map((field) => `${field.sql} AS "${field.key}"`);
+  const explicitGroups = definition.groupBy.map((key) => CUSTOM_FIELD_MAP.get(key).sql);
+  const groupByExprs = new Set(explicitGroups);
+  for (const field of fields) {
+    if (field.groupable && !field.aggregate && !groupByExprs.has(field.sql)) {
+      groupByExprs.add(field.sql);
+    }
+  }
+  const groups = [...groupByExprs];
+  const order = (definition.sort.length ? definition.sort : [{ field: definition.groupBy[0] || definition.fields[0], direction: "desc" }])
+    .map((item) => `"${item.field}" ${item.direction === "asc" ? "ASC" : "DESC"}`).join(", ");
+  const sql = `SELECT ${select.join(", ")} FROM sales s
+    INNER JOIN companies c ON c.id=s.company_id
+    INNER JOIN sale_items si ON si.sale_id=s.id
+    INNER JOIN products p ON p.id=si.product_id
+    LEFT JOIN users u ON u.id=s.user_id
+    INNER JOIN stores st ON st.id=s.store_id
+    WHERE ${where.join(" AND ")}
+    ${groups.length ? `GROUP BY ${groups.join(", ")}` : ""}
+    ORDER BY ${order} LIMIT 1000`;
+  return { sql, params };
+}
+
+function customReportVisibility(user, report) {
+  return String(report.created_by) === String(user.id) || user.isSuperadmin || report.mapped === true;
+}
 
 export default function createReportsRouter({ authenticate, authorize, db }) {
+  const { canAccessStore, canViewCompanyCustomers } = arguments[0];
   const router = express.Router();
 
   function scopedReportParams(req) {
@@ -85,10 +207,8 @@ export default function createReportsRouter({ authenticate, authorize, db }) {
 
   /*
    * GET /reports/inventory-overview
-   * Current stock snapshot for the store: product, SKU/barcode, category,
-   * on-hand quantity, cost and stock value (plus a low-stock flag), used by
-   * the "Inventory Overview" report page. Company/store come from the
-   * authenticated session — never from query parameters.
+   * Current stock snapshot for the authenticated store. Quantity comes from
+   * product_store_stock, while cost comes from the product master.
    */
   router.get("/reports/inventory-overview", authenticate, authorize("reports.inventory.view"), async (req, res) => {
     try {
@@ -102,17 +222,22 @@ export default function createReportsRouter({ authenticate, authorize, db }) {
           p.sku,
           p.barcode AS ean,
           COALESCE(cat.name, '-') AS category,
-          p.stock_quantity,
+          COALESCE(pss.quantity, 0) AS stock_quantity,
           p.cost_price,
-          (p.stock_quantity * COALESCE(p.cost_price, 0)) AS stock_value,
-          (p.track_stock = true AND p.low_stock_level IS NOT NULL AND p.stock_quantity <= p.low_stock_level) AS low_stock
+          (p.track_stock = true AND p.low_stock_level IS NOT NULL AND COALESCE(pss.quantity, 0) <= p.low_stock_level) AS low_stock,
+          s.name AS store_name
         FROM products p
         LEFT JOIN categories cat ON cat.id = p.category_id
+        LEFT JOIN product_store_stock pss
+          ON pss.product_id = p.id
+         AND pss.company_id = p.company_id
+         AND pss.store_id = $2
+        LEFT JOIN stores s ON s.id = $2 AND s.company_id = p.company_id
         WHERE p.company_id = $1
         ORDER BY p.name
-        LIMIT $2 OFFSET $3
+        LIMIT $3 OFFSET $4
         `,
-        [req.user.companyId, limit, offset]
+        [req.user.companyId, req.user.storeId, limit, offset]
       );
 
       res.json({
@@ -122,10 +247,20 @@ export default function createReportsRouter({ authenticate, authorize, db }) {
           sku: row.sku,
           ean: row.ean,
           category: row.category,
+          store: row.store_name || null,
           stock_quantity: Number(row.stock_quantity) || 0,
           cost_price: row.cost_price !== null ? Number(row.cost_price) : null,
-          stock_value: Number(row.stock_value) || 0,
           low_stock: row.low_stock === true,
+        })).map(valuationRow).map((row) => ({
+          product: row.product,
+          sku: row.sku,
+          ean: row.ean,
+          category: row.category,
+          store: row.store,
+          stock_quantity: row.quantity,
+          cost_price: row.cost_price,
+          stock_value: row.stockValue,
+          low_stock: row.low_stock,
         })),
       });
     } catch (error) {
@@ -266,46 +401,298 @@ export default function createReportsRouter({ authenticate, authorize, db }) {
     }
   });
 
+  router.get("/reports/sales/overview", authenticate, authorize("reports.sales.view"), async (req, res) => {
+    try {
+      const companyId = req.user.companyId;
+      const by = ["day", "store", "user", "product"].includes(String(req.query.by || "day")) ? String(req.query.by || "day") : "day";
+      const dateFrom = req.query.dateFrom || null;
+      const dateTo = req.query.dateTo || null;
+      const companyWide = canViewCompanyCustomers ? await canViewCompanyCustomers(req.user) : false;
+      let visibleStoreIds = null;
+      if (!companyWide) {
+        const stores = await db("SELECT id FROM stores WHERE company_id = $1 AND active = true ORDER BY name", [companyId]);
+        visibleStoreIds = [];
+        for (const store of stores.rows) {
+          if (!canAccessStore || await canAccessStore(req.user, store.id)) visibleStoreIds.push(store.id);
+        }
+      }
+      let storeFilter = null;
+      if (req.query.storeId) {
+        storeFilter = String(req.query.storeId);
+        const exists = await db("SELECT id FROM stores WHERE id = $1 AND company_id = $2 LIMIT 1", [storeFilter, companyId]);
+        if (!exists.rows.length) return res.status(404).json({ success: false, message: "Store not found" });
+        if (visibleStoreIds && !visibleStoreIds.includes(storeFilter)) return res.status(403).json({ success: false, message: "You do not have permission to view this store's sales reports" });
+      }
+      let userFilter = null;
+      if (req.query.userId) {
+        userFilter = String(req.query.userId);
+        const exists = await db("SELECT id FROM users WHERE id = $1 AND company_id = $2 LIMIT 1", [userFilter, companyId]);
+        if (!exists.rows.length) return res.status(404).json({ success: false, message: "User not found" });
+      }
+      if (visibleStoreIds && !visibleStoreIds.length) return res.json({ success: true, data: { by, rows: [], totals: { total_qty: 0, total_sales: 0, total_returns: 0, total_discount: 0, total_tax: 0, count_sales: 0, count_returns: 0, distinct_products: 0, net_sales: 0 }, payments: [] } });
+
+      const storeScope = storeFilter || visibleStoreIds;
+      const groupSelect = by === "store" ? "s.store_id AS group_key" : by === "user" ? "s.user_id AS group_key" : by === "product" ? "si.product_id AS group_key" : "(s.created_at AT TIME ZONE c.timezone)::date AS group_key";
+      const groupExpr = by === "store" ? "s.store_id" : by === "user" ? "s.user_id" : by === "product" ? "si.product_id" : "(s.created_at AT TIME ZONE c.timezone)::date";
+      const labelSelect = by === "store" ? "st.name AS group_label" : by === "user" ? "COALESCE(u.full_name, u.username, 'Unknown') AS group_label" : by === "product" ? "p.name AS group_label" : "NULL AS group_label";
+      const joins = ["INNER JOIN companies c ON c.id = s.company_id", "INNER JOIN sale_items si ON si.sale_id = s.id", by === "store" ? "LEFT JOIN stores st ON st.id = s.store_id" : "", by === "user" ? "LEFT JOIN users u ON u.id = s.user_id" : "", by === "product" ? "LEFT JOIN products p ON p.id = si.product_id" : ""].filter(Boolean).join(" ");
+      const where = "s.company_id = $1 AND s.status = 'completed' AND ($2::text IS NULL OR s.store_id = ANY($2::uuid[])) AND ($3::uuid IS NULL OR s.user_id = $3) AND ($4::date IS NULL OR (s.created_at AT TIME ZONE c.timezone)::date >= $4::date) AND ($5::date IS NULL OR (s.created_at AT TIME ZONE c.timezone)::date <= $5::date)";
+      const result = await db(`WITH sales_agg AS (
+        SELECT ${groupSelect}, ${labelSelect}, COUNT(DISTINCT s.id)::int AS count_sales,
+          COALESCE(SUM(si.quantity), 0) AS total_qty, COALESCE(SUM(si.total), 0) AS total_sales,
+          COALESCE(SUM(si.discount), 0) AS total_discount, COALESCE(SUM(si.tax), 0) AS total_tax,
+          COUNT(DISTINCT si.product_id)::int AS distinct_products
+        FROM sales s ${joins} WHERE ${where} GROUP BY ${groupExpr}, group_label
+      ), returns_agg AS (
+        SELECT ${by === "store" ? "sr.store_id" : by === "user" ? "sr.created_by" : by === "product" ? "sri.product_id" : "(sr.created_at AT TIME ZONE c.timezone)::date"} AS group_key,
+          COALESCE(SUM(sri.quantity * si.unit_price), 0) AS total_returns,
+          COALESCE(SUM(sri.quantity), 0) AS total_return_qty,
+          COUNT(DISTINCT sr.id)::int AS count_returns
+        FROM stock_returns sr INNER JOIN stock_return_items sri ON sri.return_id = sr.id INNER JOIN sale_items si ON si.id = sri.sale_item_id INNER JOIN companies c ON c.id = sr.company_id
+        WHERE sr.company_id = $1 AND sr.return_type = 'CUSTOMER' AND ($2::text IS NULL OR sr.store_id = ANY($2::uuid[])) AND ($3::uuid IS NULL OR sr.created_by = $3)
+          AND ($4::date IS NULL OR (sr.created_at AT TIME ZONE c.timezone)::date >= $4::date) AND ($5::date IS NULL OR (sr.created_at AT TIME ZONE c.timezone)::date <= $5::date)
+        GROUP BY group_key
+      ) SELECT sales_agg.*, COALESCE(returns_agg.total_returns, 0) AS total_returns,
+        COALESCE(returns_agg.total_return_qty, 0) AS total_return_qty,
+        COALESCE(returns_agg.count_returns, 0) AS count_returns
+        FROM sales_agg LEFT JOIN returns_agg USING (group_key) ORDER BY group_key`, [companyId, storeScope, userFilter, dateFrom, dateTo]);
+      const payments = await db(`SELECT pay.payment_method AS method, COALESCE(SUM(pay.amount), 0) AS total_sales, COUNT(DISTINCT pay.sale_id)::int AS count_sales
+        FROM sales s INNER JOIN payments pay ON pay.sale_id = s.id INNER JOIN companies c ON c.id = s.company_id
+        WHERE ${where} GROUP BY pay.payment_method ORDER BY total_sales DESC`, [companyId, storeScope, userFilter, dateFrom, dateTo]);
+      const distinctProducts = await db(`SELECT COUNT(DISTINCT si.product_id)::int AS distinct_products
+        FROM sales s INNER JOIN sale_items si ON si.sale_id = s.id INNER JOIN companies c ON c.id = s.company_id
+        WHERE ${where}`, [companyId, storeScope, userFilter, dateFrom, dateTo]);
+      const rows = result.rows.map((row) => {
+        const key = by === "day" && row.group_key instanceof Date ? row.group_key.toISOString().slice(0, 10) : String(row.group_key);
+        const totalSales = Number(row.total_sales ?? row.gross_sales ?? 0);
+        const totalReturns = Number(row.total_returns ?? row.returned_value ?? 0);
+        return {
+          key,
+          label: row.group_label || key,
+          total_qty: Number(row.total_qty ?? row.quantity ?? 0),
+          total_sales: totalSales,
+          total_returns: totalReturns,
+          total_discount: Number(row.total_discount ?? row.discounts ?? 0),
+          total_tax: Number(row.total_tax ?? row.vat ?? 0),
+          count_sales: Number(row.count_sales ?? row.transactions ?? 0),
+          count_returns: Number(row.count_returns || 0),
+          distinct_products: Number(row.distinct_products || 0),
+          net_sales: totalSales - totalReturns,
+        };
+      });
+      if (by === "store" || by === "user") {
+        const table = by === "store" ? "stores" : "users";
+        const names = new Map();
+        for (const row of rows) {
+          const lookup = await db(`SELECT id, ${by === "store" ? "name" : "COALESCE(full_name, username) AS name"} FROM ${table} WHERE id = $1 AND company_id = $2 LIMIT 1`, [row.key, companyId]);
+          if (lookup.rows[0]?.name) names.set(row.key, lookup.rows[0].name);
+        }
+        for (const row of rows) row.label = names.get(row.key) || row.label;
+      }
+      const totals = rows.reduce((sum, row) => {
+        for (const key of ["total_qty", "total_sales", "total_returns", "total_discount", "total_tax", "count_sales", "count_returns"]) sum[key] += row[key];
+        sum.distinct_products += row.distinct_products;
+        return sum;
+      }, { total_qty: 0, total_sales: 0, total_returns: 0, total_discount: 0, total_tax: 0, count_sales: 0, count_returns: 0, distinct_products: 0 });
+      totals.distinct_products = Number(distinctProducts.rows[0]?.distinct_products ?? (by === "product" ? rows.length : totals.distinct_products));
+      totals.net_sales = totals.total_sales - totals.total_returns;
+      res.json({ success: true, data: { by, rows, totals, payments: payments.rows.map((row) => ({ method: row.method, total_sales: Number(row.total_sales ?? row.total ?? 0), count_sales: Number(row.count_sales ?? row.transactions ?? 0) })) } });
+    } catch (error) {
+      console.error("Sales overview report error:", error);
+      res.status(500).json({ success: false, message: "Unable to load sales overview report" });
+    }
+  });
+
+  /*
+   * GET /reports/profit — Profit / Margin report (Reporting -> Profit / margin).
+   *
+   * Permission: reports.profit.view (existing Reports/User Type permission code;
+   * administrators/owners bypass via authorize()).
+   *
+   * Filters:
+   *   ?dateFrom, ?dateTo  business dates in the company timezone
+   *   ?storeId            optional store override — only honoured when the
+   *                       caller may access that store (existing canAccessStore
+   *                       rule; admins/owners see any store of their company).
+   *                       Default: the authenticated session store.
+   *   ?productId          single product filter (company-scoped, validated)
+   *   ?userId             single operator filter (company-scoped, validated)
+   *
+   * Basis (documented in services/profitMargin.js):
+   *   - revenue is VAT-exclusive line revenue (si.total - si.tax);
+   *   - customer returns reverse the returned share of the original line value
+   *     and its cost;
+   *   - COGS comes from the EXISTING products.cost_price master — no second
+   *     cost system. Lines whose product has a missing/zero cost price have an
+   *     UNKNOWN cost, not a free one: they are excluded from COGS/gross profit
+   *     and reported via costComplete/excluded instead of faking profit.
+   */
   router.get("/reports/profit", authenticate, authorize("reports.profit.view"), async (req, res) => {
     try {
-      const result = await db(
+      const companyId = req.user.companyId;
+      const dateFrom = req.query.dateFrom || null;
+      const dateTo = req.query.dateTo || null;
+
+      /* ---- store resolution: session store, or a store the caller may access ---- */
+      let storeId = req.user.storeId;
+      if (req.query.storeId) {
+        const requested = String(req.query.storeId);
+        if (requested !== String(req.user.storeId || "")) {
+          const isAdmin = canViewCompanyCustomers ? await canViewCompanyCustomers(req.user) : false;
+          if (!isAdmin) {
+            if (!canAccessStore || !(await canAccessStore(req.user, requested))) {
+              return res.status(403).json({ success: false, message: "You do not have permission to view this store's profit report" });
+            }
+          }
+        }
+        const exists = await db(`SELECT id FROM stores WHERE id = $1 AND company_id = $2 LIMIT 1`, [requested, companyId]);
+        if (!exists.rows.length) {
+          return res.status(404).json({ success: false, message: "Store not found" });
+        }
+        storeId = requested;
+      }
+
+      /* ---- optional product / operator filters (company-scoped, validated) ---- */
+      let productId = null;
+      if (req.query.productId) {
+        productId = String(req.query.productId);
+        const exists = await db(`SELECT id FROM products WHERE id = $1 AND company_id = $2 LIMIT 1`, [productId, companyId]);
+        if (!exists.rows.length) return res.status(404).json({ success: false, message: "Product not found" });
+      }
+      let userId = null;
+      if (req.query.userId) {
+        userId = String(req.query.userId);
+        const exists = await db(`SELECT id FROM users WHERE id = $1 AND company_id = $2 LIMIT 1`, [userId, companyId]);
+        if (!exists.rows.length) return res.status(404).json({ success: false, message: "User not found" });
+      }
+
+      /* ---- shared filters ($1 company, $2 store, $3/$4 dates, $5 product, $6 user) ---- */
+      const soldClauses = [
+        "s.company_id = $1",
+        "s.store_id = $2",
+        "s.status = 'completed'",
+        "($3::date IS NULL OR (s.created_at AT TIME ZONE c.timezone)::date >= $3::date)",
+        "($4::date IS NULL OR (s.created_at AT TIME ZONE c.timezone)::date <= $4::date)",
+      ];
+      const returnClauses = [
+        "sr.company_id = $1",
+        "sr.store_id = $2",
+        "sr.return_type = 'CUSTOMER'",
+        "sr.status = 'COMPLETED'",
+        "($3::date IS NULL OR sr.created_at::date >= $3::date)",
+        "($4::date IS NULL OR sr.created_at::date <= $4::date)",
+      ];
+      if (productId) {
+        soldClauses.push("si.product_id = $5");
+        returnClauses.push("si2.product_id = $5");
+      }
+      if (userId) {
+        soldClauses.push("s.user_id = $6");
+        returnClauses.push("sr.created_by = $6");
+      }
+      const params = [companyId, storeId, dateFrom, dateTo, productId, userId];
+
+      /* ---- cost guard: only a cost_price > 0 is a known cost ---- */
+      const costGuard = "(p.cost_price IS NOT NULL AND p.cost_price > 0)";
+      const lineRevenue = "(si.total - si.tax)";
+      /* returned share of the original line (proportional to returned quantity) */
+      const returnedLineShare = "(sri.quantity * (si2.total - si2.tax) / NULLIF(si2.quantity, 0))";
+
+      const aggregatesResult = await db(
         `
-        WITH sales_total AS (
-          SELECT COALESCE(SUM(s.total),0) gross_sales, COALESCE(SUM(s.discount),0) discounts
-          FROM sales s INNER JOIN companies c ON c.id=s.company_id
-          WHERE s.company_id=$1 AND s.store_id=$2 AND s.status='completed'
-            AND ($3::date IS NULL OR (s.created_at AT TIME ZONE c.timezone)::date >= $3::date)
-            AND ($4::date IS NULL OR (s.created_at AT TIME ZONE c.timezone)::date <= $4::date)
-        ), returns_total AS (
-          SELECT COALESCE(SUM(sri.quantity * si.unit_price),0) returned_value
-          FROM stock_returns sr
-          INNER JOIN stock_return_items sri ON sri.return_id=sr.id
-          INNER JOIN sale_items si ON si.id=sri.sale_item_id
-          WHERE sr.company_id=$1 AND sr.store_id=$2 AND sr.return_type='CUSTOMER'
-            AND ($3::date IS NULL OR sr.created_at::date >= $3::date)
-            AND ($4::date IS NULL OR sr.created_at::date <= $4::date)
-        ), cogs_total AS (
-          SELECT COALESCE(SUM(si.quantity * COALESCE(p.cost_price,0)),0) cogs
+        WITH sold AS (
+          SELECT COUNT(DISTINCT s.id)::int AS transactions,
+                 COALESCE(SUM(si.quantity), 0) AS sold_quantity,
+                 COALESCE(SUM(si.total), 0) AS gross_sales,
+                 COALESCE(SUM(si.tax), 0) AS vat,
+                 COALESCE(SUM(si.discount), 0) AS discounts,
+                 COALESCE(SUM(${lineRevenue}), 0) AS sold_revenue,
+                 COALESCE(SUM(CASE WHEN ${costGuard} THEN si.quantity * p.cost_price ELSE 0 END), 0) AS sold_cogs,
+                 COALESCE(SUM(CASE WHEN ${costGuard} THEN ${lineRevenue} ELSE 0 END), 0) AS sold_costed_revenue,
+                 COALESCE(SUM(CASE WHEN NOT ${costGuard} THEN si.quantity ELSE 0 END), 0) AS sold_uncosted_quantity,
+                 COALESCE(SUM(CASE WHEN NOT ${costGuard} THEN ${lineRevenue} ELSE 0 END), 0) AS sold_uncosted_revenue,
+                 COUNT(*) FILTER (WHERE NOT ${costGuard})::int AS sold_uncosted_lines
           FROM sale_items si
-          INNER JOIN sales s ON s.id=si.sale_id
-          INNER JOIN companies c ON c.id=s.company_id
-          INNER JOIN products p ON p.id=si.product_id
-          WHERE s.company_id=$1 AND s.store_id=$2 AND s.status='completed'
-            AND ($3::date IS NULL OR (s.created_at AT TIME ZONE c.timezone)::date >= $3::date)
-            AND ($4::date IS NULL OR (s.created_at AT TIME ZONE c.timezone)::date <= $4::date)
-        ) SELECT sales_total.gross_sales, sales_total.discounts, returns_total.returned_value, cogs_total.cogs FROM sales_total, returns_total, cogs_total
+          INNER JOIN sales s ON s.id = si.sale_id
+          INNER JOIN companies c ON c.id = s.company_id
+          INNER JOIN products p ON p.id = si.product_id
+          WHERE ${soldClauses.join(" AND ")}
+        ), returned AS (
+          SELECT COALESCE(SUM(sri.quantity), 0) AS returned_quantity,
+                 COALESCE(SUM(${returnedLineShare}), 0) AS returned_revenue,
+                 COALESCE(SUM(CASE WHEN ${costGuard} THEN sri.quantity * p.cost_price ELSE 0 END), 0) AS returned_cogs,
+                 COALESCE(SUM(CASE WHEN ${costGuard} THEN ${returnedLineShare} ELSE 0 END), 0) AS returned_costed_revenue,
+                 COALESCE(SUM(CASE WHEN NOT ${costGuard} THEN sri.quantity ELSE 0 END), 0) AS returned_uncosted_quantity,
+                 COALESCE(SUM(CASE WHEN NOT ${costGuard} THEN ${returnedLineShare} ELSE 0 END), 0) AS returned_uncosted_revenue,
+                 COUNT(*) FILTER (WHERE NOT ${costGuard})::int AS returned_uncosted_lines
+          FROM stock_returns sr
+          INNER JOIN stock_return_items sri ON sri.return_id = sr.id
+          INNER JOIN sale_items si2 ON si2.id = sri.sale_item_id
+          INNER JOIN products p ON p.id = si2.product_id
+          WHERE ${returnClauses.join(" AND ")}
+        )
+        SELECT sold.*, returned.* FROM sold, returned
         `,
-        scopedReportParams(req)
+        params
       );
-      const row = result.rows[0];
-      const gross = Number(row.gross_sales);
-      const discounts = Number(row.discounts);
-      const returned = Number(row.returned_value);
-      const cogs = Number(row.cogs);
-      const net = gross - returned;
-      const profit = net - cogs;
-      const margin = net ? (profit / net) * 100 : 0;
-      res.json({ success: true, data: { grossSales: gross, discounts, returns: returned, netSales: net, cogs, grossProfit: profit, grossMargin: margin } });
+
+      /* ---- per-product breakdown (top 100 by quantity sold) ---- */
+      const productsResult = await db(
+        `
+        SELECT p.id AS product_id, p.name AS product, p.sku, p.cost_price,
+               COALESCE(SUM(si.quantity), 0) AS quantity_sold,
+               COALESCE(SUM(${lineRevenue}), 0) AS revenue,
+               COALESCE(SUM(CASE WHEN ${costGuard} THEN ${lineRevenue} ELSE 0 END), 0) AS costed_revenue,
+               COALESCE(SUM(CASE WHEN ${costGuard} THEN si.quantity * p.cost_price ELSE 0 END), 0) AS cogs,
+               COALESCE(SUM(CASE WHEN NOT ${costGuard} THEN si.quantity ELSE 0 END), 0) AS uncosted_quantity,
+               COALESCE(SUM(CASE WHEN NOT ${costGuard} THEN ${lineRevenue} ELSE 0 END), 0) AS uncosted_revenue
+        FROM sale_items si
+        INNER JOIN sales s ON s.id = si.sale_id
+        INNER JOIN companies c ON c.id = s.company_id
+        INNER JOIN products p ON p.id = si.product_id
+        WHERE ${soldClauses.join(" AND ")}
+        GROUP BY p.id, p.name, p.sku, p.cost_price
+        ORDER BY quantity_sold DESC
+        LIMIT 100
+        `,
+        params
+      );
+
+      /* ---- per-operator breakdown (top 100 by quantity sold) ---- */
+      const operatorsResult = await db(
+        `
+        SELECT u.id AS user_id, u.username AS username,
+               COALESCE(SUM(si.quantity), 0) AS quantity_sold,
+               COALESCE(SUM(${lineRevenue}), 0) AS revenue,
+               COALESCE(SUM(CASE WHEN ${costGuard} THEN ${lineRevenue} ELSE 0 END), 0) AS costed_revenue,
+               COALESCE(SUM(CASE WHEN ${costGuard} THEN si.quantity * p.cost_price ELSE 0 END), 0) AS cogs,
+               COALESCE(SUM(CASE WHEN NOT ${costGuard} THEN si.quantity ELSE 0 END), 0) AS uncosted_quantity,
+               COALESCE(SUM(CASE WHEN NOT ${costGuard} THEN ${lineRevenue} ELSE 0 END), 0) AS uncosted_revenue
+        FROM sale_items si
+        INNER JOIN sales s ON s.id = si.sale_id
+        INNER JOIN companies c ON c.id = s.company_id
+        INNER JOIN products p ON p.id = si.product_id
+        LEFT JOIN users u ON u.id = s.user_id
+        WHERE ${soldClauses.join(" AND ")}
+        GROUP BY u.id, u.username
+        ORDER BY quantity_sold DESC
+        LIMIT 100
+        `,
+        params
+      );
+
+      const storeResult = await db(`SELECT id, name FROM stores WHERE id = $1 AND company_id = $2 LIMIT 1`, [storeId, companyId]);
+
+      res.json({
+        success: true,
+        data: buildProfitReport({
+          filters: { dateFrom, dateTo, storeId, productId, userId },
+          aggregates: aggregatesResult.rows[0] || {},
+          products: productsResult.rows,
+          operators: operatorsResult.rows,
+          stores: storeResult.rows,
+        }),
+      });
     } catch (error) { console.error("Profit report error:", error); res.status(500).json({ success: false, message: "Unable to load profit report" }); }
   });
 
@@ -557,6 +944,239 @@ export default function createReportsRouter({ authenticate, authorize, db }) {
         },
       });
     } catch (error) { console.error("VAT report error:", error); res.status(500).json({ success: false, message: "Unable to load VAT report" }); }
+  });
+
+  const isCompanyAdmin = async (user) => (
+    user?.isSuperadmin === true ||
+    (canViewCompanyCustomers ? canViewCompanyCustomers(user) : false)
+  );
+  const reportById = async (req, id) => {
+    const admin = await isCompanyAdmin(req.user);
+    const result = await db(
+      `SELECT cr.*, EXISTS (SELECT 1 FROM custom_report_users cru WHERE cru.report_id=cr.id AND cru.user_id=$3) AS mapped
+       FROM custom_reports cr
+       WHERE cr.id=$1 AND cr.company_id=$2 AND cr.archived_at IS NULL
+         AND ($4 OR cr.created_by=$3 OR EXISTS (SELECT 1 FROM custom_report_users cru WHERE cru.report_id=cr.id AND cru.user_id=$3))`,
+      [id, req.user.companyId, req.user.id, admin]
+    );
+    return result.rows[0] || null;
+  };
+  const accessibleStores = async (req, storeIds) => {
+    const admin = await isCompanyAdmin(req.user);
+    const ids = [...new Set((storeIds || []).filter(Boolean).map(String))];
+    if (!ids.length && !admin) {
+      if (!req.user.storeId || (canAccessStore && !(await canAccessStore(req.user, String(req.user.storeId))))) {
+        throw new Error("A store assignment is required to run a custom report");
+      }
+      return [String(req.user.storeId)];
+    }
+    if (!ids.length) return [];
+    if (!admin) {
+      for (const id of ids) {
+        if (!canAccessStore || !(await canAccessStore(req.user, id))) throw new Error("You do not have access to one or more stores");
+      }
+    }
+    const result = await db("SELECT id FROM stores WHERE company_id=$1 AND id = ANY($2::uuid[])", [req.user.companyId, ids]);
+    if (result.rows.length !== ids.length) throw new Error("One or more stores were not found");
+    return ids;
+  };
+  const requestedStoreIds = (definition) => [
+    ...(definition.storeIds || []),
+    ...((definition.filters || []).flatMap((filter) => filter?.field === "store"
+      ? (Array.isArray(filter.value) ? filter.value : [filter.value]) : [])),
+  ];
+  router.get("/reports/custom/metadata", authenticate, authorize("reports.custom.view"), async (req, res) => {
+    try {
+      const [stores, users, reports, admin] = await Promise.all([
+        db("SELECT id, name FROM stores WHERE company_id=$1 AND active=true ORDER BY name", [req.user.companyId]),
+        db("SELECT id, username, full_name FROM users WHERE company_id=$1 AND active=true ORDER BY full_name, username", [req.user.companyId]),
+        db(`SELECT cr.id, cr.name, cr.description, cr.definition, cr.created_by,
+              COALESCE(array_agg(cru.user_id) FILTER (WHERE cru.user_id IS NOT NULL), '{}') AS user_ids,
+              u.full_name AS created_by_name
+            FROM custom_reports cr LEFT JOIN users u ON u.id=cr.created_by
+            LEFT JOIN custom_report_users cru ON cru.report_id=cr.id
+            WHERE cr.company_id=$1 AND cr.archived_at IS NULL
+              AND ($2 OR cr.created_by=$3 OR EXISTS (SELECT 1 FROM custom_report_users cru WHERE cru.report_id=cr.id AND cru.user_id=$3))
+            GROUP BY cr.id, u.full_name
+            ORDER BY cr.updated_at DESC`, [req.user.companyId, await isCompanyAdmin(req.user), req.user.id]),
+        isCompanyAdmin(req.user),
+      ]);
+      res.json({ success: true, data: {
+        fields: CUSTOM_REPORT_FIELDS.map(({ key, label, groupable, aggregate }) => ({
+          key,
+          label,
+          groupable: !!groupable,
+          aggregate: !!aggregate,
+          type: aggregate ? "number" : key === "date" ? "date" : "text",
+        })),
+        filters: CUSTOM_DATE_FILTERS, stores: stores.rows, users: users.rows, reports: reports.rows,
+        sources: STANDARD_REPORT_SOURCES,
+        platformObjects: (await db("SELECT id, object_key, label, source_table, company_id FROM platform_objects WHERE active=true AND source_table IS NOT NULL AND (company_id IS NULL OR company_id=$1) ORDER BY label", [req.user.companyId])).rows,
+        canManage: admin,
+      } });
+    } catch (error) { console.error("Custom report metadata error:", error); res.status(500).json({ success: false, message: "Unable to load custom report metadata" }); }
+  });
+
+  router.get("/reports/custom", authenticate, authorize("reports.custom.view"), async (req, res) => {
+    try {
+      const admin = await isCompanyAdmin(req.user);
+      const result = await db(`SELECT cr.id, cr.name, cr.description, cr.definition, cr.created_by, cr.updated_at,
+          COALESCE(array_agg(cru.user_id) FILTER (WHERE cru.user_id IS NOT NULL), '{}') AS user_ids,
+          u.full_name AS created_by_name
+        FROM custom_reports cr LEFT JOIN users u ON u.id=cr.created_by
+        LEFT JOIN custom_report_users cru ON cru.report_id=cr.id
+        WHERE cr.company_id=$1 AND cr.archived_at IS NULL
+          AND ($2 OR cr.created_by=$3 OR EXISTS (SELECT 1 FROM custom_report_users cru WHERE cru.report_id=cr.id AND cru.user_id=$3))
+        GROUP BY cr.id, u.full_name
+        ORDER BY cr.updated_at DESC`, [req.user.companyId, admin, req.user.id]);
+      res.json({ success: true, data: result.rows });
+    } catch (error) { res.status(500).json({ success: false, message: "Unable to load custom reports" }); }
+  });
+
+  router.get("/reports/custom/platform-objects/:objectId/metadata", authenticate, authorize("reports.custom.view"), async (req, res) => {
+    try {
+      const objectResult = await db("SELECT id, object_key, label, source_table, company_id FROM platform_objects WHERE id=$1 AND active=true AND source_table IS NOT NULL AND (company_id IS NULL OR company_id=$2)", [req.params.objectId, req.user.companyId]);
+      if (!objectResult.rows.length) return res.status(404).json({ success: false, message: "Report object not found" });
+      const fields = await db("SELECT api_name AS key, api_name, label, field_type AS type, field_type, source_column, config, readable, active FROM platform_fields WHERE object_id=$1 AND active=true AND readable=true AND (company_id IS NULL OR company_id=$2) ORDER BY display_order, label", [req.params.objectId, req.user.companyId]);
+      res.json({ success: true, data: { object: objectResult.rows[0], fields: fields.rows } });
+    } catch (error) {
+      console.error("Platform report metadata error:", error);
+      res.status(500).json({ success: false, message: "Unable to load report object metadata" });
+    }
+  });
+
+  router.get("/reports/custom/:id", authenticate, authorize("reports.custom.view"), async (req, res) => {
+    try {
+      const report = await reportById(req, req.params.id);
+      if (!report) return res.status(404).json({ success: false, message: "Custom report not found" });
+      res.json({ success: true, data: report });
+    } catch (error) { res.status(500).json({ success: false, message: "Unable to load custom report" }); }
+  });
+
+  router.post("/reports/custom", authenticate, authorize("reports.custom.create"), async (req, res) => {
+    try {
+      const name = String(req.body?.name || "").trim();
+      if (!name || name.length > 150) return res.status(400).json({ success: false, message: "A report name up to 150 characters is required" });
+      const definition = validateCustomReportDefinition(req.body);
+      if (definition.dataSource === "platform_object") {
+        const objectResult = await db("SELECT * FROM platform_objects WHERE id=$1 AND active=true AND (company_id IS NULL OR company_id=$2)", [definition.objectId, req.user.companyId]);
+        const object = objectResult.rows[0];
+        const fields = object ? (await db("SELECT * FROM platform_fields WHERE object_id=$1 AND active=true AND (company_id IS NULL OR company_id=$2)", [object.id, req.user.companyId])).rows : [];
+        validatePlatformReportDefinition(req.body, object, fields);
+      }
+      const stores = definition.dataSource === "platform_object" ? [] : await accessibleStores(req, requestedStoreIds(definition));
+      const result = await db(`INSERT INTO custom_reports (company_id, created_by, name, description, data_source, definition)
+        VALUES ($1,$2,$3,$4,$5,$6::jsonb) RETURNING id, name, description, definition`, [req.user.companyId, req.user.id, name, String(req.body.description || "").slice(0, 500), definition.dataSource || "sales", JSON.stringify({ ...definition, storeIds: stores })]);
+      res.status(201).json({ success: true, data: result.rows[0] });
+    } catch (error) { res.status(400).json({ success: false, message: error.message || "Unable to create custom report" }); }
+  });
+
+  router.put("/reports/custom/:id", authenticate, authorize("reports.custom.edit"), async (req, res) => {
+    try {
+      const report = await reportById(req, req.params.id);
+      if (!report) return res.status(404).json({ success: false, message: "Custom report not found" });
+      if (String(report.created_by) !== String(req.user.id) && !(await isCompanyAdmin(req.user))) return res.status(403).json({ success: false, message: "Only the owner can edit this report" });
+      const name = String(req.body?.name || report.name).trim();
+      if (!name || name.length > 150) return res.status(400).json({ success: false, message: "A report name up to 150 characters is required" });
+      const definition = validateCustomReportDefinition(req.body);
+      if (definition.dataSource === "platform_object") {
+        const objectResult = await db("SELECT * FROM platform_objects WHERE id=$1 AND active=true AND (company_id IS NULL OR company_id=$2)", [definition.objectId, req.user.companyId]);
+        const object = objectResult.rows[0];
+        const fields = object ? (await db("SELECT * FROM platform_fields WHERE object_id=$1 AND active=true AND (company_id IS NULL OR company_id=$2)", [object.id, req.user.companyId])).rows : [];
+        validatePlatformReportDefinition(req.body, object, fields);
+      }
+      const stores = definition.dataSource === "platform_object" ? [] : await accessibleStores(req, requestedStoreIds(definition));
+      const result = await db(`UPDATE custom_reports SET name=$3, description=$4, data_source=$5, definition=$6::jsonb, updated_at=NOW()
+        WHERE id=$1 AND company_id=$2 RETURNING id, name, description, data_source, definition`, [req.params.id, req.user.companyId, name, String(req.body.description || "").slice(0, 500), definition.dataSource || "sales", JSON.stringify({ ...definition, storeIds: stores })]);
+      res.json({ success: true, data: result.rows[0] });
+    } catch (error) { res.status(400).json({ success: false, message: error.message || "Unable to update custom report" }); }
+  });
+
+  router.delete("/reports/custom/:id", authenticate, authorize("reports.custom.delete"), async (req, res) => {
+    try {
+      const report = await reportById(req, req.params.id);
+      if (!report) return res.status(404).json({ success: false, message: "Custom report not found" });
+      if (String(report.created_by) !== String(req.user.id) && !(await isCompanyAdmin(req.user))) return res.status(403).json({ success: false, message: "Only the owner can archive this report" });
+      await db("UPDATE custom_reports SET archived_at=NOW(), updated_at=NOW() WHERE id=$1 AND company_id=$2", [req.params.id, req.user.companyId]);
+      res.json({ success: true, data: { id: req.params.id } });
+    } catch (error) { res.status(500).json({ success: false, message: "Unable to archive custom report" }); }
+  });
+
+  router.post("/reports/custom/:id/duplicate", authenticate, authorize("reports.custom.create"), async (req, res) => {
+    try {
+      const report = await reportById(req, req.params.id);
+      if (!report) return res.status(404).json({ success: false, message: "Custom report not found" });
+      const result = await db(`INSERT INTO custom_reports (company_id, created_by, name, description, data_source, definition)
+        VALUES ($1,$2,$3,$4,$5,$6::jsonb) RETURNING id, name, description, definition`,
+        [req.user.companyId, req.user.id, `${report.name} (copy)`.slice(0, 150), report.description, report.data_source, JSON.stringify(report.definition)]);
+      res.status(201).json({ success: true, data: result.rows[0] });
+    } catch (error) { res.status(500).json({ success: false, message: "Unable to duplicate custom report" }); }
+  });
+
+  router.put("/reports/custom/:id/users", authenticate, authorize("reports.custom.share"), async (req, res) => {
+    try {
+      const report = await reportById(req, req.params.id);
+      if (!report) return res.status(404).json({ success: false, message: "Custom report not found" });
+      if (!(await isCompanyAdmin(req.user)) && String(report.created_by) !== String(req.user.id)) return res.status(403).json({ success: false, message: "Only the owner can map users" });
+      const userIds = [...new Set((Array.isArray(req.body?.userIds) ? req.body.userIds : []).map(String))];
+      const valid = await db("SELECT id FROM users WHERE company_id=$1 AND active=true AND id=ANY($2::uuid[])", [req.user.companyId, userIds]);
+      if (valid.rows.length !== userIds.length) return res.status(400).json({ success: false, message: "One or more users were not found" });
+      await db("DELETE FROM custom_report_users WHERE report_id=$1", [req.params.id]);
+      for (const userId of userIds) await db("INSERT INTO custom_report_users (report_id,user_id) VALUES ($1,$2) ON CONFLICT DO NOTHING", [req.params.id, userId]);
+      res.json({ success: true, data: { userIds } });
+    } catch (error) { res.status(400).json({ success: false, message: error.message || "Unable to map report users" }); }
+  });
+
+  router.post("/reports/custom/preview", authenticate, authorize("reports.custom.view"), async (req, res) => {
+    try {
+      const definition = validateCustomReportDefinition(req.body);
+      if (definition.dataSource === "platform_object") {
+        const objectResult = await db("SELECT * FROM platform_objects WHERE id=$1 AND active=true AND (company_id IS NULL OR company_id=$2)", [definition.objectId, req.user.companyId]);
+        const object = objectResult.rows[0];
+        const fields = object ? (await db("SELECT * FROM platform_fields WHERE object_id=$1 AND active=true AND (company_id IS NULL OR company_id=$2)", [object.id, req.user.companyId])).rows : [];
+        const built = buildPlatformObjectQuery(definition, object, fields, req.user.companyId, 100, { storeId: req.user.storeId });
+        const result = await db(built.sql, built.params);
+        return res.json({ success: true, data: { columns: definition.fields.map((key) => ({ key, label: fields.find((field) => field.api_name === key)?.label || key })), rows: result.rows } });
+      }
+      const stores = await accessibleStores(req, requestedStoreIds(definition));
+      const range = customDateRange(definition.filters);
+      const built = buildCustomSalesQuery(definition, range, stores, definition.userIds || []);
+      built.params[2] = req.user.companyId;
+      const result = await db(built.sql.replace("LIMIT 1000", "LIMIT 100"), built.params);
+      return res.json({ success: true, data: { columns: definition.fields.map((key) => ({ key, label: CUSTOM_FIELD_MAP.get(key).label })), rows: result.rows } });
+    } catch (error) {
+      res.status(400).json({ success: false, message: error.message || "Unable to preview custom report" });
+    }
+  });
+
+  router.post("/reports/custom/:id/run", authenticate, authorize("reports.custom.view"), async (req, res) => {
+    try {
+      const report = await reportById(req, req.params.id);
+      if (!report) return res.status(404).json({ success: false, message: "Custom report not found" });
+      const definition = validateCustomReportDefinition(req.body && Object.keys(req.body).length ? req.body : report.definition);
+      const stores = await accessibleStores(req, requestedStoreIds(definition));
+      const users = definition.userIds || [];
+      if (users.length) {
+        const valid = await db("SELECT id FROM users WHERE company_id=$1 AND id=ANY($2::uuid[])", [req.user.companyId, users]);
+        if (valid.rows.length !== users.length) return res.status(400).json({ success: false, message: "One or more users were not found" });
+      }
+      if (definition.dataSource === "platform_object") {
+        const objectResult = await db("SELECT * FROM platform_objects WHERE id=$1 AND active=true AND (company_id IS NULL OR company_id=$2)", [definition.objectId, req.user.companyId]);
+        const object = objectResult.rows[0];
+        const fields = object ? (await db("SELECT * FROM platform_fields WHERE object_id=$1 AND active=true AND (company_id IS NULL OR company_id=$2)", [object.id, req.user.companyId])).rows : [];
+        const built = buildPlatformObjectQuery(definition, object, fields, req.user.companyId, 1000, { storeId: req.user.storeId });
+        const result = await db(built.sql, built.params);
+        const columns = definition.fields.map((key) => ({ key, label: fields.find((field) => field.api_name === key)?.label || key }));
+        res.json({ success: true, data: { columns, rows: result.rows } });
+        return;
+      }
+      const range = customDateRange(definition.filters);
+      const built = buildCustomSalesQuery(definition, range, stores, users);
+      built.params[2] = req.user.companyId;
+      const result = await db(built.sql, built.params);
+      const columns = definition.fields.map((key) => ({ key, label: CUSTOM_FIELD_MAP.get(key).label }));
+      res.json({ success: true, data: { columns, rows: result.rows } });
+    } catch (error) { res.status(400).json({ success: false, message: error.message || "Unable to run custom report" }); }
   });
 
   return router;

@@ -19,16 +19,18 @@ const dateTime = (value) => (value ? new Date(value).toLocaleString() : "—");
 const dateOnly = (value) => (value ? new Date(value).toLocaleDateString() : "—");
 
 const VARIANCE_LABEL = { short: "Short", over: "Over", exact: "Exact" };
-const VARIANCE_CLASS = {
-  short: "bg-red-100 text-red-800",
-  over: "bg-emerald-100 text-emerald-800",
-  exact: "bg-slate-100 text-slate-700",
+/* Variance status uses the shared badge language rather than its own
+   hand-rolled pill, so it follows the preset's radius/size tokens. */
+const VARIANCE_BADGE = {
+  short: "onepos-badge-danger",
+  over: "onepos-badge-success",
+  exact: "onepos-badge-neutral",
 };
 
 function VarianceBadge({ status, closed }) {
   if (!closed) return <span className="text-xs text-slate-400">Not counted</span>;
   return (
-    <span className={`text-xs font-medium px-2 py-0.5 rounded ${VARIANCE_CLASS[status] || VARIANCE_CLASS.exact}`}>
+    <span className={`onepos-badge ${VARIANCE_BADGE[status] || VARIANCE_BADGE.exact}`}>
       {VARIANCE_LABEL[status] || "Exact"}
     </span>
   );
@@ -67,7 +69,7 @@ function SessionDetail({ sessionId }) {
   return (
     <div className="bg-slate-50 border-t px-4 py-3 space-y-3">
       {/* Reconciliation — every value server-authoritative */}
-      <div className="bg-white border rounded-lg p-3">
+      <div className="onepos-card onepos-card-body">
         <div className="text-xs font-semibold text-slate-500 uppercase mb-2">Cash reconciliation</div>
         <dl className="grid grid-cols-2 sm:grid-cols-4 gap-x-6 gap-y-1 text-sm">
           <div className="flex justify-between"><dt className="text-slate-500">Opening cash</dt><dd>{money(session.openingCash)}</dd></div>
@@ -88,20 +90,20 @@ function SessionDetail({ sessionId }) {
       </div>
 
       {/* Cash movements */}
-      <div className="bg-white border rounded-lg overflow-hidden">
-        <div className="p-2 border-b text-xs font-semibold text-slate-500 uppercase">Cash in movements</div>
+      <div className="onepos-card overflow-hidden">
+        <div className="onepos-card-header text-xs uppercase text-slate-500">Cash in movements</div>
         {cashIns.length ? (
-          <table className="w-full">
+          <table className="onepos-table">
             <tbody>{cashIns.map(movementRow)}</tbody>
           </table>
         ) : (
           <div className="p-2 text-xs text-slate-500">No cash-in movements.</div>
         )}
       </div>
-      <div className="bg-white border rounded-lg overflow-hidden">
-        <div className="p-2 border-b text-xs font-semibold text-slate-500 uppercase">Cash out movements</div>
+      <div className="onepos-card overflow-hidden">
+        <div className="onepos-card-header text-xs uppercase text-slate-500">Cash out movements</div>
         {cashOuts.length ? (
-          <table className="w-full">
+          <table className="onepos-table">
             <tbody>{cashOuts.map(movementRow)}</tbody>
           </table>
         ) : (
@@ -165,7 +167,7 @@ export default function TillReport({ from, to }) {
   );
 
   if (loading) return <ReportTable title="Daily Till Close" headers={[]} rows={[]} />;
-  if (error) return <div className="p-6 text-sm text-slate-500 bg-white border rounded-xl">Unable to load till report: {error}</div>;
+  if (error) return <div className="onepos-alert onepos-alert-error">Unable to load till report: {error}</div>;
 
   const sessions = data?.sessions || [];
   const summary = data?.summary;
@@ -176,9 +178,9 @@ export default function TillReport({ from, to }) {
   ];
 
   return (
-    <div className="bg-white border rounded-xl overflow-hidden">
-      <div className="p-4 border-b font-semibold flex items-center justify-between">
-        <span>Daily Till Close</span>
+    <div className="onepos-card overflow-hidden">
+      <div className="onepos-card-header">
+        <span className="onepos-card-title">Daily Till Close</span>
         {sessions.length > 0 && (
           <span className="text-xs font-normal text-slate-500">
             {summary.sessions} session{summary.sessions === 1 ? "" : "s"} · Variance total{" "}
@@ -189,11 +191,11 @@ export default function TillReport({ from, to }) {
         )}
       </div>
       {sessions.length ? (
-        <table className="w-full">
+        <table className="onepos-table">
           <thead>
-            <tr className="bg-slate-50">
+            <tr>
               {headers.map((h, i) => (
-                <th key={h} className={`${i < 7 ? "text-left" : "text-right"} px-3 py-2 text-xs uppercase text-slate-500`}>
+                <th key={h} className={i < 7 ? "text-left" : "text-right"}>
                   {h}
                 </th>
               ))}
@@ -204,7 +206,7 @@ export default function TillReport({ from, to }) {
           </tbody>
         </table>
       ) : (
-        <div className="p-6 text-sm text-slate-500">No closed sessions for this date.</div>
+        <div className="onepos-empty"><span className="onepos-empty-title">No closed sessions for this date.</span></div>
       )}
     </div>
   );

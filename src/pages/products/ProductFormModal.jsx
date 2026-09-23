@@ -1,6 +1,7 @@
 import { useMemo, useRef, useState } from "react";
 import { ImagePlus, RefreshCw, Search, Trash2, X } from "lucide-react";
 import { apiRequest } from "../../services/api.js";
+import PlatformExtensionFields from "../../components/platform/PlatformExtensionFields.jsx";
 
 /*
  * Shared Product Master creation / edit form.
@@ -23,6 +24,8 @@ import { apiRequest } from "../../services/api.js";
  * a 15" till screen without scrolling.
  */
 export default function ProductFormModal({ product, categories, preset = null, saving, error, onClose, onSave }) {
+  const [platform, setPlatform] = useState(null);
+  const [platformReady, setPlatformReady] = useState(false);
   const presetCategoryId = useMemo(() => {
     if (!preset || !preset.category) return "";
     const candidates = [preset.category, preset.subcategory].filter(Boolean).map((s) => String(s).toLowerCase());
@@ -49,7 +52,11 @@ export default function ProductFormModal({ product, categories, preset = null, s
           : true
         : product.vatApplicable !== false,
     openingStock: 0,
+    openingBatchNumber: "",
+    openingManufacturingDate: "",
+    openingExpiryDate: "",
     trackStock: product?.trackStock ?? true,
+    batchTracking: product?.batchTracking ?? product?.batch_tracking ?? false,
     ageRestricted: product?.ageRestricted === true,
     imageUrl: product?.imageUrl || preset?.imageUrl || "",
     availableOnUber: product?.availableOnUber ?? false,
@@ -169,9 +176,11 @@ export default function ProductFormModal({ product, categories, preset = null, s
 
   const submit = (event) => {
     event.preventDefault();
+    if (!platformReady) return;
 
     const payload = {
       ...form,
+      platform,
       name: form.name.trim(),
       sku: form.sku.trim() || null,
       barcode: form.barcode.trim() || null,
@@ -182,6 +191,7 @@ export default function ProductFormModal({ product, categories, preset = null, s
       vatRate: Number(form.vatRate) || 0,
       vatApplicable: form.vatApplicable !== false,
       ageRestricted: form.ageRestricted === true,
+      batchTracking: form.batchTracking === true,
       availableOnUber: Boolean(form.availableOnUber),
       availableOnDeliveroo: Boolean(form.availableOnDeliveroo),
       uberItemId: form.uberItemId.trim() || null,
@@ -191,6 +201,9 @@ export default function ProductFormModal({ product, categories, preset = null, s
 
     if (!product) {
       payload.stockQuantity = Math.max(0, Number(form.openingStock) || 0);
+      payload.openingBatchNumber = form.openingBatchNumber.trim() || null;
+      payload.openingManufacturingDate = form.openingManufacturingDate || null;
+      payload.openingExpiryDate = form.openingExpiryDate || null;
     }
 
     onSave(payload);
@@ -253,7 +266,7 @@ export default function ProductFormModal({ product, categories, preset = null, s
                   type="button"
                   onClick={runEanLookup}
                   disabled={lookingUp || saving}
-                  className="h-9 px-4 bg-slate-800 text-white rounded-lg text-sm hover:bg-slate-700 disabled:opacity-60 flex items-center justify-center gap-1.5 shrink-0"
+                  className="onepos-btn onepos-btn-primary shrink-0"
                 >
                   {lookingUp ? (
                     <RefreshCw size={14} className="animate-spin" />
@@ -422,6 +435,23 @@ export default function ProductFormModal({ product, categories, preset = null, s
                       />
                     )}
                   </div>
+                  <label className="flex items-center gap-1.5 mt-2 whitespace-nowrap">
+                    <input
+                      type="checkbox"
+                      checked={form.batchTracking}
+                      onChange={(event) => updateField("batchTracking", event.target.checked)}
+                      disabled={!form.trackStock}
+                      className="w-4 h-4 accent-blue-600 disabled:opacity-50"
+                    />
+                    Track batches and expiry dates
+                  </label>
+                  {!product && form.trackStock && form.batchTracking && (
+                    <div className="grid grid-cols-3 gap-2 mt-2">
+                      <input value={form.openingBatchNumber} onChange={(e) => updateField("openingBatchNumber", e.target.value)} placeholder="Opening batch" className="h-9 px-2 border rounded-lg text-xs" />
+                      <input type="date" value={form.openingManufacturingDate} onChange={(e) => updateField("openingManufacturingDate", e.target.value)} className="h-9 px-2 border rounded-lg text-xs" />
+                      <input type="date" value={form.openingExpiryDate} onChange={(e) => updateField("openingExpiryDate", e.target.value)} className="h-9 px-2 border rounded-lg text-xs" />
+                    </div>
+                  )}
                 </div>
               </div>
 
@@ -503,6 +533,7 @@ export default function ProductFormModal({ product, categories, preset = null, s
             </div>
           </div>
 
+          <PlatformExtensionFields objectKey="product" recordId={product?.id} coreValues={form} onChange={setPlatform} onReady={setPlatformReady} />
           <div className="flex justify-end gap-2 mt-3 pt-2.5 border-t border-slate-200">
             <button
               type="button"
@@ -514,7 +545,7 @@ export default function ProductFormModal({ product, categories, preset = null, s
             </button>
             <button
               type="submit"
-              disabled={saving || !form.name.trim()}
+              disabled={saving || !platformReady || !form.name.trim()}
               className="h-9 px-4 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700"
             >
               {saving ? "Saving..." : product ? "Save changes" : "Create product"}

@@ -1,3 +1,4 @@
+import PlatformExtensionFields from "../../components/platform/PlatformExtensionFields.jsx";
 import { useEffect, useState } from "react";
 import { BookOpen, Edit, Eye, Gift, Plus, RefreshCw, Search, UserPlus, Users, X } from "lucide-react";
 import { apiRequest } from "../../services/api.js";
@@ -15,7 +16,8 @@ import {
 import CustomerLoyaltyModal from "./CustomerLoyaltyModal.jsx";
 import CustomerCreditModal from "./CustomerCreditModal.jsx";
 
-function CustomersAdmin() {
+function CustomersAdmin({ entitlements = {}, permissions = [], isAdmin = false }) {
+  const loyaltyLicensed = entitlements.loyalty === true;
   const [customers, setCustomers] = useState([]);
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
@@ -25,6 +27,8 @@ function CustomersAdmin() {
   const [detailCustomer, setDetailCustomer] = useState(null);
   const [showLoyaltyModal, setShowLoyaltyModal] = useState(false);
   const [showCreditModal, setShowCreditModal] = useState(false);
+  const canManageCredit = isAdmin || permissions.includes("customer.edit");
+  const canTakeCustomerPayment = isAdmin || permissions.includes("payment.manage") || permissions.includes("customer.edit");
 
   const loadCustomers = async (value = search) => {
     try {
@@ -212,7 +216,7 @@ function CustomersAdmin() {
                   <th>Phone</th>
                   <th>Email</th>
                   <th>Reference</th>
-                  <th>Loyalty Balance</th>
+                  {loyaltyLicensed && <th>Loyalty Balance</th>}
                   <th>Stores</th>
                   <th>Last purchase</th>
                   <th>Status</th>
@@ -244,9 +248,9 @@ function CustomersAdmin() {
                         <span className="text-slate-400">-</span>
                       )}
                     </td>
-                    <td className="font-semibold text-sm">
+                    {loyaltyLicensed && <td className="font-semibold text-sm">
                       £{Number(customer.loyalty_balance || 0).toFixed(2)}
-                    </td>
+                    </td>}
                     <td className="text-xs">
                       <span className="text-slate-600">
                         {customer.store_names || "Current store"}
@@ -264,7 +268,7 @@ function CustomersAdmin() {
                     </td>
                     <td className="text-right whitespace-nowrap">
                       <div className="inline-flex items-center gap-1">
-                        <Button
+                        {loyaltyLicensed && <Button
                           variant="ghost"
                           size="sm"
                           onClick={() => setDetailCustomer(customer)}
@@ -272,7 +276,7 @@ function CustomersAdmin() {
                           title="View details"
                         >
                           <Eye size={14} />
-                        </Button>
+                        </Button>}
                         <Button
                           variant="ghost"
                           size="sm"
@@ -346,6 +350,8 @@ function CustomersAdmin() {
       {showCreditModal && (
         <CustomerCreditModal
           customer={detailCustomer}
+          canManageCredit={canManageCredit}
+          canTakePayment={canTakeCustomerPayment}
           onClose={() => setShowCreditModal(false)}
         />
       )}
@@ -354,6 +360,8 @@ function CustomersAdmin() {
 }
 
 function CustomerAdminForm({ customer, onClose, onSave }) {
+  const [platform, setPlatform] = useState(null);
+  const [platformReady, setPlatformReady] = useState(false);
   const [form, setForm] = useState({
     id: customer.id,
     name: customer.name || "",
@@ -371,13 +379,14 @@ function CustomerAdminForm({ customer, onClose, onSave }) {
 
   const submit = async (event) => {
     event.preventDefault();
+    if (!platformReady) return;
     if (!form.name.trim()) {
       setError("Customer name is required");
       return;
     }
     try {
       setSaving(true);
-      await onSave({ ...form, name: form.name.trim() });
+      await onSave({ ...form, platform, name: form.name.trim() });
     } catch (err) {
       setError(err.message || "Unable to save customer");
     } finally {
@@ -481,6 +490,16 @@ function CustomerAdminForm({ customer, onClose, onSave }) {
                 onChange={(event) => update("notes", event.target.value)}
                 className="onepos-input"
                 placeholder="Additional notes about this customer"
+              />
+            </div>
+
+            <div className="col-span-2">
+              <PlatformExtensionFields
+                objectKey="customer"
+                recordId={customer.id}
+                coreValues={form}
+                onChange={setPlatform}
+                onReady={setPlatformReady}
               />
             </div>
           </div>
@@ -619,21 +638,23 @@ function CustomerAdminDetail({ customer, onClose, onEdit, onToggle }) {
             <div className="mb-5">
               <h3 className="onepos-section-title mb-2">Store associations</h3>
               {customer.stores?.length ? (
-                <div className="flex flex-wrap gap-1.5">
-                  {customer.stores.map((store) => (
-                    <span
-                      key={store.storeId}
-                      className="inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium bg-slate-100 text-slate-700"
-                    >
+                <>
+                  <div className="flex flex-wrap gap-1.5">
+                    {customer.stores.map((store) => (
+                      <span
+                        key={store.storeId}
+                        className="inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium bg-slate-100 text-slate-700"
+                      >
                       {store.storeName}
                       {store.active ? (
                         <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" title="Active" />
                       ) : (
                         <span className="w-1.5 h-1.5 rounded-full bg-slate-400" title="Inactive" />
                       )}
-                    </span>
-                  ))}
-                </div>
+                      </span>
+                    ))}
+                  </div>
+                </>
               ) : (
                 <p className="text-sm text-slate-500">No store associations.</p>
               )}

@@ -107,12 +107,11 @@ function buildAuthorize({
   adminRoleIds = new Set(),
   roleCodes = new Map(),
 }) {
-  // Mirrors server.js:186-220 behaviour exactly (isAdmin bypass, OR over
-  // required codes, 401 when unauthenticated, 403 when no match).
+  // Mirrors server.js authorization behaviour: OR over required codes,
+  // 401 when unauthenticated, 403 when no match.
   return (...required) => async (req, res, next) => {
     if (!req.user) return res.status(401).json({ success: false, message: "Authentication required" });
     try {
-      if (adminRoleIds.has(req.user.roleId)) return next();
       const codes = roleCodes.get(req.user.roleId) || [];
       if (required.some((c) => codes.includes(c))) return next();
       return res.status(403).json({ success: false, message: "You do not have permission to perform this action" });
@@ -141,11 +140,11 @@ function mockRes() {
 }
 
 describe("T10B authorize middleware behaviour", () => {
-  test("administrator role bypasses any required permission (#10)", async () => {
+  test("administrator roles still require their assigned permission (#10)", async () => {
     const ADMIN_ROLE = "r-admin";
     const authorize = buildAuthorize({
       adminRoleIds: new Set([ADMIN_ROLE]),
-      roleCodes: new Map(), // no codes granted — must still pass via admin
+      roleCodes: new Map([[ADMIN_ROLE, ["product.view"]]]),
     });
     const res = mockRes();
     let calledNext = false;
@@ -154,7 +153,7 @@ describe("T10B authorize middleware behaviour", () => {
       res,
       () => { calledNext = true; }
     );
-    assert.equal(calledNext, true, "admin/owner must bypass permission checks");
+    assert.equal(calledNext, true, "administrator may proceed with the assigned permission");
   });
 
   test("user WITH product.view can view products (#1)", async () => {
@@ -342,7 +341,7 @@ describe("T10B Reports route enforcements (server-side security check)", () => {
     const serverSrc = read("server.js");
     assert.match(
       serverSrc,
-      /createReportsRouter\(\s*\{\s*authenticate\s*,\s*authorize\s*,\s*db\s*\}\s*\)/,
+      /createReportsRouter\(\s*\{\s*authenticate\s*,\s*authorize\s*,\s*db\b[\s\S]*?\}\s*\)/,
       "server.js must inject authorize into createReportsRouter"
     );
   });

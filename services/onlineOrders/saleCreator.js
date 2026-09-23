@@ -21,6 +21,14 @@
  */
 const round2 = (value) => Math.round((Number(value) || 0) * 100) / 100;
 
+/*
+ * Payment method recorded against the resulting POS sale. Platform orders
+ * (Uber Eats / Deliveroo) always reconcile to the platform's own tender name so
+ * the sale is auditable against the platform payout; generic/direct orders use
+ * the payment method captured on the order at intake (defaulting to Cash when
+ * the customer has not selected a method yet), which preserves the existing
+ * accounting behaviour for store-handled tenders.
+ */
 const PAYMENT_METHODS = {
   uber: "Uber Eats",
   deliveroo: "Deliveroo",
@@ -31,10 +39,7 @@ export async function createSaleForCompletedOrder(client, { order, items, user }
   if (!order || !order.id) throw new Error("createSaleForCompletedOrder requires the completed online order");
   if (!user || !user.id) throw new Error("createSaleForCompletedOrder requires the completing user");
 
-  const paymentMethod = PAYMENT_METHODS[order.platform];
-  if (!paymentMethod) {
-    throw new Error(`No POS payment method configured for platform "${order.platform}"`);
-  }
+  const paymentMethod = order.payment_method || PAYMENT_METHODS[order.platform] || "Cash";
 
   const allItems = Array.isArray(items) ? items : [];
   const mappedItems = allItems.filter(

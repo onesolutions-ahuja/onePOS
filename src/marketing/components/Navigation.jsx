@@ -43,6 +43,7 @@ const NAV_ITEMS = [
   {
     label: "Resources",
     dropdown: [
+      { label: "Help & Support", to: "/help" },
       { label: "Security & Control", to: "/security" },
       { label: "onePOS Ecosystem", to: "/ecosystem" },
       { label: "Hardware guide", to: "/hardware" },

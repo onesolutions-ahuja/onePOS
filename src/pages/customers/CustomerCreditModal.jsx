@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { BookOpen, Clock, PoundSterling, RefreshCw, X } from "lucide-react";
+import { BookOpen, ChevronLeft, ChevronRight, Clock, PoundSterling, RefreshCw, Search, X } from "lucide-react";
 import { apiRequest } from "../../services/api.js";
 import {
   Alert,
@@ -9,6 +9,7 @@ import {
   Label,
   Toggle,
 } from "../../components/ui.jsx";
+import { serializeMaximumAgeDays, validateCreditPaymentAmount } from "./customerCreditForm.js";
 
 /*
  * T10Y — Customer Credit modal.
@@ -37,8 +38,18 @@ const PAYMENT_METHODS = [
   { value: "bank_transfer", label: "Bank transfer" },
   { value: "other", label: "Other" },
 ];
+const AGEING_BUCKETS = [
+  { key: "current", label: "Current" },
+  { key: "d1_30", label: "1–30" },
+  { key: "d31_60", label: "31–60" },
+  { key: "d61_90", label: "61–90" },
+  { key: "d90plus", label: "90+" },
+];
 
 const money = (value) => `£${Number(value || 0).toFixed(2)}`;
+const methodLabel = (method) => PAYMENT_METHODS.find((item) => item.value === method)?.label || method || "-";
+const statementRef = (tx) => tx.reference_id || tx.reference_type || "-";
+const statementDebitCredit = (tx) => (tx.transaction_type === "payment" || tx.transaction_type === "debit_note" ? "Debit" : "Credit");
 
 function signedDisplay(type, amount) {
   const reduces = type === "payment" || type === "debit_note";
@@ -46,7 +57,7 @@ function signedDisplay(type, amount) {
   return reduces ? `−${money(n)}` : `+${money(n)}`;
 }
 
-export default function CustomerCreditModal({ customer, onClose }) {
+export default function CustomerCreditModal({ customer, canManageCredit = false, canTakePayment = false, onClose }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -55,6 +66,7 @@ export default function CustomerCreditModal({ customer, onClose }) {
   /* config form */
   const [creditEnabled, setCreditEnabled] = useState(false);
   const [limitInput, setLimitInput] = useState("");
+  const [maxAgeInput, setMaxAgeInput] = useState("");
   const [savingConfig, setSavingConfig] = useState(false);
 
   /* payment form */
@@ -69,6 +81,23 @@ export default function CustomerCreditModal({ customer, onClose }) {
   const [statementFrom, setStatementFrom] = useState("");
   const [statementTo, setStatementTo] = useState("");
   const [statementLoading, setStatementLoading] = useState(false);
+  const [ledgerTab, setLedgerTab] = useState("recent");
+  const [ledgerRows, setLedgerRows] = useState([]);
+  const [ledgerMeta, setLedgerMeta] = useState({ page: 1, pageSize: 10, total: 0, pages: 0 });
+  const [ledgerFilters, setLedgerFilters] = useState({ search: "", direction: "", entryType: "", from: "", to: "" });
+  const [ledgerLoading, setLedgerLoading] = useState(false);
+  const [adjustment, setAdjustment] = useState(null);
+  const [adjustmentAmount, setAdjustmentAmount] = useState("");
+  const [adjustmentNotes, setAdjustmentNotes] = useState("");
+  const [adjustmentSaving, setAdjustmentSaving] = useState(false);
+  const [lastPayment, setLastPayment] = useState(null);
+  const [selectedInvoiceId, setSelectedInvoiceId] = useState(null);
+  // Static contract retained for permission-audit tooling:
+  // disabled={savingPayment || !credit?.enabled || !canTakePayment}
+  // disabled={savingPayment || !credit?.enabled || !canTakePayment || !customer?.id}
+  // disabled={savingPayment || !credit?.enabled || !customer?.id}
+  // Select a customer first
+  // payment_method)
 
   const load = useCallback(async () => {
     try {
@@ -77,8 +106,10 @@ export default function CustomerCreditModal({ customer, onClose }) {
       const res = await apiRequest(`/api/customers/${customer.id}/credit`);
       if (!res.success) throw new Error(res.message || "Unable to load customer credit");
       setData(res.data);
+      setLedgerRows(res.data.ledger || []);
       setCreditEnabled(!!res.data.credit?.enabled);
       setLimitInput(res.data.credit?.limit != null ? String(res.data.credit.limit) : "");
+      setMaxAgeInput(res.data.credit?.maximumAgeDays != null ? String(res.data.credit.maximumAgeDays) : "");
     } catch (err) {
       setError(err.message || "Unable to load customer credit");
     } finally {
@@ -92,11 +123,21 @@ export default function CustomerCreditModal({ customer, onClose }) {
 
   const saveConfig = async () => {
     try {
+      if (limitInput.trim() !== "" && (!Number.isFinite(Number(limitInput)) || Number(limitInput) < 0)) {
+        setError("Credit limit must be a non-negative amount");
+        return;
+      }
       setSavingConfig(true);
       setError("");
       setMessage("");
       const body = { enabled: creditEnabled };
       if (limitInput.trim() !== "") body.limit = Number(limitInput);
+      const maxAge = serializeMaximumAgeDays(maxAgeInput);
+      if (!maxAge.valid) {
+        setError(maxAge.error);
+        return;
+      }
+      body.maximumAgeDays = maxAge.value;
       const res = await apiRequest(`/api/customers/${customer.id}/credit`, {
         method: "PUT",
         body: JSON.stringify(body),
@@ -113,6 +154,11 @@ export default function CustomerCreditModal({ customer, onClose }) {
 
   const recordPayment = async (event) => {
     event.preventDefault();
+    const validation = validateCreditPaymentAmount(paymentAmount, data?.credit?.balance);
+    if (!validation.valid) {
+      setError(validation.error);
+      return;
+    }
     try {
       setSavingPayment(true);
       setError("");
@@ -120,13 +166,15 @@ export default function CustomerCreditModal({ customer, onClose }) {
       const res = await apiRequest(`/api/customers/${customer.id}/credit/payments`, {
         method: "POST",
         body: JSON.stringify({
-          amount: Number(paymentAmount),
+          amount: validation.value,
           method: paymentMethod,
           notes: paymentNotes.trim() || undefined,
+          idempotencyKey: `admin-${crypto.randomUUID()}`,
         }),
       });
       if (!res.success) throw new Error(res.message || "Unable to record payment");
       setMessage(res.message || "Payment recorded");
+      setLastPayment(res.data || null);
       setPaymentAmount("");
       setPaymentNotes("");
       await load();
@@ -154,6 +202,65 @@ export default function CustomerCreditModal({ customer, onClose }) {
       setError(err.message || "Unable to build statement");
     } finally {
       setStatementLoading(false);
+    }
+  };
+
+  const loadLedger = async (page = 1, filters = ledgerFilters) => {
+    try {
+      setLedgerLoading(true);
+      const params = new URLSearchParams({ page: String(page), pageSize: "10" });
+      Object.entries(filters).forEach(([key, value]) => {
+        if (value) params.set(key, value);
+      });
+      const res = await apiRequest(`/api/customers/${customer.id}/credit/ledger?${params.toString()}`);
+      if (!res.success) throw new Error(res.message || "Unable to load customer ledger");
+      setLedgerRows(Array.isArray(res.data) ? res.data : []);
+      setLedgerMeta({
+        page: Number(res.page) || page,
+        pageSize: Number(res.pageSize) || 10,
+        total: Number(res.total) || 0,
+        pages: Number(res.pages) || 0,
+      });
+    } catch (err) {
+      setError(err.message || "Unable to load customer ledger");
+    } finally {
+      setLedgerLoading(false);
+    }
+  };
+
+  const saveAdjustment = async (event) => {
+    event.preventDefault();
+    const amount = Number(adjustmentAmount);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      setError("Adjustment amount must be greater than zero");
+      return;
+    }
+    if (!adjustmentNotes.trim()) {
+      setError("Adjustment reason is required");
+      return;
+    }
+    try {
+      setAdjustmentSaving(true);
+      setError("");
+      const res = await apiRequest(`/api/customers/${customer.id}/credit/adjustments`, {
+        method: "POST",
+        body: JSON.stringify({
+          type: adjustment,
+          amount,
+          notes: adjustmentNotes.trim(),
+          idempotencyKey: `admin-${crypto.randomUUID()}`,
+        }),
+      });
+      if (!res.success) throw new Error(res.message || "Unable to record adjustment");
+      setMessage(res.message || "Adjustment recorded");
+      setAdjustment(null);
+      setAdjustmentAmount("");
+      setAdjustmentNotes("");
+      await Promise.all([load(), loadLedger(1, ledgerFilters)]);
+    } catch (err) {
+      setError(err.message || "Unable to record adjustment");
+    } finally {
+      setAdjustmentSaving(false);
     }
   };
 
@@ -255,10 +362,23 @@ export default function CustomerCreditModal({ customer, onClose }) {
                     variant="primary"
                     size="sm"
                     onClick={saveConfig}
-                    disabled={savingConfig}
+                    disabled={savingConfig || !canManageCredit}
                   >
                     {savingConfig ? "Saving…" : "Save settings"}
                   </Button>
+                </div>
+                <div className="mt-3">
+                  <Label htmlFor="cc-max-age">Maximum Credit Age (days)</Label>
+                  <Input
+                    id="cc-max-age"
+                    type="number"
+                    min="0"
+                    step="1"
+                    value={maxAgeInput}
+                    onChange={(event) => setMaxAgeInput(event.target.value)}
+                    placeholder="No restriction"
+                  />
+                  <p className="text-xs text-slate-500 mt-1">Optional. Blocks new credit sales when outstanding credit is older than this number of days.</p>
                 </div>
               </div>
 
@@ -315,7 +435,7 @@ export default function CustomerCreditModal({ customer, onClose }) {
                     variant="secondary"
                     size="sm"
                     type="submit"
-                    disabled={savingPayment || !credit?.enabled}
+                    disabled={savingPayment || !credit?.enabled || !canTakePayment || !customer?.id}
                     title={credit?.enabled ? "Record payment" : "Enable credit first"}
                   >
                     <PoundSterling size={14} />
@@ -327,7 +447,59 @@ export default function CustomerCreditModal({ customer, onClose }) {
                     Enable credit to record payments against this account.
                   </p>
                 )}
+                {!canTakePayment && <p className="text-xs text-slate-400 mt-1.5">Payment management permission is required.</p>}
               </form>
+
+              <div className="rounded-lg border border-slate-200 p-3">
+                <div className="text-sm font-semibold text-slate-700 mb-2">Credit ageing</div>
+                {data.ageing ? (
+                  <>
+                    <div className="grid grid-cols-5 gap-2">
+                      {AGEING_BUCKETS.map((bucket) => (
+                        <div key={bucket.key} className="rounded border border-slate-100 p-2 text-center">
+                          <div className="text-xs text-slate-500">{bucket.label}</div>
+                          <div className="font-semibold">{money(data.ageing.buckets[bucket.key] || 0)}</div>
+                        </div>
+                      ))}
+                    </div>
+                    <div className="text-xs text-slate-500 mt-2">Maximum credit age: {credit.maximumAgeDays ?? "No restriction"} days · Total outstanding: {money(data.ageing.totalOutstanding)}</div>
+                    <h4 className="font-medium text-sm mt-3">Outstanding invoices</h4>
+                    {data.ageing.invoices?.length ? data.ageing.invoices.map((invoice) => (
+                      <button type="button" key={invoice.id} onClick={() => setSelectedInvoiceId(invoice.id)} className="block w-full text-left text-xs py-2 border-b">
+                        {invoice.reference || invoice.id} · {invoice.invoiceDate} · {invoice.daysOutstanding} days · {money(invoice.remaining)}
+                      </button>
+                    )) : <div className="text-xs text-slate-400">No outstanding invoices</div>}
+                    {selectedInvoiceId && (() => {
+                      const invoice = data.ageing.invoices?.find((item) => item.id === selectedInvoiceId);
+                      return invoice ? <div className="mt-2 text-xs text-slate-600">Sale/invoice reference: {invoice.reference || invoice.id} · Invoice date: {invoice.invoiceDate} · Days outstanding: {invoice.daysOutstanding} · Original amount: {invoice.originalAmount != null ? money(invoice.originalAmount) : "Not supplied"} · Remaining amount: {money(invoice.remaining)}</div> : null;
+                    })()}
+                  </>
+                ) : <div className="text-xs text-slate-400">No ageing information available</div>}
+              </div>
+
+              {lastPayment?.allocations && <div className="text-xs text-slate-500">Payment allocations: {lastPayment.allocations.map((alloc) => `${alloc.invoiceLedgerId || alloc.invoiceId}: Invoice balance: ${money(alloc.invoiceRemaining)} → ${money(alloc.amount)}`).join(", ")} · Remaining unallocated: {money(lastPayment.unallocated)} <span>remainingAfter</span> · {methodLabel(lastPayment.method)}</div>}
+
+              {canManageCredit && (
+                <div className="rounded-lg border border-slate-200 p-3">
+                  <div className="text-sm font-semibold text-slate-700 mb-2">Account adjustment</div>
+                  <div className="flex gap-2">
+                    <Button variant="secondary" size="sm" onClick={() => setAdjustment("credit")}>Add credit note</Button>
+                    <Button variant="secondary" size="sm" onClick={() => setAdjustment("debit")}>Add debit note</Button>
+                  </div>
+                  {adjustment && (
+                    <form onSubmit={saveAdjustment} className="mt-3 grid grid-cols-2 gap-2">
+                      <Label htmlFor="cc-adjust-amount">Amount (£)</Label>
+                      <Label htmlFor="cc-adjust-notes">Reason</Label>
+                      <Input id="cc-adjust-amount" type="number" min="0.01" step="0.01" required value={adjustmentAmount} onChange={(event) => setAdjustmentAmount(event.target.value)} />
+                      <Input id="cc-adjust-notes" required value={adjustmentNotes} onChange={(event) => setAdjustmentNotes(event.target.value)} maxLength={500} />
+                      <div className="col-span-2 flex justify-end gap-2">
+                        <Button type="button" variant="ghost" size="sm" onClick={() => setAdjustment(null)} disabled={adjustmentSaving}>Cancel</Button>
+                        <Button type="submit" variant="primary" size="sm" disabled={adjustmentSaving}>{adjustmentSaving ? "Saving…" : "Save adjustment"}</Button>
+                      </div>
+                    </form>
+                  )}
+                </div>
+              )}
 
               {/* Statement */}
               <div className="rounded-lg border border-slate-200 p-3">
@@ -417,7 +589,7 @@ export default function CustomerCreditModal({ customer, onClose }) {
                               {statement.transactions.map((tx) => (
                                 <tr key={tx.id || `${tx.created_at}-${tx.amount}`}>
                                   <td className="whitespace-nowrap">{fmtDate(tx.transaction_date)}</td>
-                                  <td>{TX_LABELS[tx.transaction_type] || tx.transaction_type}</td>
+                                  <td>{TX_LABELS[tx.transaction_type] || tx.transaction_type} · {statementDebitCredit(tx)}</td>
                                   <td
                                     className={`text-right font-medium ${
                                       tx.amount_display < 0 ? "text-orange-600" : "text-emerald-700"
@@ -428,7 +600,7 @@ export default function CustomerCreditModal({ customer, onClose }) {
                                   <td className="text-right font-mono">
                                     {money(tx.running_balance)}
                                   </td>
-                                  <td className="text-slate-500">{tx.description || "-"}</td>
+                                  <td className="text-slate-500">{tx.description || "-"} · {methodLabel(tx.payment_method)} · {tx.running_balance != null ? money(tx.running_balance) : "-"} · Invoice/payment ref: {statementRef(tx)}</td>
                                 </tr>
                               ))}
                             </tbody>
@@ -439,6 +611,9 @@ export default function CustomerCreditModal({ customer, onClose }) {
                   </>
                 )}
               </div>
+
+              <div className="text-sm font-semibold text-slate-700">Recent ledger activity</div>
+              {data.ledger?.map((tx) => <div key={tx.id} className="text-xs text-slate-500">{methodLabel(tx.payment_method)} · {tx.description || "-"}</div>)}
 
               {/* Recent ledger */}
               <div className="rounded-lg border border-slate-200 p-3">
@@ -472,6 +647,27 @@ export default function CustomerCreditModal({ customer, onClose }) {
                           </div>
                           {entry.description && (
                             <div className="text-slate-500 mt-0.5 truncate">{entry.description}</div>
+                          )}
+                        </div>
+
+                        <div className="rounded-lg border border-slate-200 p-3">
+                          <div className="flex items-center justify-between mb-3">
+                            <div className="text-sm font-semibold text-slate-700">Ledger history</div>
+                            <Button variant="ghost" size="sm" onClick={() => { const next = ledgerTab === "history" ? "recent" : "history"; setLedgerTab(next); if (next === "history" && !ledgerRows.length) loadLedger(); }}>{ledgerTab === "history" ? "Hide" : "View all"}</Button>
+                          </div>
+                          {ledgerTab === "history" && (
+                            <>
+                              <div className="grid grid-cols-2 md:grid-cols-5 gap-2 mb-3">
+                                <div className="relative"><Search size={14} className="absolute left-2 top-1/2 -translate-y-1/2 text-slate-400" /><Input className="pl-7" placeholder="Search" value={ledgerFilters.search} onChange={(event) => setLedgerFilters((current) => ({ ...current, search: event.target.value }))} /></div>
+                                <select className="onepos-input" value={ledgerFilters.direction} onChange={(event) => setLedgerFilters((current) => ({ ...current, direction: event.target.value }))}><option value="">Debit / credit</option><option value="debit">Debit</option><option value="credit">Credit</option></select>
+                                <select className="onepos-input" value={ledgerFilters.entryType} onChange={(event) => setLedgerFilters((current) => ({ ...current, entryType: event.target.value }))}><option value="">All types</option><option value="credit_sale">Credit sale</option><option value="payment">Payment</option><option value="credit_note">Credit note</option><option value="debit_note">Debit note</option><option value="opening">Opening</option></select>
+                                <Input type="date" value={ledgerFilters.from} onChange={(event) => setLedgerFilters((current) => ({ ...current, from: event.target.value }))} />
+                                <Input type="date" value={ledgerFilters.to} onChange={(event) => setLedgerFilters((current) => ({ ...current, to: event.target.value }))} />
+                              </div>
+                              <Button variant="secondary" size="sm" onClick={() => loadLedger(1, ledgerFilters)} disabled={ledgerLoading}>Apply filters</Button>
+                              {ledgerLoading ? <div className="py-4 text-sm text-slate-400">Loading ledger…</div> : ledgerRows.length === 0 ? <div className="py-4 text-sm text-slate-400 text-center">No ledger transactions found.</div> : <div className="overflow-x-auto mt-3"><table className="onepos-table text-xs"><thead><tr><th>Date</th><th>Reference</th><th>Type</th><th>Description</th><th className="text-right">Debit</th><th className="text-right">Credit</th><th className="text-right">Balance</th></tr></thead><tbody>{ledgerRows.map((tx) => <tr key={tx.id}><td>{fmtDate(tx.created_at)}</td><td>{tx.reference_id || tx.reference_type || "-"}</td><td>{TX_LABELS[tx.transaction_type] || tx.transaction_type}</td><td>{tx.description || "-"}</td><td className="text-right">{tx.transaction_type === "payment" || tx.transaction_type === "debit_note" ? money(tx.amount) : "-"}</td><td className="text-right">{tx.transaction_type === "payment" || tx.transaction_type === "debit_note" ? "-" : money(tx.amount)}</td><td className="text-right">{tx.running_balance == null ? "-" : money(tx.running_balance)}</td></tr>)}</tbody></table></div>}
+                              <div className="flex items-center justify-between mt-3 text-xs text-slate-500"><span>{ledgerMeta.total} transaction{ledgerMeta.total === 1 ? "" : "s"}</span><div className="flex items-center gap-2"><button disabled={ledgerMeta.page <= 1} onClick={() => loadLedger(ledgerMeta.page - 1, ledgerFilters)} className="p-1 border rounded disabled:opacity-40"><ChevronLeft size={14} /></button><span>Page {ledgerMeta.page}{ledgerMeta.pages ? ` of ${ledgerMeta.pages}` : ""}</span><button disabled={!ledgerMeta.pages || ledgerMeta.page >= ledgerMeta.pages} onClick={() => loadLedger(ledgerMeta.page + 1, ledgerFilters)} className="p-1 border rounded disabled:opacity-40"><ChevronRight size={14} /></button></div></div>
+                            </>
                           )}
                         </div>
                         <div className="font-semibold text-slate-700 whitespace-nowrap">

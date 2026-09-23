@@ -18,4 +18,14 @@ conversations/
 dist/ bash_events/
 conversations/
 dist/
+.tmp/
 data/product-master/openfoodfacts_official_starter_raw.tsv
+
+# Local test/build artifacts
+.tmp_*
+test_output*.txt
+err.txt
+out.txt
+
+# Local editor configuration
+.vscode/

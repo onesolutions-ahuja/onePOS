@@ -9,7 +9,7 @@
  */
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { computeBasketTotals, roundCurrency } from "../src/utils/saleTotals.js";
+import { computeBasketTotals, roundCurrency, resolveEffectivePrice } from "../src/utils/saleTotals.js";
 
 const GB = (n) => ({ price: n, quantity: 1, vatApplicable: true });
 
@@ -136,5 +136,62 @@ describe("saleTotals permission model", () => {
      const r = computeBasketTotals(b, { vatEnabled: true, vatRate: 0.2, discountType: null, discountValue: 0 });
      assert.equal(r.orderDiscount, 0);
      assert.equal(roundCurrency(r.total), 120);
+   });
+});
+
+describe("resolveEffectivePrice (T10-PRICE permission gate)", () => {
+  test("catalogue price used when no override proposed", () => {
+    const r = resolveEffectivePrice({ cataloguePrice: 100, canOverridePrice: true });
+    assert.equal(r.price, 100);
+    assert.equal(r.overridden, false);
+    assert.equal(r.originalPrice, 100);
+  });
+
+  test("permitted user override is applied", () => {
+    const r = resolveEffectivePrice({ cataloguePrice: 100, priceOverride: 80, canOverridePrice: true });
+    assert.equal(r.price, 80);
+    assert.equal(r.overridden, true);
+    assert.equal(r.originalPrice, 100);
+  });
+
+  test("UNpermitted user override is IGNORED (catalogue price wins)", () => {
+    const r = resolveEffectivePrice({ cataloguePrice: 100, priceOverride: 80, canOverridePrice: false });
+    assert.equal(r.price, 100);
+    assert.equal(r.overridden, false);
+    assert.equal(r.originalPrice, 100);
+  });
+
+  test("override proposal of 0 / negative is ignored even when permitted", () => {
+    const r = resolveEffectivePrice({ cataloguePrice: 100, priceOverride: 0, canOverridePrice: true });
+    assert.equal(r.price, 100);
+    assert.equal(r.overridden, false);
+  });
+
+  test("original catalogue price is never mutated", () => {
+    const r = resolveEffectivePrice({ cataloguePrice: 100, priceOverride: 1, canOverridePrice: true });
+    assert.equal(r.originalPrice, 100);
+    assert.equal(r.price, 1);
+  });
+});
+
+describe("discount + manual price override composition", () => {
+  test("price override + per-line percent discount + order discount compose via engine", () => {
+    const b = [{ price: 80, quantity: 1, vatApplicable: true, discountType: "percent", discountValue: 10 }];
+    const r = computeBasketTotals(b, { vatEnabled: true, vatRate: 0.2, discountType: "percent", discountValue: 10 });
+    assert.equal(r.lineDiscounts[0].amount, 8);
+    assert.equal(roundCurrency(r.orderDiscount), roundCurrency(72 * 0.1));
+    assert.equal(roundCurrency(r.subtotal), roundCurrency(80 - 8 - 7.2));
+    assert.equal(roundCurrency(r.total), roundCurrency(r.subtotal * 1.2));
+  });
+
+  test("admin bypass is consistent: permitted resolves override, engine prices it", () => {
+    const adminOverride = resolveEffectivePrice({ cataloguePrice: 50, priceOverride: 40, canOverridePrice: true });
+    const r = computeBasketTotals([{ ...GB(adminOverride.price), discountType: "percent", discountValue: 10 }], {
+      vatEnabled: true, vatRate: 0.2, discountType: "percent", discountValue: 10,
+    });
+    assert.equal(adminOverride.price, 40);
+    assert.equal(r.lineDiscounts[0].amount, 4);
+    assert.equal(roundCurrency(r.orderDiscount), roundCurrency(36 * 0.1));
+    assert.equal(roundCurrency(r.total), roundCurrency((40 - 4 - 3.6) * 1.2));
   });
 });

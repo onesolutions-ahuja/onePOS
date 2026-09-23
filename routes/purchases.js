@@ -1,5 +1,8 @@
 import express from "express";
+import { upsertBatchRow } from "../services/inventory.js";
 import { dispatchIntegrationEvent } from "../services/integrationDispatcher.js";
+import { planReceipt } from "../services/purchasing.js";
+import { resolveBatchEntry, normaliseBatchPolicy } from "../services/batchPolicy.js";
 
 export default function createPurchasesRouter({
   authenticate,
@@ -7,6 +10,7 @@ export default function createPurchasesRouter({
   db,
   pool,
   createInventoryMovement,
+  savePlatformRecord = null,
 }) {
   const router = express.Router();
 
@@ -32,6 +36,9 @@ export default function createPurchasesRouter({
         quantity,
         unitCost,
         lineTotal: quantity * unitCost,
+        batchNumber: item.batchNumber || null,
+        manufacturingDate: item.manufacturingDate || null,
+        expiryDate: item.expiryDate || null,
       };
     });
   }
@@ -41,9 +48,10 @@ export default function createPurchasesRouter({
       await client.query(
         `
         INSERT INTO purchase_items (
-          purchase_id, product_id, quantity, unit_cost, line_total
+          purchase_id, product_id, quantity, unit_cost, line_total,
+          batch_number, manufacturing_date, expiry_date
         )
-        VALUES ($1,$2,$3,$4,$5)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
         `,
         [
           purchaseId,
@@ -51,12 +59,15 @@ export default function createPurchasesRouter({
           item.quantity,
           item.unitCost,
           item.lineTotal,
+          item.batchNumber ? String(item.batchNumber).trim().slice(0, 100) : null,
+          item.manufacturingDate && /^\d{4}-\d{2}-\d{2}$/.test(String(item.manufacturingDate)) ? String(item.manufacturingDate) : null,
+          item.expiryDate && /^\d{4}-\d{2}-\d{2}$/.test(String(item.expiryDate)) ? String(item.expiryDate) : null,
         ]
       );
     }
   }
 
-  async function receivePurchase(client, purchaseId, companyId, userId, storeId) {
+  async function receivePurchase(client, purchaseId, companyId, userId, storeId, requestedItems = null, receiptMeta = {}) {
     const purchaseResult = await client.query(
       `
     SELECT id, store_id, status
@@ -85,10 +96,13 @@ export default function createPurchasesRouter({
 
     const lines = await client.query(
       `
-    SELECT product_id, quantity
-    FROM purchase_items
-    WHERE purchase_id = $1
-    ORDER BY id
+    SELECT pi.id AS purchase_item_id, pi.product_id, pi.quantity, pi.received_quantity, pi.unit_cost,
+           p.batch_tracking,
+           pi.batch_number, pi.manufacturing_date, pi.expiry_date
+    FROM purchase_items pi
+    INNER JOIN products p ON p.id = pi.product_id
+    WHERE pi.purchase_id = $1
+    ORDER BY pi.id
     `,
       [purchaseId]
     );
@@ -97,33 +111,87 @@ export default function createPurchasesRouter({
       throw new Error("Purchase has no product lines");
     }
 
-    for (const line of lines.rows) {
+    const receiptLines = [];
+    const policyResult = await client.query(
+      "SELECT batch_inventory_mode, batch_default_mfg_rule, batch_default_expiry_rule, batch_default_expiry_days FROM company_settings WHERE company_id=$1",
+      [companyId]
+    );
+    const policy = normaliseBatchPolicy(policyResult.rows[0]);
+    for (const line of planReceipt(lines.rows, requestedItems)) {
+      const requested = line.quantity;
+      const batch = resolveBatchEntry(policy, {
+        productBatchTracking: line.batch_tracking,
+        batchNumber: line.batch_number,
+        manufacturingDate: line.manufacturing_date,
+        expiryDate: line.expiry_date,
+      });
       await createInventoryMovement(client, {
         companyId,
         productId: line.product_id,
         storeId: purchase.store_id || storeId,
         movementType: "PURCHASE",
-        quantityChange: Number(line.quantity),
+        quantityChange: requested,
         referenceType: "PURCHASE",
         referenceId: purchaseId,
         createdBy: userId,
       });
+
+      /*
+       * Batch / expiry tracking: batch-tracked goods land in a batch row at
+       * the receiving store (batch number/expiry come from the purchase line
+       * where provided). Same transaction — a failed receive rolls both
+       * back. Non-batch-tracked products are untouched.
+       */
+      if (line.batch_tracking) {
+        await upsertBatchRow(client, {
+          companyId,
+          storeId: purchase.store_id || storeId,
+          productId: line.product_id,
+          batchNumber: batch.batchNumber,
+          manufacturingDate: batch.manufacturingDate,
+          manufacturingDateSource: batch.manufacturingDateSource,
+          expiryDate: batch.expiryDate,
+          expiryDateSource: batch.expiryDateSource,
+          quantity: requested,
+        });
+      }
+      receiptLines.push({ ...line, quantity: requested });
     }
 
-    /*
-     * Final status check and update must be atomic: the WHERE clause is
-     * re-evaluated at UPDATE time inside this transaction, so a concurrent
-     * receive (or the receiveNow path) can never push stock twice. If the
-     * row was already received after our FOR UPDATE snapshot read, zero
-     * rows update and we reject with ALREADY_RECEIVED.
-     */
+    if (!receiptLines.length) throw new Error("No remaining quantity to receive");
+    const receipt = await client.query(
+      `INSERT INTO purchase_receipts
+        (company_id, purchase_id, store_id, received_by, reference_number, notes)
+       VALUES ($1,$2,$3,$4,$5,$6) RETURNING id, received_at`,
+      [companyId, purchaseId, purchase.store_id || storeId, userId, receiptMeta.referenceNumber || null, receiptMeta.notes || null]
+    );
+    for (const line of receiptLines) {
+      await client.query(
+        `INSERT INTO purchase_receipt_items
+          (receipt_id, purchase_item_id, product_id, quantity, unit_cost, batch_number, manufacturing_date, expiry_date)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+        [receipt.rows[0].id, line.purchase_item_id, line.product_id, line.quantity, line.unit_cost, line.batch_number || null, line.manufacturing_date || null, line.expiry_date || null]
+      );
+      await client.query(
+        `UPDATE purchase_items SET received_quantity = received_quantity + $1
+         WHERE id=$2 AND purchase_id=$3`,
+        [line.quantity, line.purchase_item_id, purchaseId]
+      );
+    }
+    const remaining = await client.query(
+      `SELECT COUNT(*)::int AS open_lines
+         FROM purchase_items
+        WHERE purchase_id=$1 AND received_quantity < quantity`,
+      [purchaseId]
+    );
+    const nextStatus = Number(remaining.rows[0].open_lines) === 0 ? "RECEIVED" : "PARTIALLY_RECEIVED";
     const receiveUpdate = await client.query(
       `
     UPDATE purchases
-    SET status = 'RECEIVED', received_by = $1, received_at = NOW(), updated_at = NOW()
-    WHERE id = $2 AND company_id = $3 AND status = 'DRAFT'
+    SET status = $1, received_by = $2, received_at = CASE WHEN $1 = 'RECEIVED' THEN NOW() ELSE received_at END, updated_at = NOW()
+    WHERE id = $3 AND company_id = $4 AND status IN ('DRAFT','PARTIALLY_RECEIVED')
     `,
-      [userId, purchaseId, companyId]
+      [nextStatus, userId, purchaseId, companyId]
     );
 
     if (receiveUpdate.rowCount !== 1) {
@@ -206,7 +274,8 @@ export default function createPurchasesRouter({
 
         const items = await db(
           `
-          SELECT pi.*, p.name AS product_name, p.sku, p.barcode
+          SELECT pi.*, p.name AS product_name, p.sku, p.barcode,
+            (pi.quantity - pi.received_quantity) AS remaining_quantity
           FROM purchase_items pi
           INNER JOIN products p ON p.id = pi.product_id
           WHERE pi.purchase_id = $1
@@ -225,10 +294,16 @@ export default function createPurchasesRouter({
           `,
           [req.params.id]
         );
+        const receipts = await db(
+          `SELECT pr.id, pr.received_at, pr.reference_number, pr.notes, u.username AS received_by_username
+             FROM purchase_receipts pr LEFT JOIN users u ON u.id=pr.received_by
+            WHERE pr.purchase_id=$1 AND pr.company_id=$2 ORDER BY pr.received_at`,
+          [req.params.id, req.user.companyId]
+        );
 
         res.json({
           success: true,
-          data: { ...purchase.rows[0], items: items.rows, movements: movements.rows },
+          data: { ...purchase.rows[0], items: items.rows, movements: movements.rows, receipts: receipts.rows },
         });
       } catch (error) {
         console.error("Get purchase error:", error);
@@ -262,6 +337,9 @@ export default function createPurchasesRouter({
         notes = null,
         items,
         receiveNow = false,
+        receiveItems = null,
+        receivingReference = null,
+        receivingNotes = null,
       } = req.body;
 
       let purchaseItems;
@@ -348,6 +426,25 @@ export default function createPurchasesRouter({
         );
 
         const purchaseId = purchaseResult.rows[0].id;
+        if (savePlatformRecord) {
+          await savePlatformRecord({
+            db: client.query.bind(client),
+            key: "purchase",
+            req,
+            record: {
+              id: purchaseId,
+              company_id: req.user.companyId,
+              store_id: storeId || req.user.storeId,
+              supplier_id: resolvedSupplierId,
+              supplier_name: trimmedSupplierName,
+              reference_number: referenceNumber && String(referenceNumber).trim() ? String(referenceNumber).trim() : null,
+              purchase_date: purchaseDate,
+              notes: notes && String(notes).trim() ? String(notes).trim() : null,
+              status: "DRAFT",
+              total,
+            },
+          });
+        }
         await insertPurchaseLines(client, purchaseId, purchaseItems);
 
         if (receiveNow) {
@@ -356,7 +453,9 @@ export default function createPurchasesRouter({
             purchaseId,
             req.user.companyId,
             req.user.id,
-            req.user.storeId
+            req.user.storeId,
+            receiveItems,
+            { referenceNumber: receivingReference, notes: receivingNotes }
           );
         }
 
@@ -429,7 +528,9 @@ export default function createPurchasesRouter({
           req.params.id,
           req.user.companyId,
           req.user.id,
-          req.user.storeId
+          req.user.storeId,
+          Array.isArray(req.body.receiveItems) ? req.body.receiveItems : null,
+          { referenceNumber: req.body.receivingReference, notes: req.body.receivingNotes }
         );
         await client.query("COMMIT");
 

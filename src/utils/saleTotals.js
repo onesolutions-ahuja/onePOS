@@ -18,6 +18,28 @@ function roundCurrency(v) {
   return Math.round((v + Number.EPSILON) * 100) / 100;
 }
 
+/*
+ * T10-PRICE: resolve the effective selling price for a sale line.
+ *
+ * The catalogue price is the default. A manual override is applied ONLY when
+ * the operator holds sale.price_override (`canOverridePrice`) AND proposes a
+ * positive `priceOverride`. Without the permission the catalogue price wins
+ * regardless of what the client submits, so a user cannot alter the selling
+ * price via a crafted request. Returns { price, overridden, originalPrice }.
+ */
+export function resolveEffectivePrice({
+  cataloguePrice,
+  priceOverride,
+  canOverridePrice,
+}) {
+  const cp = Number(cataloguePrice) || 0;
+  const po = Number(priceOverride) || 0;
+  if (canOverridePrice && po > 0) {
+    return { price: roundCurrency(po), overridden: true, originalPrice: cp };
+  }
+  return { price: cp, overridden: false, originalPrice: cp };
+}
+
 const lineDiscount = (item) => {
   const type = item.discountType;
   if (type !== "percent" && type !== "fixed") return 0;

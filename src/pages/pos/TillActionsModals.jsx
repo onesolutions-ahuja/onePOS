@@ -410,23 +410,28 @@ function PrintReceiptModal({ lastSale, onClose }) {
             data-testid="receipt-paper"
             className="print-area border border-slate-200 rounded-lg p-4 font-mono text-[13px] leading-6 bg-white"
           >
-            <div className="text-center font-bold text-[15px]">onePOS Receipt</div>
+            <div className="text-center font-bold text-[15px]">{sale.store_name || "onePOS Receipt"}</div>
+            {(sale.address_line1 || sale.store_phone) && (
+              <div className="text-center text-slate-500">{sale.address_line1 || ""}{sale.store_phone ? ` · ${sale.store_phone}` : ""}</div>
+            )}
             {sale.receipt_number && (
-              <div className="text-center">Receipt {sale.receipt_number}</div>
+              <div className="text-center" data-testid="receipt-number">Receipt {sale.receipt_number}</div>
             )}
             {sale.offline && (
-              <div className="text-center text-slate-500">(offline copy — pending sync)</div>
+              <div className="text-center text-slate-500">(offline copy — pending sync; not yet confirmed by the server)</div>
             )}
             <div className="text-center text-slate-500">
               {sale.created_at ? new Date(sale.created_at).toLocaleString() : ""}
+              {sale.terminal_name ? ` · ${sale.terminal_name}` : ""}
               {sale.cashier ? ` · ${sale.cashier}` : ""}
             </div>
+            {sale.customer_name && <div data-testid="receipt-customer" className="text-center">{sale.customer_name}{sale.customer_phone ? ` · ${sale.customer_phone}` : ""}</div>}
             <div className="my-2 border-t border-dashed border-slate-300" />
 
             {(sale.items || []).map((item) => (
               <div key={item.id} className="flex justify-between">
                 <span className="truncate mr-2">
-                  {item.product_name} × {Number(item.quantity)}
+                  {item.product_name} × {Number(item.quantity)} @ ${money(item.unit_price)}
                 </span>
                 <span>{money(item.total)}</span>
               </div>

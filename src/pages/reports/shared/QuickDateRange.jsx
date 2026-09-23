@@ -46,11 +46,7 @@ export default function QuickDateRange({ from, to, onFromChange, onToChange, cla
             onClick={() => handleSelect(range)}
             title={`${range.label}: ${range.from} → ${range.to}`}
             aria-pressed={selected}
-            className={`h-7 px-2 text-xs rounded border whitespace-nowrap transition-colors ${
-              selected
-                ? "bg-blue-600 border-blue-600 text-white font-medium"
-                : "border-slate-200 text-slate-600 hover:bg-slate-50"
-            }`}
+            className={`onepos-btn onepos-btn-sm ${selected ? "onepos-btn-primary" : "onepos-btn-secondary"}`}
           >
             {range.label}
           </button>

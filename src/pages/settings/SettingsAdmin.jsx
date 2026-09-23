@@ -7,6 +7,13 @@ import WhatsAppSettings from "./whatsapp/WhatsAppSettings.jsx";
 import InvoiceDeliverySettings from "./invoiceDeliverySettings.jsx";
 import { Toggle } from "../../components/ui.jsx";
 import UserFormModal from "./UserFormModal.jsx";
+import PlatformAdmin from "./PlatformAdmin.jsx";
+import MessageTemplatesAdmin from "./MessageTemplatesAdmin.jsx";
+import AppearancePreferences from "./AppearancePreferences.jsx";
+import {
+  fetchPreferences,
+  savePreferences,
+} from "../../services/adminPreferencesService.js";
 /*
  * Settings navigation - compact grouped tabs.
  *
@@ -23,7 +30,15 @@ const SETTING_GROUPS = [
   { label: "Integrations", sections: ["Connections", "Uber Eats", "Deliveroo", "WhatsApp"] },
   { label: "Communications", sections: ["SMS Delivery", "Email Delivery"] },
   { label: "System", sections: ["Server / API Configuration"] },
+  { label: "Platform", sections: ["Platform", "Message Templates"] },
 ];
+
+/*
+ * T-UI-SHELL: Settings → Appearance. The user's own admin presentation
+ * (layout preset / appearance / accent) — a USER preference, not a company
+ * setting, so it lives outside the company settings PUT entirely.
+ */
+const APPEARANCE_TAB = "Appearance";
 
 /*
  * Legacy section names (pre left-panel navigation) still arrive via deep
@@ -35,8 +50,21 @@ const LEGACY_TAB_REDIRECT = {
   Integrations: "Connections",
 };
 
-function SettingsAdmin({ initialTab = "General", isAdmin = false }) {
-  const tabs = SETTING_GROUPS.flatMap((group) => group.sections);
+function SettingsAdmin({ initialTab = "General", isAdmin = false, isSuperadmin = false, entitlements = {} }) {
+  const visibleGroups = SETTING_GROUPS.map((group) => ({
+    ...group,
+    sections: group.sections.filter((section) =>
+      (section !== "Customer Loyalty" || entitlements.loyalty === true) &&
+      (section !== "Server / API Configuration" || isSuperadmin) &&
+      (section !== "Platform" || isAdmin || isSuperadmin)
+    ),
+  }));
+  /* Appearance is available to EVERY signed-in user: it changes only their
+     own presentation. Inserted into the visible list, not the group data,
+     so the existing company section gating above is untouched. */
+  visibleGroups.splice(0, 0, { label: "Your account", sections: [APPEARANCE_TAB] });
+  const gatedGroups = visibleGroups.filter((group) => group.sections.length > 0);
+  const tabs = gatedGroups.flatMap((group) => group.sections);
   /* Legacy deep links/profile-menu tabs redirect to their new sections. */
   const resolveInitialTab = (rawTab) => {
     const legacy = LEGACY_TAB_REDIRECT[rawTab];
@@ -95,6 +123,7 @@ setForm({
           loyaltyEnabled: settingsResponse.data.loyalty?.enabled || false,
           loyaltyEarningRate: settingsResponse.data.loyalty?.earningRate || 0.01,
           scanGoEnabled: settingsResponse.data.scanGo?.enabled || false,
+          exchangeMode: settingsResponse.data.exchange?.mode || "both",
         });
       }
       if (terminalsResponse.success) setTerminals(terminalsResponse.data || []);
@@ -136,20 +165,20 @@ setForm({
     } catch (err) { setError(err.message || "Unable to test hardware"); }
   };
 
-  if (loading) return <div className="p-10 text-center text-slate-400">Loading settings...</div>;
+  if (loading) return <div className="onepos-empty">Loading settings...</div>;
 
-  if (error) return <div className="bg-white border border-slate-200 rounded-xl p-8 max-w-2xl"><h2 className="font-semibold text-red-700">Unable to load settings</h2><p className="text-sm text-slate-600 mt-2">{error}</p><button onClick={load} className="mt-5 h-10 px-4 bg-blue-600 text-white rounded-lg text-sm font-medium flex items-center gap-2"><RefreshCw size={16} /> Retry</button></div>;
+  if (error) return <div className="onepos-card onepos-card-body max-w-2xl"><h2 className="font-semibold text-red-700">Unable to load settings</h2><p className="text-sm text-slate-600 mt-2">{error}</p><button onClick={load} className="mt-5 onepos-btn onepos-btn-primary"><RefreshCw size={16} /> Retry</button></div>;
 
-  if (!settings || !form) return <div className="bg-white border border-slate-200 rounded-xl p-8 max-w-2xl"><h2 className="font-semibold text-red-700">Settings are unavailable</h2><p className="text-sm text-slate-600 mt-2">No settings data was returned by the server.</p><button onClick={load} className="mt-5 h-10 px-4 bg-blue-600 text-white rounded-lg text-sm font-medium flex items-center gap-2"><RefreshCw size={16} /> Retry</button></div>;
+  if (!settings || !form) return <div className="onepos-card onepos-card-body max-w-2xl"><h2 className="font-semibold text-red-700">Settings are unavailable</h2><p className="text-sm text-slate-600 mt-2">No settings data was returned by the server.</p><button onClick={load} className="mt-5 onepos-btn onepos-btn-primary"><RefreshCw size={16} /> Retry</button></div>;
 
   return (
     <div className="flex gap-6 items-start">
       {/* Left settings navigation: groups with sub-items; each section opens
           separately in the content pane. */}
-            <aside className="w-52 shrink-0 bg-white border border-slate-200 rounded-xl p-3 space-y-4">
-        {SETTING_GROUPS.map((group) => {
+            <aside className="w-52 shrink-0 onepos-card onepos-card-body space-y-4">
+        {visibleGroups.map((group) => {
           const sections = group.sections.filter(
-            (item) => item !== "Server / API Configuration" || isAdmin
+            (item) => item !== "Server / API Configuration" || isSuperadmin
           );
           return (
             <div key={group.label}>
@@ -159,7 +188,8 @@ setForm({
                   <button
                     key={item}
                     onClick={() => { setTab(item); setMessage(""); setError(""); }}
-                    className={`w-full text-left px-2 h-8 rounded-md text-sm transition-colors ${tab === item ? "bg-blue-600 text-white font-medium" : "text-slate-600 hover:bg-slate-100"}`}
+                    className={`onepos-settings-tab w-full text-left ${tab === item ? "onepos-settings-tab-active" : ""}`}
+                    aria-current={tab === item ? "true" : undefined}
                   >
                     {item}
                   </button>
@@ -172,11 +202,12 @@ setForm({
 
       <div className="flex-1 min-w-0">
         <div className="mb-4">
-          <h1 className="text-2xl font-bold">Settings</h1>
+          <h1 className="onepos-page-title">Settings</h1>
           <p className="text-sm text-slate-500 mt-1">{tab}</p>
         </div>
         {message && <div className="mb-4 px-4 py-3 bg-emerald-50 border border-emerald-200 text-emerald-700 rounded-lg text-sm">{message}</div>}
         {error && <div className="mb-4 px-4 py-3 bg-red-50 border border-red-200 text-red-700 rounded-lg text-sm">{error}</div>}
+        {tab === APPEARANCE_TAB && <AppearanceSection />}
         {["General", "Company", "Tax / VAT"].includes(tab) && <SettingsForm tab={tab} form={form} setForm={setForm} onSave={saveSettings} />}
         {tab === "Store & Till" && <StoreTillSettings settings={settings} onMessage={setMessage} onError={setError} />}
         {tab === "Store & Till" && <InvoicePrefixesSetting form={form} onMessage={setMessage} onError={setError} />}
@@ -184,6 +215,7 @@ setForm({
         {tab === "Store & Till" && <DockQuickAccessSetting form={form} onMessage={setMessage} onError={setError} />}
         {tab === "Store & Till" && <CustomerDisplaySetting form={form} onMessage={setMessage} onError={setError} />}
         {tab === "Store & Till" && <SelfCheckoutKeysSetting onMessage={setMessage} onError={setError} />}
+        {tab === "General" && <BatchInventoryPolicySetting settings={settings} onMessage={setMessage} onError={setError} onSaved={load} />}
         {tab === "Payment Terminals" && <PaymentTerminalSettings terminals={terminals} onSaved={load} onMessage={setMessage} onError={setError} />}
         {tab === "Hardware" && <HardwareSettings hardware={hardware} onSave={saveHardware} onTest={testHardware} />}
         {tab === "Connections" && <IntegrationHealth health={health} />}
@@ -199,10 +231,79 @@ setForm({
         {tab === "Roles & Permissions" && <RolesSettings onMessage={setMessage} onError={setError} />}
         {tab === "Users & Permissions" && <UsersPermissionsSettings onMessage={setMessage} onError={setError} />}
         {tab === "Receipts" && <ReceiptSettings settings={settings} form={form} setForm={setForm} onSave={saveSettings} />}
-        {tab === "Server / API Configuration" && isAdmin && <ServerApiSettings onMessage={setMessage} onError={setError} />}
+        {tab === "Server / API Configuration" && isSuperadmin && <ServerApiSettings onMessage={setMessage} onError={setError} />}
+        {tab === "Platform" && (isAdmin || isSuperadmin) && <PlatformAdmin onMessage={setMessage} onError={setError} />}
+        {tab === "Message Templates" && (isAdmin || isSuperadmin) && <MessageTemplatesAdmin onMessage={setMessage} onError={setError} />}
       </div>
     </div>
   );
+}
+
+/*
+ * Settings → Appearance: the user's own admin presentation preferences.
+ * Loads the persisted choice (server row + local mirror) and saves each
+ * change immediately through the user-preference service — nothing here
+ * touches the company settings PUT or any business data.
+ */
+function AppearanceSection() {
+  const [prefs, setPrefs] = useState(null);
+  useEffect(() => {
+    let alive = true;
+    fetchPreferences().then((loaded) => {
+      if (alive) setPrefs(loaded);
+    });
+    return () => { alive = false; };
+  }, []);
+  if (!prefs) return <div className="p-6 text-sm text-slate-400">Loading appearance settings...</div>;
+  return (
+    <div className="onepos-card onepos-card-body max-w-4xl">
+      <AppearancePreferences
+        preferences={prefs}
+        onChange={(next) => {
+          setPrefs(next);
+          savePreferences(next);
+        }}
+      />
+    </div>
+  );
+}
+
+function BatchInventoryPolicySetting({ settings, onMessage, onError, onSaved }) {
+  const inventory = settings.inventory || {};
+  const [form, setForm] = useState({
+    batchInventoryMode: inventory.batchInventoryMode || "none",
+    batchDefaultMfgRule: inventory.batchDefaultMfgRule || "none",
+    batchDefaultExpiryRule: inventory.batchDefaultExpiryRule || "none",
+    batchDefaultExpiryDays: inventory.batchDefaultExpiryDays || 365,
+  });
+  const [saving, setSaving] = useState(false);
+  const save = async () => {
+    try {
+      setSaving(true);
+      await apiRequest("/api/settings/batch-policy", { method: "PUT", body: JSON.stringify(form) });
+      onMessage("Batch inventory policy saved.");
+      await onSaved();
+    } catch (error) {
+      onError(error.message || "Unable to save batch inventory policy");
+    } finally {
+      setSaving(false);
+    }
+  };
+  return <div className="onepos-card onepos-card-body max-w-2xl mt-4">
+    <h2 className="font-semibold">Batch Inventory Mode</h2>
+    <p className="text-sm text-slate-500 mt-1">Controls required batch and date fields for stock entering this company.</p>
+    <select value={form.batchInventoryMode} onChange={(e) => setForm({ ...form, batchInventoryMode: e.target.value })} className="onepos-input mt-4">
+      <option value="none">No Batch Inventory</option>
+      <option value="optional_dates">Batch Inventory — Dates Optional</option>
+      <option value="required_dates">Proper Batch Inventory</option>
+    </select>
+    {form.batchInventoryMode === "optional_dates" && <div className="grid grid-cols-3 gap-3 mt-4">
+      <select value={form.batchDefaultMfgRule} onChange={(e) => setForm({ ...form, batchDefaultMfgRule: e.target.value })} className="h-10 border rounded-lg px-2"><option value="none">MFG: no default</option><option value="today">MFG: today</option></select>
+      <select value={form.batchDefaultExpiryRule} onChange={(e) => setForm({ ...form, batchDefaultExpiryRule: e.target.value })} className="h-10 border rounded-lg px-2"><option value="none">Expiry: no default</option><option value="today_plus_days">Expiry: today + days</option></select>
+      <input type="number" min="0" max="3650" value={form.batchDefaultExpiryDays} onChange={(e) => setForm({ ...form, batchDefaultExpiryDays: e.target.value })} className="h-10 border rounded-lg px-2" placeholder="Days" />
+    </div>}
+    <button type="button" disabled={saving} onClick={save} className="mt-4 onepos-btn onepos-btn-primary">{saving ? "Saving..." : "Save batch policy"}</button>
+  </div>;
 }
 
 /**
@@ -236,7 +337,7 @@ function JarvesLicenceCard({ state, onStateChange, canManage, onError }) {
   };
 
   return (
-    <div className="bg-white border rounded-xl overflow-hidden" data-testid="jarves-licence-card">
+    <div className="onepos-card overflow-hidden" data-testid="jarves-licence-card">
       <div className="p-4 border-b flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
         <div>
           <h2 className="font-semibold">JARVES AI assistant</h2>
@@ -264,7 +365,7 @@ function JarvesLicenceCard({ state, onStateChange, canManage, onError }) {
               type="button"
               onClick={save}
               disabled={saving}
-              className="h-9 px-3 bg-blue-600 text-white rounded text-sm disabled:opacity-50"
+              className="onepos-btn onepos-btn-primary"
               data-testid="jarves-allowance-save"
             >
               {saving ? "Saving…" : "Save"}
@@ -378,20 +479,20 @@ function UsersSettings({ onMessage, onError }) {
   };
 
 
-  if (loading) return <div className="p-8 text-center text-slate-400">Loading users...</div>;
+  if (loading) return <div className="onepos-empty">Loading users...</div>;
 
   if (error) return <div className="p-8 text-center text-red-500">{error}</div>;
 
-  if (!canViewUsers) return <div className="p-8 text-center text-slate-400">You don't have permission to view users</div>;
+  if (!canViewUsers) return <div className="onepos-empty">You don't have permission to view users</div>;
 
   return (
     <div className="space-y-6">
       <JarvesLicenceCard state={jarvesState} onStateChange={setJarvesState} canManage={canManageJarves} onError={onError} />
-      <div className="bg-white border rounded-xl overflow-hidden">
+      <div className="onepos-card overflow-hidden">
         <div className="p-4 border-b flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
           <h2 className="font-semibold">Users</h2>
           {canCreateUsers && (
-            <button onClick={() => setForm({})} className="h-9 px-3 bg-blue-600 text-white rounded text-sm">
+            <button onClick={() => setForm({})} className="onepos-btn onepos-btn-sm onepos-btn-primary">
               <Plus size={15} className="inline mr-1" />Add user
             </button>
           )}
@@ -409,7 +510,7 @@ function UsersSettings({ onMessage, onError }) {
           <select 
             value={statusFilter} 
             onChange={(e) => setStatusFilter(e.target.value)} 
-            className="h-9 px-3 border rounded bg-white text-sm"
+            className="onepos-input w-auto"
           >
             <option value="all">All Status</option>
             <option value="active">Active</option>
@@ -417,7 +518,7 @@ function UsersSettings({ onMessage, onError }) {
           </select>
         </div>
         {filteredUsers.length === 0 ? (
-          <div className="p-8 text-center text-slate-400">No users found matching your criteria</div>
+          <div className="onepos-empty">No users found matching your criteria</div>
         ) : (
           <table className="w-full">
             <thead>
@@ -491,7 +592,7 @@ function UsersSettings({ onMessage, onError }) {
             </tbody>
           </table>
         )}
-        {form && <UserFormModal form={form} roles={roles} stores={stores} onClose={() => setForm(null)} onSave={save} />}
+        {form && <UserFormModal form={form} roles={roles} stores={stores} canViewDivisions={isAdmin || permissions.includes("business_division.view")} canManageDivisions={isAdmin || permissions.includes("business_division.manage")} onClose={() => setForm(null)} onSave={save} />}
       </div>
     </div>
   );
@@ -520,7 +621,7 @@ function RolesSettings({ onMessage, onError }) {
 
   useEffect(() => { load(); }, []);
 
-  if (loading) return <div className="p-8 text-center text-slate-400">Loading roles...</div>;
+  if (loading) return <div className="onepos-empty">Loading roles...</div>;
 
   return (
     <div className="space-y-6">
@@ -611,7 +712,7 @@ function NegativeInventoryBillingSetting({ onError }) {
   if (!isAdmin || !loaded) return null;
 
   return (
-    <div className="bg-white border rounded-xl overflow-hidden" data-testid="negative-inventory-setting">
+    <div className="onepos-card overflow-hidden" data-testid="negative-inventory-setting">
       <div className="p-4 border-b flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
         <div>
           <h2 className="font-semibold">Allow Negative Inventory Billing</h2>
@@ -669,6 +770,7 @@ const PERMISSION_GROUPS = [
       "user.edit",
       "user.delete",
       "user.manage",
+      "attendance.view",
     ],
   },
   { label: "Cash/Till", codes: ["cash.open_drawer", "cash.payout", "cash.adjustment", "till.open", "till.close"] },
@@ -805,7 +907,7 @@ function RoleListManager({ roles, onChanged, onMessage, onError }) {
   };
 
   return (
-    <div className="mt-4 bg-white border border-slate-200 rounded-lg overflow-hidden">
+    <div className="mt-4 onepos-card overflow-hidden">
       <div className="p-4 border-b border-slate-200 flex justify-between items-center">
         <div>
           <h3 className="font-semibold text-slate-800">Roles</h3>
@@ -813,7 +915,7 @@ function RoleListManager({ roles, onChanged, onMessage, onError }) {
         </div>
         <button
           onClick={() => setForm({ name: "", description: "" })}
-          className="h-9 px-3 bg-blue-600 text-white rounded-lg text-sm font-medium"
+          className="onepos-btn onepos-btn-primary"
         >
           <Plus size={15} className="inline mr-1" />
           Add role
@@ -829,7 +931,7 @@ function RoleListManager({ roles, onChanged, onMessage, onError }) {
                 onChange={(e) => setForm({ ...form, name: e.target.value })}
                 placeholder="e.g. Store Manager"
                 maxLength={100}
-                className="w-full h-9 px-2 border border-slate-200 rounded"
+                className="onepos-input"
                 autoFocus
               />
             </label>
@@ -838,13 +940,13 @@ function RoleListManager({ roles, onChanged, onMessage, onError }) {
               <input
                 value={form.description || ""}
                 onChange={(e) => setForm({ ...form, description: e.target.value })}
-                className="w-full h-9 px-2 border border-slate-200 rounded"
+                className="onepos-input"
               />
             </label>
-            <button type="submit" disabled={busy} className="h-9 px-4 bg-blue-600 text-white rounded text-sm disabled:opacity-50">
+            <button type="submit" disabled={busy} className="onepos-btn onepos-btn-primary">
               {busy ? "Saving…" : form.id ? "Save role" : "Create role"}
             </button>
-            <button type="button" onClick={() => setForm(null)} className="h-9 px-3 border border-slate-200 rounded text-sm">
+            <button type="button" onClick={() => setForm(null)} className="onepos-input w-auto">
               Cancel
             </button>
           </div>
@@ -1024,7 +1126,7 @@ function RolePermissionsManager({ roles, onMessage, onError, onChanged }) {
 
   return (
     <div className="mt-8">
-      <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 mb-4">
+      <div className="onepos-card onepos-card-body bg-slate-50 mb-4">
         <h3 className="font-semibold text-slate-800 mb-1">Role Permissions</h3>
         <p className="text-sm text-slate-500">Select a role to manage its permissions. Only administrators or owners can modify permissions.</p>
       </div>
@@ -1033,7 +1135,7 @@ function RolePermissionsManager({ roles, onMessage, onError, onChanged }) {
         <select
           value={selectedRoleId}
           onChange={(e) => handleRoleChange(e.target.value)}
-          className="w-full max-w-xs h-9 px-3 border border-slate-200 rounded-lg bg-white text-sm"
+          className="onepos-input max-w-xs"
         >
           <option value="">Choose a role…</option>
           {roles.map((role) => (
@@ -1066,17 +1168,17 @@ function RolePermissionsManager({ roles, onMessage, onError, onChanged }) {
                   Role active
                 </label>
               )}
-              <button onClick={save} disabled={saving} className="h-9 px-4 bg-blue-600 text-white rounded-lg text-sm font-medium flex items-center gap-2 disabled:opacity-50">
+              <button onClick={save} disabled={saving} className="onepos-btn onepos-btn-primary">
                 <Save size={16} /> {saving ? "Saving…" : "Save changes"}
               </button>
             </div>
           </div>
           {loading ? (
-            <div className="p-8 text-center text-slate-400">Loading permissions…</div>
+            <div className="onepos-empty">Loading permissions…</div>
           ) : (
             <div className="space-y-4">
               {PERMISSION_GROUPS.map((group) => (
-                <div key={group.label} className="bg-white border border-slate-200 rounded-lg overflow-hidden">
+                <div key={group.label} className="onepos-card overflow-hidden">
                   <div className="bg-slate-50 border-b px-4 py-2 font-medium text-sm text-slate-700">{group.label}</div>
                   <div className="p-3 grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2">
                     {group.codes.map((code) => (
@@ -1107,8 +1209,8 @@ function StoreTillSettings({ settings, onMessage, onError }) {
   useEffect(() => { load(); }, []);
   const updateStore = async (store) => { try { const data = await apiRequest(`/api/admin/stores/${store.id}`, { method:"PUT", body:JSON.stringify(store) }); if (!data.success) throw new Error(data.message); await load(); onMessage("Store updated."); } catch (err) { onError(err.message || "Unable to update store"); } };
   const updateTill = async (till) => { try { const data = await apiRequest(`/api/admin/tills/${till.id}`, { method:"PUT", body:JSON.stringify(till) }); if (!data.success) throw new Error(data.message); await load(); onMessage("Till updated."); } catch (err) { onError(err.message || "Unable to update till"); } };
-  if (loading) return <div className="p-8 text-center text-slate-400">Loading stores and tills...</div>;
-  return <div className="space-y-4"><div className="text-sm text-slate-500 mb-3">Current user store: {settings.store.name || "Unassigned"} · Current till: {settings.till.name || "Unassigned"}</div>{stores.map((store) => <div key={store.id} className="bg-white border rounded-xl p-4"><StoreEditRow store={store} onSave={updateStore} />{(store.tills || []).map((till) => <TillEditRow key={till.id} till={till} onSave={updateTill} />)}</div>)}</div>;
+  if (loading) return <div className="onepos-empty">Loading stores and tills...</div>;
+  return <div className="space-y-4"><div className="text-sm text-slate-500 mb-3">Current user store: {settings.store.name || "Unassigned"} · Current till: {settings.till.name || "Unassigned"}</div>{stores.map((store) => <div key={store.id} className="onepos-card onepos-card-body"><StoreEditRow store={store} onSave={updateStore} />{(store.tills || []).map((till) => <TillEditRow key={till.id} till={till} onSave={updateTill} />)}</div>)}</div>;
 }
 
 /*
@@ -1167,7 +1269,7 @@ function InvoicePrefixesSetting({ form, onMessage, onError }) {
   ];
 
   return (
-    <div className="bg-white border border-slate-200 rounded-xl p-4" data-testid="invoice-prefixes-setting">
+    <div className="onepos-card onepos-card-body" data-testid="invoice-prefixes-setting">
       <div className="font-semibold mb-1">Invoice Prefixes</div>
       <div className="text-xs text-slate-500 mb-3">
         Receipt number prefixes per sale source. Existing sale numbers keep their original prefix and sequence.
@@ -1183,7 +1285,7 @@ function InvoicePrefixesSetting({ form, onMessage, onError }) {
               value={prefixes[field.key]}
               maxLength={10}
               onChange={(e) => setPrefixes((current) => ({ ...current, [field.key]: e.target.value.toUpperCase() }))}
-              className="w-full h-10 px-3 border border-slate-200 rounded outline-none focus:ring-2 focus:ring-blue-500 font-mono"
+              className="onepos-input font-mono"
             />
             <div className="text-[11px] text-slate-400 mt-1">{field.hint}</div>
           </div>
@@ -1195,7 +1297,7 @@ function InvoicePrefixesSetting({ form, onMessage, onError }) {
           data-testid="invoice-prefixes-save"
           onClick={save}
           disabled={saving}
-          className="h-10 px-4 bg-blue-600 hover:bg-blue-700 disabled:opacity-60 text-white rounded text-sm font-medium"
+          className="onepos-btn onepos-btn-primary"
         >
           {saving ? "Saving…" : "Save Prefixes"}
         </button>
@@ -1247,7 +1349,7 @@ function TillProductViewSetting({ form, onMessage, onError }) {
   if (!loaded || !form) return null;
 
   return (
-    <div className="bg-white border rounded-xl p-4 mt-4">
+    <div className="onepos-card onepos-card-body mt-4">
       <div className="font-semibold mb-1">Till Product View</div>
       <p className="text-xs text-slate-500 mb-3">
         Choose how products are displayed on the Till. Image View shows photo cards; Compact View is a dense list without images.
@@ -1356,7 +1458,7 @@ function DockQuickAccessSetting({ form, onMessage, onError }) {
   if (!loaded || !form) return null;
 
   return (
-    <div className="bg-white border rounded-xl p-4 mt-4">
+    <div className="onepos-card onepos-card-body mt-4">
       <div className="flex items-center gap-2 font-semibold mb-1">
         <LayoutGrid size={16} className="text-teal-700" />
         Dock Quick Access
@@ -1506,7 +1608,7 @@ function CustomerDisplaySetting({ form, onMessage, onError }) {
   if (!loaded || !form) return null;
 
   return (
-    <div className="bg-white border rounded-xl p-4 mt-4">
+    <div className="onepos-card onepos-card-body mt-4">
       <div className="font-semibold mb-1">Customer Display</div>
       <p className="text-xs text-slate-500 mb-3">
         Shows the current bill on a second monitor for the customer. The till is
@@ -1522,7 +1624,7 @@ function CustomerDisplaySetting({ form, onMessage, onError }) {
         <div className="mt-3 flex items-center gap-3">
           <button
             onClick={openDisplay}
-            className="h-9 px-4 bg-teal-700 text-white rounded-lg text-sm font-medium hover:bg-teal-800"
+            className="onepos-btn onepos-btn-primary"
           >
             Open Customer Display
           </button>
@@ -1593,7 +1695,7 @@ function SelfCheckoutKeysSetting({ onMessage, onError }) {
   if (!loaded) return null;
 
   return (
-    <div className="bg-white border rounded-xl p-4 mt-4">
+    <div className="onepos-card onepos-card-body mt-4">
       <div className="font-semibold mb-1">Self-Checkout device pairing</div>
       <p className="text-xs text-slate-500 mb-3">
         Self-Checkout is started from the login screen (no staff login needed on
@@ -1612,7 +1714,7 @@ function SelfCheckoutKeysSetting({ onMessage, onError }) {
           <button
             onClick={() => generate(store)}
             disabled={busy === store.id}
-            className="h-8 px-3 bg-teal-700 text-white rounded-lg text-sm hover:bg-teal-800 disabled:opacity-50"
+            className="onepos-btn onepos-btn-sm onepos-btn-primary"
           >
             {busy === store.id ? "Generating…" : keys[store.id] ? "Regenerate" : "Generate key"}
           </button>
@@ -1632,8 +1734,8 @@ function SelfCheckoutKeysSetting({ onMessage, onError }) {
   );
 }
 
-function StoreEditRow({ store, onSave }) { const [form,setForm]=useState({name:store.name,code:store.code||"",addressLine1:store.address_line1||"",city:store.city||"",postcode:store.postcode||"",phone:store.phone||"",active:store.active}); return <div><div className="font-semibold mb-3">Store</div><div className="grid grid-cols-3 gap-2"><input value={form.name} onChange={(e)=>setForm({...form,name:e.target.value})} className="h-9 border rounded px-2 text-sm" /><input value={form.code} onChange={(e)=>setForm({...form,code:e.target.value})} className="h-9 border rounded px-2 text-sm" placeholder="Code" /><input value={form.city} onChange={(e)=>setForm({...form,city:e.target.value})} className="h-9 border rounded px-2 text-sm" placeholder="City" /></div><label className="inline-flex items-center gap-2 mt-3 text-sm text-slate-600"><Toggle checked={form.active} onChange={(e)=>setForm({...form,active:e.target.checked})} /> Active</label><button onClick={()=>onSave({id:store.id,...form})} className="ml-3 h-8 px-3 bg-blue-600 text-white rounded text-sm">Save store</button></div>; }
-function TillEditRow({ till, onSave }) { const [form,setForm]=useState({name:till.name,terminalNumber:till.terminalNumber||"",active:till.active}); return <div className="mt-4 pl-4 border-l-2 border-slate-200"><div className="font-medium text-sm mb-2">Till</div><div className="flex gap-2 items-center"><input value={form.name} onChange={(e)=>setForm({...form,name:e.target.value})} className="h-9 border rounded px-2 text-sm" /><input value={form.terminalNumber} onChange={(e)=>setForm({...form,terminalNumber:e.target.value})} className="h-9 border rounded px-2 text-sm" placeholder="Terminal number" /><label className="inline-flex items-center gap-2 text-sm text-slate-600"><Toggle checked={form.active} onChange={(e)=>setForm({...form,active:e.target.checked})} /> Active</label><button onClick={()=>onSave({id:till.id,...form})} className="h-9 px-3 bg-blue-600 text-white rounded text-sm">Save till</button></div></div>; }
+function StoreEditRow({ store, onSave }) { const [form,setForm]=useState({name:store.name,code:store.code||"",addressLine1:store.address_line1||"",city:store.city||"",postcode:store.postcode||"",phone:store.phone||"",active:store.active}); return <div><div className="font-semibold mb-3">Store</div><div className="grid grid-cols-3 gap-2"><input value={form.name} onChange={(e)=>setForm({...form,name:e.target.value})} className="h-9 border rounded px-2 text-sm" /><input value={form.code} onChange={(e)=>setForm({...form,code:e.target.value})} className="h-9 border rounded px-2 text-sm" placeholder="Code" /><input value={form.city} onChange={(e)=>setForm({...form,city:e.target.value})} className="h-9 border rounded px-2 text-sm" placeholder="City" /></div><label className="inline-flex items-center gap-2 mt-3 text-sm text-slate-600"><Toggle checked={form.active} onChange={(e)=>setForm({...form,active:e.target.checked})} /> Active</label><button onClick={()=>onSave({id:store.id,...form})} className="ml-3 onepos-btn onepos-btn-sm onepos-btn-primary">Save store</button></div>; }
+function TillEditRow({ till, onSave }) { const [form,setForm]=useState({name:till.name,terminalNumber:till.terminalNumber||"",active:till.active}); return <div className="mt-4 pl-4 border-l-2 border-slate-200"><div className="font-medium text-sm mb-2">Till</div><div className="flex gap-2 items-center"><input value={form.name} onChange={(e)=>setForm({...form,name:e.target.value})} className="h-9 border rounded px-2 text-sm" /><input value={form.terminalNumber} onChange={(e)=>setForm({...form,terminalNumber:e.target.value})} className="h-9 border rounded px-2 text-sm" placeholder="Terminal number" /><label className="inline-flex items-center gap-2 text-sm text-slate-600"><Toggle checked={form.active} onChange={(e)=>setForm({...form,active:e.target.checked})} /> Active</label><button onClick={()=>onSave({id:till.id,...form})} className="onepos-btn onepos-btn-sm onepos-btn-primary">Save till</button></div></div>; }
 
 function LogoUploader({ logoUrl, onChange }) {
   const [preview, setPreview] = useState(logoUrl);
@@ -1702,14 +1804,14 @@ function LogoUploader({ logoUrl, onChange }) {
 }
 
 function SettingsForm({ tab, form, setForm, onSave }) {
-  const field = (name, label, type = "text") => <label className="text-sm text-slate-600"><span className="block mb-1 font-medium">{label}</span><input type={type} value={form[name] ?? ""} onChange={(event) => setForm((current) => ({ ...current, [name]: event.target.value }))} className="w-full h-10 px-3 border border-slate-200 rounded-lg" /></label>;
+  const field = (name, label, type = "text") => <label className="text-sm text-slate-600"><span className="block mb-1 font-medium">{label}</span><input type={type} value={form[name] ?? ""} onChange={(event) => setForm((current) => ({ ...current, [name]: event.target.value }))} className="onepos-input" /></label>;
 const companyFields = <>{field("companyName", "Company name")}{field("legalName", "Legal / business name")}{field("companyEmail", "Email", "email")}{field("companyPhone", "Phone")}{field("currency", "Currency")}{field("timezone", "Timezone")}<LogoUploader logoUrl={form.logoUrl || ""} onChange={(value) => setForm((current) => ({ ...current, logoUrl: value }))} /></>;
 
-  return <form onSubmit={onSave} className="bg-white border border-slate-200 rounded-xl p-5 max-w-2xl"><h2 className="font-semibold mb-4">{tab}</h2><div className="grid grid-cols-2 gap-4">{tab === "Company" ? companyFields : <>{field("dateFormat", "Date format")}{field("currency", "Currency")}{field("timezone", "Timezone")}{tab === "Tax / VAT" && <><label className="flex items-center gap-2 text-sm text-slate-600 pt-6"><Toggle checked={form.vatEnabled} onChange={(event) => setForm((current) => ({ ...current, vatEnabled: event.target.checked }))} /> VAT enabled</label>{field("defaultVatRate", "Default VAT rate %", "number")}</>}{tab === "General" && <label className="flex items-center gap-2 text-sm text-slate-600 pt-6"><Toggle checked={form.scanGoEnabled === true} onChange={(event) => setForm((current) => ({ ...current, scanGoEnabled: event.target.checked }))} /> Scan &amp; Go — customers scan products on their phone</label>}</>}</div><button type="submit" className="mt-5 h-10 px-5 bg-blue-600 text-white rounded-lg text-sm font-medium">Save settings</button></form>;
+  return <form onSubmit={onSave} className="onepos-card onepos-card-body max-w-2xl"><h2 className="font-semibold mb-4">{tab}</h2><div className="grid grid-cols-2 gap-4">{tab === "Company" ? companyFields : <>{field("dateFormat", "Date format")}{field("currency", "Currency")}{field("timezone", "Timezone")}{tab === "Tax / VAT" && <><label className="flex items-center gap-2 text-sm text-slate-600 pt-6"><Toggle checked={form.vatEnabled} onChange={(event) => setForm((current) => ({ ...current, vatEnabled: event.target.checked }))} /> VAT enabled</label>{field("defaultVatRate", "Default VAT rate %", "number")}</>}{tab === "General" && <><label className="flex items-center gap-2 text-sm text-slate-600 pt-6"><Toggle checked={form.scanGoEnabled === true} onChange={(event) => setForm((current) => ({ ...current, scanGoEnabled: event.target.checked }))} /> Scan &amp; Go — customers scan products on their phone</label><label className="text-sm text-slate-600"><span className="block mb-1 font-medium">Exchange mode</span><select value={form.exchangeMode || "both"} onChange={(event) => setForm((current) => ({ ...current, exchangeMode: event.target.value }))} className="onepos-input"><option value="receipt">Receipt / Invoice only</option><option value="normal">Normal / No receipt only</option><option value="both">Both — cashier chooses</option></select></label></>}</>}</div><button type="submit" className="mt-5 onepos-btn onepos-btn-primary">Save settings</button></form>;
 }
 
 function ReceiptSettings({ settings, form, setForm, onSave }) {
-  return <div className="bg-white border border-slate-200 rounded-xl p-5 max-w-2xl"><h2 className="font-semibold mb-4">Receipt settings</h2><p className="text-sm text-slate-500 mb-4">Receipts use the existing company and tax settings. Printer configuration is managed under Hardware.</p><div className="grid grid-cols-2 gap-4 text-sm"><div><span className="text-slate-500">Header company</span><div className="font-medium mt-1">{settings.company.name}</div></div><div><span className="text-slate-500">VAT display</span><div className="font-medium mt-1">{form.vatEnabled ? `Enabled (${form.defaultVatRate}%)` : "Disabled"}</div></div><div><span className="text-slate-500">Date format</span><div className="font-medium mt-1">{form.dateFormat}</div></div><div><span className="text-slate-500">Paper width</span><div className="font-medium mt-1">Configure under Hardware</div></div></div><button onClick={onSave} className="mt-5 h-10 px-5 bg-blue-600 text-white rounded-lg text-sm font-medium">Save receipt settings</button></div>;
+  return <div className="onepos-card onepos-card-body max-w-2xl"><h2 className="font-semibold mb-4">Receipt settings</h2><p className="text-sm text-slate-500 mb-4">Receipts use the existing company and tax settings. Printer configuration is managed under Hardware.</p><div className="grid grid-cols-2 gap-4 text-sm"><div><span className="text-slate-500">Header company</span><div className="font-medium mt-1">{settings.company.name}</div></div><div><span className="text-slate-500">VAT display</span><div className="font-medium mt-1">{form.vatEnabled ? `Enabled (${form.defaultVatRate}%)` : "Disabled"}</div></div><div><span className="text-slate-500">Date format</span><div className="font-medium mt-1">{form.dateFormat}</div></div><div><span className="text-slate-500">Paper width</span><div className="font-medium mt-1">Configure under Hardware</div></div></div><button onClick={onSave} className="mt-5 onepos-btn onepos-btn-primary">Save receipt settings</button></div>;
 }
 
 function LoyaltySettings({ settings, form, setForm, onSave }) {
@@ -1749,14 +1851,14 @@ function LoyaltySettings({ settings, form, setForm, onSave }) {
   };
 
   return (
-    <form onSubmit={handleSave} className="bg-white border border-slate-200 rounded-xl p-5 max-w-2xl">
+    <form onSubmit={handleSave} className="onepos-card onepos-card-body max-w-2xl">
       <h2 className="font-semibold mb-4">Customer Loyalty</h2>
       <p className="text-sm text-slate-500 mb-5">Configure the customer loyalty programme. Customers earn points on purchases when enabled.</p>
 
       {error && <div className="mb-4 p-3 bg-red-50 border border-red-200 text-red-700 rounded-lg text-sm">{error}</div>}
 
       <div className="space-y-5">
-        <div className="bg-slate-50 border border-slate-200 rounded-xl p-4">
+        <div className="onepos-card onepos-card-body bg-slate-50">
           <div className="flex items-center justify-between">
             <div>
               <h3 className="font-medium text-slate-800">Enable Loyalty Programme</h3>
@@ -1771,7 +1873,7 @@ function LoyaltySettings({ settings, form, setForm, onSave }) {
           </div>
         </div>
 
-        <div className="bg-slate-50 border border-slate-200 rounded-xl p-4">
+        <div className="onepos-card onepos-card-body bg-slate-50">
           <h3 className="font-medium text-slate-800 mb-3">Earning Rate</h3>
           <p className="text-sm text-slate-500 mb-3">Customers earn this percentage of their purchase total as loyalty points (e.g., 1% = 1 point per £1 spent).</p>
           <div className="flex items-center gap-3">
@@ -1784,7 +1886,7 @@ function LoyaltySettings({ settings, form, setForm, onSave }) {
                 max="100"
                 value={formatRate(form.loyaltyEarningRate)}
                 onChange={handleRateChange}
-                className="w-24 h-10 px-3 border border-slate-200 rounded-lg text-right"
+                className="onepos-input w-24 text-right"
                 aria-describedby="rate-hint"
               />
             </label>
@@ -1794,7 +1896,7 @@ function LoyaltySettings({ settings, form, setForm, onSave }) {
       </div>
 
       <div className="flex justify-end gap-2 mt-6">
-        <button type="submit" disabled={saving} className="h-10 px-5 bg-blue-600 text-white rounded-lg text-sm font-medium disabled:opacity-50">
+        <button type="submit" disabled={saving} className="onepos-btn onepos-btn-primary">
           {saving ? "Saving…" : "Save loyalty settings"}
         </button>
       </div>
@@ -1803,14 +1905,14 @@ function LoyaltySettings({ settings, form, setForm, onSave }) {
 }
 
 function SettingsInfo({ settings }) {
-  return <div className="bg-white border border-slate-200 rounded-xl p-5 max-w-2xl"><h2 className="font-semibold mb-4">Current store and till</h2><div className="grid grid-cols-2 gap-5 text-sm"><div><span className="text-slate-500">Store</span><div className="font-medium mt-1">{settings.store.name || "-"}</div></div><div><span className="text-slate-500">Till name</span><div className="font-medium mt-1">{settings.till.name || "-"}</div></div><div><span className="text-slate-500">Terminal number</span><div className="font-medium mt-1">{settings.till.terminalNumber || "-"}</div></div><div><span className="text-slate-500">Current store context</span><div className="font-medium mt-1">{settings.store.id ? "Authenticated store" : "Not configured"}</div></div></div></div>;
+  return <div className="onepos-card onepos-card-body max-w-2xl"><h2 className="font-semibold mb-4">Current store and till</h2><div className="grid grid-cols-2 gap-5 text-sm"><div><span className="text-slate-500">Store</span><div className="font-medium mt-1">{settings.store.name || "-"}</div></div><div><span className="text-slate-500">Till name</span><div className="font-medium mt-1">{settings.till.name || "-"}</div></div><div><span className="text-slate-500">Terminal number</span><div className="font-medium mt-1">{settings.till.terminalNumber || "-"}</div></div><div><span className="text-slate-500">Current store context</span><div className="font-medium mt-1">{settings.store.id ? "Authenticated store" : "Not configured"}</div></div></div></div>;
 }
 
 function PaymentTerminalSettings({ terminals, onSaved, onMessage, onError }) {
   const [form, setForm] = useState({ provider: "", name: "", terminalIdentifier: "", connectionUrl: "", apiCredentials: "" });
   const save = async (event) => { event.preventDefault(); try { const data = await apiRequest(form.id ? `/api/payment-terminals/${form.id}` : "/api/payment-terminals", { method: form.id ? "PUT" : "POST", body: JSON.stringify(form) }); if (!data.success) throw new Error(data.message); onMessage("Payment terminal saved."); setForm({ provider: "", name: "", terminalIdentifier: "", connectionUrl: "", apiCredentials: "" }); await onSaved(); } catch (err) { onError(err.message || "Unable to save payment terminal"); } };
   const test = async (id) => { try { const data = await apiRequest(`/api/payment-terminals/${id}/test`, { method: "POST" }); onMessage(data.data?.message || "Test completed"); await onSaved(); } catch (err) { onError(err.message || "Unable to test payment terminal"); } };
-  return <div className="space-y-5"><form onSubmit={save} className="bg-white border border-slate-200 rounded-xl p-5 max-w-2xl"><h2 className="font-semibold mb-4">Payment terminal configuration</h2><div className="grid grid-cols-2 gap-4">{[["provider", "Provider"], ["name", "Terminal name"], ["terminalIdentifier", "Terminal ID"], ["connectionUrl", "Connection/API URL"]].map(([name, label]) => <label key={name} className="text-sm text-slate-600"><span className="block mb-1 font-medium">{label}</span><input required={name !== "connectionUrl"} value={form[name]} onChange={(event) => setForm((current) => ({ ...current, [name]: event.target.value }))} className="w-full h-10 px-3 border border-slate-200 rounded-lg" /></label>)}<label className="text-sm text-slate-600 col-span-2"><span className="block mb-1 font-medium">API credentials</span><input type="password" value={form.apiCredentials} onChange={(event) => setForm((current) => ({ ...current, apiCredentials: event.target.value }))} placeholder={form.has_credentials ? "Leave blank to keep existing credentials" : "Stored securely on the server"} className="w-full h-10 px-3 border border-slate-200 rounded-lg" /></label></div><button className="mt-5 h-10 px-5 bg-blue-600 text-white rounded-lg text-sm font-medium">Save terminal</button></form><div className="bg-white border border-slate-200 rounded-xl overflow-hidden"><table className="w-full"><thead><tr className="bg-slate-50">{["Provider", "Name", "Terminal ID", "Credentials", "Status", "Actions"].map((heading) => <th key={heading} className="text-left px-4 py-3 text-xs font-semibold text-slate-500 uppercase">{heading}</th>)}</tr></thead><tbody>{terminals.map((terminal) => <tr key={terminal.id} className="border-t border-slate-100"><td className="px-4 py-3 text-sm">{terminal.provider}</td><td className="px-4 py-3 text-sm">{terminal.name}</td><td className="px-4 py-3 text-sm">{terminal.terminal_identifier || "-"}</td><td className="px-4 py-3 text-sm">{terminal.has_credentials ? "Configured (masked)" : "Not configured"}</td><td className="px-4 py-3 text-sm">{terminal.active ? "Active" : "Inactive"}</td><td className="px-4 py-3 whitespace-nowrap"><button onClick={() => setForm({ id: terminal.id, provider: terminal.provider, name: terminal.name, terminalIdentifier: terminal.terminal_identifier || "", connectionUrl: terminal.connection_url || "", apiCredentials: "", has_credentials: terminal.has_credentials })} className="px-3 py-2 text-slate-600 bg-slate-100 rounded-lg text-sm mr-1">Edit</button><button onClick={() => test(terminal.id)} className="px-3 py-2 bg-slate-100 rounded-lg text-sm">Test Connection</button></td></tr>)}</tbody></table></div></div>;
+  return <div className="space-y-5"><form onSubmit={save} className="onepos-card onepos-card-body max-w-2xl"><h2 className="font-semibold mb-4">Payment terminal configuration</h2><div className="grid grid-cols-2 gap-4">{[["provider", "Provider"], ["name", "Terminal name"], ["terminalIdentifier", "Terminal ID"], ["connectionUrl", "Connection/API URL"]].map(([name, label]) => <label key={name} className="text-sm text-slate-600"><span className="block mb-1 font-medium">{label}</span><input required={name !== "connectionUrl"} value={form[name]} onChange={(event) => setForm((current) => ({ ...current, [name]: event.target.value }))} className="onepos-input" /></label>)}<label className="text-sm text-slate-600 col-span-2"><span className="block mb-1 font-medium">API credentials</span><input type="password" value={form.apiCredentials} onChange={(event) => setForm((current) => ({ ...current, apiCredentials: event.target.value }))} placeholder={form.has_credentials ? "Leave blank to keep existing credentials" : "Stored securely on the server"} className="onepos-input" /></label></div><button className="mt-5 onepos-btn onepos-btn-primary">Save terminal</button></form><div className="onepos-card overflow-hidden"><table className="w-full"><thead><tr className="bg-slate-50">{["Provider", "Name", "Terminal ID", "Credentials", "Status", "Actions"].map((heading) => <th key={heading} className="text-left px-4 py-3 text-xs font-semibold text-slate-500 uppercase">{heading}</th>)}</tr></thead><tbody>{terminals.map((terminal) => <tr key={terminal.id} className="border-t border-slate-100"><td className="px-4 py-3 text-sm">{terminal.provider}</td><td className="px-4 py-3 text-sm">{terminal.name}</td><td className="px-4 py-3 text-sm">{terminal.terminal_identifier || "-"}</td><td className="px-4 py-3 text-sm">{terminal.has_credentials ? "Configured (masked)" : "Not configured"}</td><td className="px-4 py-3 text-sm">{terminal.active ? "Active" : "Inactive"}</td><td className="px-4 py-3 whitespace-nowrap"><button onClick={() => setForm({ id: terminal.id, provider: terminal.provider, name: terminal.name, terminalIdentifier: terminal.terminal_identifier || "", connectionUrl: terminal.connection_url || "", apiCredentials: "", has_credentials: terminal.has_credentials })} className="px-3 py-2 text-slate-600 bg-slate-100 rounded-lg text-sm mr-1">Edit</button><button onClick={() => test(terminal.id)} className="px-3 py-2 bg-slate-100 rounded-lg text-sm">Test Connection</button></td></tr>)}</tbody></table></div></div>;
 }
 
 function HardwareSettings({ hardware, onSave, onTest }) {
@@ -1824,11 +1926,11 @@ function HardwareCard({ type, label, current, onSave, onTest }) {
   const [scan, setScan] = useState("");
   const [scanTime, setScanTime] = useState("");
   useEffect(() => { if (!scanner) return undefined; let value = ""; let timer; const handler = (event) => { if (event.key === "Enter") { if (value) { setScan(value); setScanTime(new Date().toLocaleString()); } value = ""; return; } if (event.key.length === 1) { value += event.key; clearTimeout(timer); timer = setTimeout(() => { value = ""; }, 100); } }; window.addEventListener("keydown", handler); return () => { window.removeEventListener("keydown", handler); clearTimeout(timer); }; }, [scanner]);
-  return <div className="bg-white border border-slate-200 rounded-xl p-5"><div className="flex items-center justify-between mb-4"><div><h2 className="font-semibold">{label}</h2><p className="text-xs text-slate-500 mt-1">{current.last_test_result || (current.active ? "Configured" : "Not configured")}</p></div><button onClick={() => onTest(type)} className="px-3 py-2 border border-slate-200 rounded-lg text-sm">{type === "CASH_DRAWER" ? "Test Open Drawer" : type === "RECEIPT_PRINTER" ? "Test Print" : "Test"}</button></div><div className="grid grid-cols-2 gap-4"><label className="text-sm text-slate-600"><span className="block mb-1 font-medium">Device name</span><input value={form.deviceName} onChange={(event) => setForm((currentForm) => ({ ...currentForm, deviceName: event.target.value }))} className="w-full h-10 px-3 border border-slate-200 rounded-lg" /></label><label className="text-sm text-slate-600"><span className="block mb-1 font-medium">Connection type</span><select value={form.connectionType} onChange={(event) => setForm((currentForm) => ({ ...currentForm, connectionType: event.target.value }))} className="w-full h-10 px-3 border border-slate-200 rounded-lg bg-white"><option value="">Not configured</option><option>Keyboard / HID</option><option>Local service</option><option>Network</option><option>USB / Serial</option></select></label></div>{type === "RECEIPT_PRINTER" && <label className="block mt-4 text-sm text-slate-600"><span className="block mb-1 font-medium">Paper width</span><select value={form.paperWidth} onChange={(event) => setForm((currentForm) => ({ ...currentForm, paperWidth: event.target.value }))} className="w-40 h-10 px-3 border border-slate-200 rounded-lg bg-white"><option value="">Not set</option><option>58mm</option><option>80mm</option></select></label>}{scanner && <div className="mt-4 p-3 bg-slate-50 rounded-lg text-sm"><div className="font-medium">Scanner test area</div><div className="text-slate-500 mt-1">Last scanned barcode: <span className="font-semibold text-slate-800">{scan || "-"}</span></div><div className="text-slate-500">Scan time: {scanTime || "-"}</div><div className="text-slate-500">Scanner status: {scan ? "Scan received" : "Waiting for keyboard/HID scan"}</div></div>}<label className="flex items-center gap-2 mt-4 text-sm text-slate-600"><Toggle checked={form.active} onChange={(event) => setForm((currentForm) => ({ ...currentForm, active: event.target.checked }))} /> Configured and active</label><button onClick={() => onSave(form)} className="mt-4 h-9 px-4 bg-blue-600 text-white rounded-lg text-sm">Save configuration</button></div>;
+  return <div className="onepos-card onepos-card-body"><div className="flex items-center justify-between mb-4"><div><h2 className="font-semibold">{label}</h2><p className="text-xs text-slate-500 mt-1">{current.last_test_result || (current.active ? "Configured" : "Not configured")}</p></div><button onClick={() => onTest(type)} className="onepos-input w-auto">{type === "CASH_DRAWER" ? "Test Open Drawer" : type === "RECEIPT_PRINTER" ? "Test Print" : "Test"}</button></div><div className="grid grid-cols-2 gap-4"><label className="text-sm text-slate-600"><span className="block mb-1 font-medium">Device name</span><input value={form.deviceName} onChange={(event) => setForm((currentForm) => ({ ...currentForm, deviceName: event.target.value }))} className="onepos-input" /></label><label className="text-sm text-slate-600"><span className="block mb-1 font-medium">Connection type</span><select value={form.connectionType} onChange={(event) => setForm((currentForm) => ({ ...currentForm, connectionType: event.target.value }))} className="onepos-input"><option value="">Not configured</option><option>Keyboard / HID</option><option>Local service</option><option>Network</option><option>USB / Serial</option></select></label></div>{type === "RECEIPT_PRINTER" && <label className="block mt-4 text-sm text-slate-600"><span className="block mb-1 font-medium">Paper width</span><select value={form.paperWidth} onChange={(event) => setForm((currentForm) => ({ ...currentForm, paperWidth: event.target.value }))} className="onepos-input w-40"><option value="">Not set</option><option>58mm</option><option>80mm</option></select></label>}{scanner && <div className="mt-4 p-3 bg-slate-50 rounded-lg text-sm"><div className="font-medium">Scanner test area</div><div className="text-slate-500 mt-1">Last scanned barcode: <span className="font-semibold text-slate-800">{scan || "-"}</span></div><div className="text-slate-500">Scan time: {scanTime || "-"}</div><div className="text-slate-500">Scanner status: {scan ? "Scan received" : "Waiting for keyboard/HID scan"}</div></div>}<label className="flex items-center gap-2 mt-4 text-sm text-slate-600"><Toggle checked={form.active} onChange={(event) => setForm((currentForm) => ({ ...currentForm, active: event.target.checked }))} /> Configured and active</label><button onClick={() => onSave(form)} className="mt-4 onepos-btn onepos-btn-primary">Save configuration</button></div>;
 }
 
 function IntegrationHealth({ health }) {
-  return <div className="bg-white border border-slate-200 rounded-xl overflow-hidden max-w-2xl"><div className="p-4 border-b font-semibold">Device and integration health</div>{Object.entries(health || {}).map(([name, value]) => <div key={name} className="flex justify-between px-4 py-3 border-b border-slate-100 text-sm"><span className="capitalize">{name.replace(/([A-Z])/g, " $1")}</span><span className={value === "Connected" || value === "Configured" ? "text-emerald-700" : "text-slate-500"}>{value}</span></div>)}</div>;
+  return <div className="onepos-card overflow-hidden max-w-2xl"><div className="p-4 border-b font-semibold">Device and integration health</div>{Object.entries(health || {}).map(([name, value]) => <div key={name} className="flex justify-between px-4 py-3 border-b border-slate-100 text-sm"><span className="capitalize">{name.replace(/([A-Z])/g, " $1")}</span><span className={value === "Connected" || value === "Configured" ? "text-emerald-700" : "text-slate-500"}>{value}</span></div>)}</div>;
 }
 
 function OnlinePlatformSettings({ onMessage, onError, onlyPlatform = null }) {
@@ -1915,7 +2017,7 @@ function OnlinePlatformSettings({ onMessage, onError, onlyPlatform = null }) {
     finally { setSaving(""); }
   };
 
-  if (loading) return <div className="p-8 text-center text-slate-400">Loading online platform settings...</div>;
+  if (loading) return <div className="onepos-empty">Loading online platform settings...</div>;
 
   const fields = [
     ["clientId", "API / Client ID", "text", "client_id", null],
@@ -1930,7 +2032,7 @@ function OnlinePlatformSettings({ onMessage, onError, onlyPlatform = null }) {
   return <div className="space-y-4">{platforms.map((platform) => {
     const form = forms[platform.platform] || {};
     const configured = platform.client_id || platform.client_secret_configured || platform.api_key_configured;
-    return <div key={platform.platform} className="bg-white border border-slate-200 rounded-xl p-5">
+    return <div key={platform.platform} className="onepos-card onepos-card-body">
       <div className="flex items-center justify-between mb-1 flex-wrap gap-2">
         <h2 className="font-semibold">{platform.name}</h2>
         <div className="flex items-center gap-3">
@@ -1950,7 +2052,7 @@ function OnlinePlatformSettings({ onMessage, onError, onlyPlatform = null }) {
         </p>
       )}
       {platform.platform === "uber" && (
-        <div className="mt-4 text-xs text-slate-500 bg-slate-50 border border-slate-200 rounded-lg p-3">
+        <div className="mt-4 onepos-alert onepos-alert-info">
           <p>
             <span className="font-medium">Primary Webhook URL (configure in the Uber Developer Dashboard for this Client ID):</span>{" "}
             <span className="font-mono select-all">{String(window.location.origin)}/api/online/uber/webhook</span>
@@ -1965,7 +2067,7 @@ function OnlinePlatformSettings({ onMessage, onError, onlyPlatform = null }) {
         </div>
       )}
       {platform.platform === "deliveroo" && (
-        <div className="mt-4 text-xs text-slate-500 bg-slate-50 border border-slate-200 rounded-lg p-3">
+        <div className="mt-4 onepos-alert onepos-alert-info">
           <p>
             <span className="font-medium">Webhook URL (configure in the Deliveroo developer portal):</span>{" "}
             <span className="font-mono select-all">{String(window.location.origin)}/api/online/deliveroo/webhook</span>
@@ -1980,12 +2082,12 @@ function OnlinePlatformSettings({ onMessage, onError, onlyPlatform = null }) {
       )}
       <div className="grid grid-cols-2 gap-3">
         <label className="text-sm text-slate-600"><span className="block mb-1 font-medium">Environment</span>
-          <select value={form.environment || "sandbox"} onChange={(event) => update(platform.platform, "environment", event.target.value)} className="w-full h-10 px-2 border border-slate-200 rounded-lg bg-white"><option value="sandbox">Sandbox</option><option value="production">Production</option></select>
+          <select value={form.environment || "sandbox"} onChange={(event) => update(platform.platform, "environment", event.target.value)} className="onepos-input"><option value="sandbox">Sandbox</option><option value="production">Production</option></select>
         </label>
         {fields.map(([field, label, type, configuredKey, maskedKey]) => (
           <label key={field} className="text-sm text-slate-600">
             <span className="block mb-1 font-medium">{label}{platform[configuredKey] ? <span className="ml-2 text-xs text-emerald-600 font-normal">{(maskedKey && platform[maskedKey]) || "stored"}</span> : null}</span>
-            <input type={type} autoComplete="new-password" value={form[field] || ""} placeholder={platform[configuredKey] ? "Leave blank to keep current value" : "Not set"} onChange={(event) => update(platform.platform, field, event.target.value)} className="w-full h-10 px-3 border border-slate-200 rounded-lg" />
+            <input type={type} autoComplete="new-password" value={form[field] || ""} placeholder={platform[configuredKey] ? "Leave blank to keep current value" : "Not set"} onChange={(event) => update(platform.platform, field, event.target.value)} className="onepos-input" />
           </label>
         ))}
         {platform.platform === "uber" && (
@@ -1994,7 +2096,7 @@ function OnlinePlatformSettings({ onMessage, onError, onlyPlatform = null }) {
           <select
             value={form.orderAcceptance || "manual"}
             onChange={(event) => update(platform.platform, "orderAcceptance", event.target.value)}
-            className="w-full h-10 px-2 border border-slate-200 rounded-lg bg-white"
+            className="onepos-input"
           >
             <option value="manual">Manual acceptance</option>
             <option value="auto">Auto-accept orders</option>
@@ -2007,7 +2109,7 @@ function OnlinePlatformSettings({ onMessage, onError, onlyPlatform = null }) {
         <select
           value={form.requireOtpOnCompletion ? "yes" : "no"}
           onChange={(event) => update(platform.platform, "requireOtpOnCompletion", event.target.value === "yes")}
-          className="w-full h-10 px-2 border border-slate-200 rounded-lg bg-white"
+          className="onepos-input"
         >
           <option value="no">No</option>
           <option value="yes">Yes</option>
@@ -2015,17 +2117,17 @@ function OnlinePlatformSettings({ onMessage, onError, onlyPlatform = null }) {
         <span className="block mt-1 text-xs text-slate-400">When Yes, the Online Orders page asks for the customer OTP before an order can be marked complete for {platform.name}. Default is No.</span>
       </label>
       <label className="text-sm text-slate-600 col-span-2"><span className="block mb-1 font-medium">Notes</span>
-          <textarea rows="2" value={form.notes || ""} onChange={(event) => update(platform.platform, "notes", event.target.value)} className="w-full px-3 py-2 border border-slate-200 rounded-lg" />
+          <textarea rows="2" value={form.notes || ""} onChange={(event) => update(platform.platform, "notes", event.target.value)} className="onepos-input" />
         </label>
       </div>
-      <button onClick={() => save(platform.platform)} disabled={saving === platform.platform} className="mt-4 h-10 px-4 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50">{saving === platform.platform ? "Saving..." : `Save ${platform.name} configuration`}</button>
+      <button onClick={() => save(platform.platform)} disabled={saving === platform.platform} className="mt-4 onepos-btn onepos-btn-primary">{saving === platform.platform ? "Saving..." : `Save ${platform.name} configuration`}</button>
       {platform.platform === "uber" && (
         <div className="mt-4 border-t border-slate-200 pt-4">
           <div className="flex items-center gap-3 flex-wrap">
             <button onClick={runUberConnectionTest} disabled={uberTest.busy || uberMenuSync.busy} className="h-9 px-4 border border-slate-300 rounded-lg text-sm hover:bg-slate-50 disabled:opacity-50">
               {uberTest.busy ? "Testing connection..." : "Test connection / Get sandbox IDs"}
             </button>
-            <button onClick={runUberMenuSync} disabled={uberMenuSync.busy || uberTest.busy} className="h-9 px-4 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50">
+            <button onClick={runUberMenuSync} disabled={uberMenuSync.busy || uberTest.busy} className="onepos-btn onepos-btn-primary">
               {uberMenuSync.busy ? "Syncing menu..." : "Sync Menu to Uber"}
             </button>
             <button onClick={runUberConnectionTest} disabled={uberTest.busy} className="h-9 px-4 border border-slate-300 rounded-lg text-sm hover:bg-slate-50 disabled:opacity-50">
@@ -2054,7 +2156,7 @@ function OnlinePlatformSettings({ onMessage, onError, onlyPlatform = null }) {
             <div className={`mt-3 rounded-lg border p-3 text-sm ${uberTest.result.success ? "bg-emerald-50 border-emerald-200" : "bg-amber-50 border-amber-200"}`}>
               <p className={`font-medium ${uberTest.result.success ? "text-emerald-800" : "text-amber-800"}`}>{uberTest.result.message || (uberTest.result.success ? "Connection OK" : "Connection failed")}</p>
               {(uberTest.result.data?.attempts || []).map((attempt, index) => (
-                <div key={index} className="mt-2 bg-white rounded-lg border border-slate-200 p-2">
+                <div key={index} className="mt-2 onepos-card p-2">
                   <p className="text-xs font-medium text-slate-700">
                     {String(attempt.environment).toUpperCase()} attempt - {attempt.success ? "OK" : "FAILED"}{attempt.httpStatus ? ` - HTTP ${attempt.httpStatus}` : ""}{attempt.code ? ` - ${attempt.code}` : ""}
                   </p>
@@ -2092,6 +2194,3 @@ function OnlinePlatformSettings({ onMessage, onError, onlyPlatform = null }) {
 }
 
 export default SettingsAdmin;
-
-
-

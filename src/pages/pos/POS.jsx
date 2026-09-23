@@ -48,8 +48,60 @@ import MobileCartSheet from "./MobileCartSheet.jsx";
 import PaymentModal from "./PaymentModal.jsx";
 import CustomerSelectorModal from "./CustomerSelectorModal.jsx";
 import { MiscItemModal, PettyCashModal, PrintReceiptModal } from "./TillActionsModals.jsx";
-import JarvisOrb, { ORB_STATES } from "../../components/jarvis/JarvisOrb.jsx";
-import JarvisPanel from "../../components/jarvis/JarvisPanel.jsx";
+
+function ModifierPickerModal({ product, groups, onClose, onConfirm }) {
+  const [selected, setSelected] = useState([]);
+  const toggle = (group, option) => {
+    setSelected((current) => {
+      const sameGroup = current.filter((id) => group.options.some((entry) => entry.id === id));
+      const exists = sameGroup.includes(option.id);
+      if (exists) return current.filter((id) => id !== option.id);
+      if (group.maxSelections <= 1) {
+        return [...current.filter((id) => !sameGroup.includes(id)), option.id];
+      }
+      if (sameGroup.length >= group.maxSelections) return current;
+      return [...current, option.id];
+    });
+  };
+  return (
+    <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
+      <div className="bg-white rounded-xl shadow-xl p-5 w-full max-w-md">
+        <h2 className="font-semibold mb-1">{product.name}</h2>
+        <p className="text-xs text-slate-500 mb-4">Choose options</p>
+        {groups.map((group) => (
+          <div key={group.id} className="mb-4">
+            <div className="text-sm font-medium mb-2">{group.name}</div>
+            <div className="space-y-1">
+              {group.options.map((option) => (
+                <label key={option.id} className="flex items-center justify-between gap-2 text-sm">
+                  <span className="flex items-center gap-2">
+                    <input
+                      type={group.maxSelections > 1 ? "checkbox" : "radio"}
+                      name={`modifier-${group.id}`}
+                      checked={selected.includes(option.id)}
+                      onChange={() => toggle(group, option)}
+                    />
+                    {option.name}
+                  </span>
+                  <span>{Number(option.price) > 0 ? `+£${Number(option.price).toFixed(2)}` : "Free"}</span>
+                </label>
+              ))}
+            </div>
+          </div>
+        ))}
+        <div className="flex justify-end gap-2">
+          <button onClick={onClose} className="px-3 py-2 text-sm border rounded-lg">Cancel</button>
+          <button onClick={() => onConfirm(selected.map((optionId) => ({ optionId })))} className="px-3 py-2 text-sm bg-blue-600 text-white rounded-lg">Add</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+/*
+ * JARVES remains the existing components/jarvis/JarvisOrb.jsx and
+ * components/jarvis/JarvisPanel.jsx interaction surface, but is mounted once
+ * by App through JarvisCorner so it survives page navigation.
+ */
 
 /* =========================================================
    POS / TILL
@@ -57,6 +109,7 @@ import JarvisPanel from "../../components/jarvis/JarvisPanel.jsx";
 
 function POS({
   onAdmin,
+  onSettings,
   onOpenOnlineOrders,
   onLogout,
 }) {
@@ -78,6 +131,7 @@ function POS({
   const [showHeldSales, setShowHeldSales] = useState(false);
   /* Cash completion popup: shows the change to return to the customer. */
   const [saleCompleteNotice, setSaleCompleteNotice] = useState(null);
+  const [modifierPicker, setModifierPicker] = useState(null);
 
   /*
    * Till actions: Misc Item (manual-price sale line), Petty Cash (cash-drawer
@@ -89,15 +143,6 @@ function POS({
   const [showPettyCash, setShowPettyCash] = useState(false);
   const [showPrint, setShowPrint] = useState(false);
   const [lastSale, setLastSale] = useState(null);
-
-  /*
-   * JARVIS assistant (UI presence only): the orb opens the panel; the panel
-   * reports its activity (listening/thinking) so the orb's animation mirrors
-   * what the assistant is doing. All requests go through services/jarvis.js.
-   */
-  const [showJarvis, setShowJarvis] = useState(false);
-  const [jarvisActivity, setJarvisActivity] = useState(null);
-  const jarvisOrbState = jarvisActivity || ORB_STATES.IDLE;
 
   /*
    * Till Misc Item lines collected via the Misc Item modal. They live in
@@ -695,7 +740,7 @@ function POS({
      ADD PRODUCT
   ========================================================= */
 
-  const add = (product) => {
+  const addLine = (product, modifiers = []) => {
     /* T10U: when Allow Negative Inventory Billing is ON, stock is no longer
        capped here — the checkout pre-flight warning plus the authoritative
        server-side check inside the sale transaction take over. */
@@ -753,9 +798,31 @@ function POS({
         {
           ...product,
           quantity: 1,
+          modifiers,
         },
       ];
     });
+  };
+
+  const add = async (product) => {
+    try {
+      const response = await apiRequest(`/api/products/${product.id}/modifiers`);
+      const rows = response?.success && Array.isArray(response.data) ? response.data : [];
+      const groups = [...new Map(rows.map((row) => [row.group_id, row])).values()].map((row) => ({
+        id: row.group_id,
+        name: row.group_name,
+        required: row.required === true,
+        maxSelections: Number(row.max_selections) || 1,
+        options: rows.filter((option) => option.group_id === row.group_id && option.id),
+      }));
+      if (groups.length) {
+        setModifierPicker({ product, groups });
+      } else {
+        addLine(product);
+      }
+    } catch {
+      addLine(product);
+    }
   };
 
   useEffect(() => {
@@ -846,6 +913,32 @@ function POS({
         (item) => item.id !== id
       )
     );
+
+  /* T10-PRICE: manual price override (sale.price_change). The override applies
+     only to this basket line; the catalogue price is preserved (the backend
+     re-validates the permission and authoritative price). */
+  const applyPriceOverride = (item, newPrice, reason) => {
+    if (!(isAdmin || permissions.includes("sale.price_change"))) {
+      setSaleError(
+        "You do not have permission to change prices."
+      );
+      return;
+    }
+    const numeric = Number(newPrice);
+    if (!Number.isFinite(numeric) || numeric <= 0) return;
+    setBasket((current) =>
+      current.map((entry) =>
+        entry.id === item.id
+          ? {
+              ...entry,
+              price: numeric,
+              priceOverride: numeric,
+              priceOverrideReason: reason || null,
+            }
+          : entry
+      )
+    );
+  };
 
   const removeMiscLine = (index) =>
     setMiscLines((current) =>
@@ -986,6 +1079,16 @@ function POS({
       return;
     }
 
+    /* Held sales live server-side — holding offline would silently lose the
+       snapshot. Refuse explicitly and keep the basket intact. */
+    if (!isOnline()) {
+      setSaleError(
+        "Hold Sale requires a connection to the onePOS server. Reconnect and try again — your current sale is unchanged."
+      );
+
+      return;
+    }
+
     try {
       const data = await apiRequest(
         "/api/held-sales",
@@ -1031,11 +1134,23 @@ function POS({
     }
   };
 
-  const loadHeldSales = async () => {
+  const loadHeldSales = async ({ storeScope = false } = {}) => {
+    /* The list lives server-side — going online-only keeps the hold store
+       authoritative and avoids divergent local copies. */
+    if (!isOnline()) {
+      setSaleError(
+        "Resume Held Sale requires a connection to the onePOS server. Reconnect and try again."
+      );
+
+      return;
+    }
+
     try {
       const data =
         await apiRequest(
-          "/api/held-sales"
+          storeScope
+            ? "/api/held-sales?scope=store"
+            : "/api/held-sales"
         );
 
       if (!data.success) {
@@ -1063,70 +1178,93 @@ function POS({
     }
   };
 
-  const resumeSale = async (
-    heldSale
-  ) => {
-    setBasket(
-      heldSale.items || []
-    );
-
-    /* Held Misc Item lines: items is { items, miscLines } since the Till
-       Misc Item task; older holds stored a plain array. */
-    if (Array.isArray(heldSale.items)) {
-      setMiscLines([]);
-    } else if (heldSale.items && Array.isArray(heldSale.items.miscLines)) {
-      setBasket(heldSale.items.items || []);
-      setMiscLines(heldSale.items.miscLines);
-    }
-
-    setDiscountType(
-      heldSale.discount_type
-    );
-
-    setDiscountValue(
-      Number(
-        heldSale.discount_value
-      ) || 0
-    );
-
-    setShowHeldSales(false);
-
-    if (heldSale.customer_id) {
-      try {
-        const data =
-          await apiRequest(
-            `/api/customers/${heldSale.customer_id}`
-          );
-
-        if (data.success) {
-          setSelectedCustomer(
-            data.data
-          );
-        }
-      } catch (error) {
-        if (error.code === "AUTH_REQUIRED") {
-          onLogout();
-          return;
-        }
-
-        setSaleError(
-          error.message ||
-            "Unable to restore customer"
-        );
-      }
-    }
-
+  /* Resume = ATOMIC server-side claim (POST /:id/resume). The hold is
+     removed and returned in one request, so a second tab/click gets 404
+     and must not restore anything. The basket is only touched after a
+     successful claim. */
+  const resumeSale = async (heldSaleId) => {
     try {
-      await apiRequest(
-        `/api/held-sales/${heldSale.id}`,
-        {
-          method: "DELETE",
-        }
+      const data = await apiRequest(
+        `/api/held-sales/${heldSaleId}/resume`,
+        { method: "POST", body: JSON.stringify({}) }
       );
+
+      if (!data.success) {
+        if (data?.data?.alreadyResumed) {
+          setSaleMessage(
+            "That held sale was already resumed elsewhere."
+          );
+        } else {
+          setSaleError(
+            data.message || "Unable to resume held sale"
+          );
+        }
+        setShowHeldSales(false);
+        await loadHeldSales();
+        return;
+      }
+
+      const heldSale = data.data;
+
+      setBasket(
+        heldSale.items || []
+      );
+
+      /* Held Misc Item lines: items is { items, miscLines } since the Till
+         Misc Item task; older holds stored a plain array. */
+      if (Array.isArray(heldSale.items)) {
+        setMiscLines([]);
+      } else if (heldSale.items && Array.isArray(heldSale.items.miscLines)) {
+        setBasket(heldSale.items.items || []);
+        setMiscLines(heldSale.items.miscLines);
+      }
+
+      setDiscountType(
+        heldSale.discount_type
+      );
+
+      setDiscountValue(
+        Number(
+          heldSale.discount_value
+        ) || 0
+      );
+
+      setShowHeldSales(false);
+
+      if (heldSale.customer_id) {
+        try {
+          const customerData =
+            await apiRequest(
+              `/api/customers/${heldSale.customer_id}`
+            );
+
+          if (customerData.success) {
+            setSelectedCustomer(
+              customerData.data
+            );
+          }
+        } catch (error) {
+          if (error.code === "AUTH_REQUIRED") {
+            onLogout();
+            return;
+          }
+
+          setSaleError(
+            error.message ||
+              "Unable to restore customer"
+          );
+        }
+      }
     } catch (error) {
       if (error.code === "AUTH_REQUIRED") {
         onLogout();
+        return;
       }
+
+      setSaleError(
+        error.message ||
+          "Unable to resume held sale"
+      );
     }
   };
 
@@ -1293,6 +1431,15 @@ function POS({
           discount: lineDiscount,
           total:
             lineNet + lineTax,
+          /* T10-PRICE: override proposal (server re-validates permission +
+             catalogue price; ignored when sale.price_change is absent). */
+          ...(item.priceOverride
+            ? {
+                priceOverride: item.priceOverride,
+                priceOverrideReason:
+                  item.priceOverrideReason || null,
+              }
+            : {}),
         };
       }),
 
@@ -1626,6 +1773,7 @@ function POS({
           setShowTill(true)
         }
         onAdmin={onAdmin}
+        onSettings={isAdmin || permissions.includes("settings.manage") ? onSettings : null}
         onOpenOnlineOrders={
           onOpenOnlineOrders
         }
@@ -1868,10 +2016,12 @@ function POS({
           onUpdateQuantity={
             updateQuantity
           }
-          onRemoveItem={removeItem}
-          subtotal={subtotal}
-          vat={vat}
-          total={total}
+           onRemoveItem={removeItem}
+           onPriceOverride={applyPriceOverride}
+           canPriceOverride={isAdmin || permissions.includes("sale.price_change")}
+           subtotal={subtotal}
+           vat={vat}
+           total={total}
           onCheckout={() => {
             if (
               basketHasAgeRestricted &&
@@ -2118,6 +2268,8 @@ function POS({
       {showHeldSales && (
         <HeldSalesModal
           sales={heldSales}
+          currentUserId={getTenantFromToken()?.userId || null}
+          onRefresh={loadHeldSales}
           onClose={() =>
             setShowHeldSales(false)
           }
@@ -2132,6 +2284,18 @@ function POS({
             loadCurrentTill();
           }}
           onUpdate={loadCurrentTill}
+        />
+      )}
+
+      {modifierPicker && (
+        <ModifierPickerModal
+          product={modifierPicker.product}
+          groups={modifierPicker.groups}
+          onClose={() => setModifierPicker(null)}
+          onConfirm={(modifiers) => {
+            addLine(modifierPicker.product, modifiers);
+            setModifierPicker(null);
+          }}
         />
       )}
 
@@ -2172,22 +2336,6 @@ function POS({
         till={till}
       />
 
-      {/* JARVIS assistant: presence orb + panel. Rendered last so it can sit
-          above the till layout while staying below the z-50 modals it opens. */}
-      <JarvisOrb
-        state={jarvisOrbState}
-        open={showJarvis}
-        onClick={() => setShowJarvis(true)}
-      />
-      {showJarvis && (
-        <JarvisPanel
-          onClose={() => {
-            setShowJarvis(false);
-            setJarvisActivity(null);
-          }}
-          onActivityChange={setJarvisActivity}
-        />
-      )}
     </div>
   );
 }
@@ -2392,13 +2540,27 @@ function AgeVerificationModal({
 
 function HeldSalesModal({
   sales,
+  currentUserId,
+  onRefresh,
   onClose,
   onResume,
 }) {
+  const [storeScope, setStoreScope] = useState(false);
+
+  /* Item count across both hold shapes ({items, miscLines} and legacy
+     plain array). */
+  const lineCount = (sale) => {
+    if (Array.isArray(sale.items)) return sale.items.length;
+    if (sale.items && Array.isArray(sale.items.items)) {
+      return sale.items.items.length + (sale.items.miscLines?.length || 0);
+    }
+    return 0;
+  };
+
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-xl w-[520px] max-w-full">
-        <div className="p-4 border-b flex justify-between">
+      <div className="bg-white rounded-xl w-[560px] max-w-full">
+        <div className="p-4 border-b flex justify-between items-center">
           <h2 className="font-bold text-lg">
             Held sales
           </h2>
@@ -2411,6 +2573,24 @@ function HeldSalesModal({
           </button>
         </div>
 
+        <div className="px-4 pt-3 flex items-center justify-between text-xs">
+          <button
+            onClick={() => {
+              const next = !storeScope;
+              setStoreScope(next);
+              if (onRefresh) onRefresh({ storeScope: next });
+            }}
+            className={`h-8 px-3 border rounded ${storeScope ? "bg-blue-50 border-blue-300 text-blue-700" : "border-slate-200 text-slate-600"}`}
+          >
+            {storeScope ? "Showing: whole store" : "Showing: my holds"}
+          </button>
+          {storeScope && (
+            <span className="text-slate-400">
+              Resuming another cashier's hold claims it atomically
+            </span>
+          )}
+        </div>
+
         <div className="p-4 max-h-80 overflow-y-auto">
           {sales.length ? (
             sales.map((sale) => (
@@ -2420,22 +2600,28 @@ function HeldSalesModal({
               >
                 <div>
                   <div className="font-medium text-sm">
-                    {
-                      sale.items.length
-                    }{" "}
-                    item(s)
+                    {lineCount(sale)} item(s)
+                    {sale.customer_name ? (
+                      <span className="text-slate-500 font-normal"> · {sale.customer_name}</span>
+                    ) : null}
+                    {currentUserId && sale.user_id && sale.user_id !== currentUserId && (
+                      <span className="ml-2 text-[10px] uppercase bg-amber-100 text-amber-800 px-1.5 py-0.5 rounded">
+                        {sale.user_name || "other cashier"}
+                      </span>
+                    )}
                   </div>
 
                   <div className="text-xs text-slate-500">
                     {new Date(
                       sale.created_at
                     ).toLocaleString()}
+                    {sale.notes ? ` · ${String(sale.notes).slice(0, 60)}` : ""}
                   </div>
                 </div>
 
                 <button
                   onClick={() =>
-                    onResume(sale)
+                    onResume(sale.id)
                   }
                   className="px-3 py-2 bg-blue-50 text-blue-700 rounded text-sm"
                 >

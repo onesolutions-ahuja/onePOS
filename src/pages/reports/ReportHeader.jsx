@@ -1,5 +1,13 @@
 import QuickDateRange from "./shared/QuickDateRange.jsx";
 
+/**
+ * Shared report header: page title + description + the date-range controls.
+ *
+ * Presentation only — props, state and the run/date callbacks are unchanged.
+ * Uses the shared primitives so the header follows the selected preset
+ * (page gap, control height, radius) and appearance (surface/text tokens)
+ * instead of carrying its own fixed margin, control-height and accent literals.
+ */
 export default function ReportHeader({
   from,
   to,
@@ -11,10 +19,10 @@ export default function ReportHeader({
   showQuickRange = true,
 }) {
   return (
-    <div className="flex justify-between items-end mb-5">
+    <div className="onepos-page-header">
       <div>
-        <h1 className="text-2xl font-bold">{title}</h1>
-        <p className="text-sm text-slate-500 mt-1">{subtitle}</p>
+        <h1 className="onepos-page-title">{title}</h1>
+        <p className="onepos-page-subtitle">{subtitle}</p>
       </div>
       <div className="flex flex-col items-end gap-1.5">
         {showQuickRange && (
@@ -23,13 +31,27 @@ export default function ReportHeader({
         <div className="flex items-end gap-2">
           <label className="text-xs text-slate-500">
             From
-            <input type="date" value={from} onChange={(event) => onFromChange(event.target.value)} className="block h-9 mt-1 border rounded px-2 text-sm" />
+            <input
+              type="date"
+              value={from}
+              onChange={(event) => onFromChange(event.target.value)}
+              className="onepos-input w-auto mt-1"
+            />
           </label>
           <label className="text-xs text-slate-500">
             To
-            <input type="date" value={to} onChange={(event) => onToChange(event.target.value)} className="block h-9 mt-1 border rounded px-2 text-sm" />
+            <input
+              type="date"
+              value={to}
+              onChange={(event) => onToChange(event.target.value)}
+              className="onepos-input w-auto mt-1"
+            />
           </label>
-          {onRun && <button onClick={onRun} className="h-9 px-3 bg-blue-600 text-white rounded text-sm">Run</button>}
+          {onRun && (
+            <button onClick={onRun} className="onepos-btn onepos-btn-primary">
+              Run
+            </button>
+          )}
         </div>
       </div>
     </div>

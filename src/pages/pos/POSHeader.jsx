@@ -4,6 +4,7 @@ import {
   LogOut,
   RefreshCw,
   ShoppingBag,
+  Settings,
   Wifi,
   WifiOff,
   X,
@@ -23,6 +24,7 @@ function POSHeader({
   till,
   onManageTill,
   onAdmin,
+  onSettings,
   onOpenOnlineOrders,
   onLogout,
   onlineOrderCount = 0,
@@ -284,6 +286,17 @@ function POSHeader({
           <span className="hidden sm:inline">Admin</span>
           <span className="sm:hidden">A</span>
         </button>
+
+        {onSettings && (
+          <button
+            onClick={onSettings}
+            className="h-9 w-9 flex items-center justify-center bg-slate-800 rounded-md text-sm hover:bg-slate-700 transition-colors shrink-0"
+            title="Settings available to you"
+            aria-label="Settings available to you"
+          >
+            <Settings size={17} />
+          </button>
+        )}
 
         {/* LOGOUT */}
         <button

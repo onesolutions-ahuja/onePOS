@@ -20,7 +20,42 @@ export async function initializeDatabase(pool) {
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
 
+    CREATE TABLE IF NOT EXISTS licences (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      name VARCHAR(150) UNIQUE NOT NULL,
+      description TEXT,
+      active BOOLEAN NOT NULL DEFAULT TRUE,
+      starts_at TIMESTAMPTZ,
+      expires_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      CHECK (expires_at IS NULL OR starts_at IS NULL OR expires_at >= starts_at)
+    );
+    CREATE TABLE IF NOT EXISTS licence_entitlements (
+      licence_id UUID NOT NULL REFERENCES licences(id) ON DELETE CASCADE,
+      entitlement_key VARCHAR(100) NOT NULL,
+      enabled BOOLEAN NOT NULL DEFAULT TRUE,
+      PRIMARY KEY (licence_id, entitlement_key)
+    );
+    ALTER TABLE companies ADD COLUMN IF NOT EXISTS licence_id UUID REFERENCES licences(id) ON DELETE SET NULL;
+    CREATE INDEX IF NOT EXISTS idx_companies_licence ON companies(licence_id);
+
     ALTER TABLE companies ADD COLUMN IF NOT EXISTS logo_url TEXT;
+    CREATE TABLE IF NOT EXISTS tenant_database_configs (
+      company_id UUID PRIMARY KEY REFERENCES companies(id) ON DELETE CASCADE,
+      database_mode VARCHAR(30) NOT NULL DEFAULT 'ONEPOS_MANAGED'
+        CHECK (database_mode IN ('ONEPOS_MANAGED', 'CUSTOMER_MANAGED')),
+      host VARCHAR(255),
+      port INTEGER,
+      database_name VARCHAR(255),
+      username VARCHAR(255),
+      password_ciphertext TEXT,
+      ssl_mode VARCHAR(30) NOT NULL DEFAULT 'require',
+      active BOOLEAN NOT NULL DEFAULT FALSE,
+      schema_state VARCHAR(40) NOT NULL DEFAULT 'UNINITIALIZED',
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_by UUID
+    );
     /* Till Misc Item: line type on sale items (existing rows read as PRODUCT). */
     ALTER TABLE sale_items ADD COLUMN IF NOT EXISTS item_type VARCHAR(20) NOT NULL DEFAULT 'PRODUCT';
     /* Per-line discount support: type, value, original prices, and actor. */
@@ -43,6 +78,19 @@ export async function initializeDatabase(pool) {
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
     CREATE INDEX IF NOT EXISTS idx_sale_discounts_sale ON sale_discounts(sale_id);
+    /* Manual price override audit trail (sale.price_change permission). */
+    CREATE TABLE IF NOT EXISTS sale_price_overrides (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      sale_id UUID NOT NULL REFERENCES sales(id) ON DELETE CASCADE,
+      item_id UUID NOT NULL REFERENCES sale_items(id) ON DELETE CASCADE,
+      product_id UUID NOT NULL REFERENCES products(id),
+      user_id UUID NOT NULL REFERENCES users(id),
+      original_unit_price NUMERIC(12,2) NOT NULL,
+      overridden_unit_price NUMERIC(12,2) NOT NULL,
+      reason TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_sale_price_overrides_sale ON sale_price_overrides(sale_id);
     /* One invisible MISC placeholder product per company (Till Misc Item). */
     CREATE UNIQUE INDEX IF NOT EXISTS uq_products_misc_per_company
       ON products(company_id) WHERE sku = 'MISC' AND active = false;
@@ -92,6 +140,10 @@ export async function initializeDatabase(pool) {
       updated_by UUID,
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
+    ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS batch_inventory_mode VARCHAR(20) NOT NULL DEFAULT 'none';
+    ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS batch_default_mfg_rule VARCHAR(20) NOT NULL DEFAULT 'none';
+    ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS batch_default_expiry_rule VARCHAR(20) NOT NULL DEFAULT 'none';
+    ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS batch_default_expiry_days INTEGER NOT NULL DEFAULT 365;
 
     CREATE TABLE IF NOT EXISTS payment_terminals (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -188,6 +240,29 @@ export async function initializeDatabase(pool) {
     CREATE INDEX IF NOT EXISTS idx_user_stores_user
     ON user_stores(user_id, active);
 
+    CREATE TABLE IF NOT EXISTS custom_reports (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+      created_by UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      name VARCHAR(150) NOT NULL,
+      description VARCHAR(500),
+      data_source VARCHAR(30) NOT NULL DEFAULT 'sales' CHECK (data_source = 'sales'),
+      definition JSONB NOT NULL DEFAULT '{}'::jsonb,
+      archived_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_custom_reports_company_active
+      ON custom_reports(company_id, archived_at, updated_at DESC);
+    CREATE TABLE IF NOT EXISTS custom_report_users (
+      report_id UUID NOT NULL REFERENCES custom_reports(id) ON DELETE CASCADE,
+      user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      PRIMARY KEY (report_id, user_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_custom_report_users_user
+      ON custom_report_users(user_id, report_id);
+
     CREATE TABLE IF NOT EXISTS categories (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
@@ -227,6 +302,23 @@ export async function initializeDatabase(pool) {
      * admin enables JARVES. See services/jarvis/licensing.js. */
     ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS jarves_licence_users INTEGER NOT NULL DEFAULT 0;
     ALTER TABLE users ADD COLUMN IF NOT EXISTS jarves_enabled BOOLEAN NOT NULL DEFAULT FALSE;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS is_superadmin BOOLEAN NOT NULL DEFAULT FALSE;
+
+    /*
+     * USER PREFERENCES (onePOS Admin presentation).
+     *
+     * Per-user UI preferences (layout preset / appearance / accent) — NOT a
+     * company setting, so each user chooses their own presentation without
+     * changing anybody else's interface. Pure presentation: one JSONB value
+     * per user, no business semantics, no permissions of its own beyond the
+     * session (a user can only ever read/write their own row).
+     */
+    CREATE TABLE IF NOT EXISTS user_preferences (
+      user_id UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+      preferences JSONB NOT NULL DEFAULT '{}'::jsonb,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    ALTER TABLE users ALTER COLUMN company_id DROP NOT NULL;
     ALTER TABLE stores ADD COLUMN IF NOT EXISTS self_checkout_key_hash VARCHAR(100);
     ALTER TABLE ean_product_master ADD COLUMN IF NOT EXISTS image_url TEXT NULL;
 
@@ -284,6 +376,12 @@ export async function initializeDatabase(pool) {
     ALTER TABLE products
       ADD COLUMN IF NOT EXISTS age_restricted BOOLEAN NOT NULL DEFAULT FALSE;
 
+    /* Batch / expiry tracking — per-PRODUCT configuration switch. Actual
+     * batches are STORE-level records (inventory_batches below); the global
+     * product never carries an expiry date or a batch number. */
+    ALTER TABLE products
+      ADD COLUMN IF NOT EXISTS batch_tracking BOOLEAN NOT NULL DEFAULT FALSE;
+
     /* T10U negative-inventory billing safety: OFF by default so existing
      * behaviour (insufficient stock rejected) is unchanged until an
      * Administrator explicitly enables it. */
@@ -293,6 +391,11 @@ export async function initializeDatabase(pool) {
        against databases created before the column existed). */
     ALTER TABLE company_settings
       ADD COLUMN IF NOT EXISTS scan_go_enabled BOOLEAN NOT NULL DEFAULT FALSE;
+    /* Product exchange mode: which till exchange workflows are allowed
+       ('receipt' | 'normal' | 'both', default 'both'). Additive; safe on
+       databases created before the column existed. */
+    ALTER TABLE company_settings
+      ADD COLUMN IF NOT EXISTS exchange_mode VARCHAR(20) NOT NULL DEFAULT 'both';
     /* Till product browser presentation ('image' | 'compact'). */
     ALTER TABLE company_settings
       ADD COLUMN IF NOT EXISTS product_view VARCHAR(20) NOT NULL DEFAULT 'image';
@@ -305,6 +408,9 @@ export async function initializeDatabase(pool) {
     ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS till_invoice_prefix VARCHAR(10) NOT NULL DEFAULT 'TO';
     ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS delivery_invoice_prefix VARCHAR(10) NOT NULL DEFAULT 'DEL';
     ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS self_checkout_invoice_prefix VARCHAR(10) NOT NULL DEFAULT 'SC';
+    ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS default_landing_page VARCHAR(40) NOT NULL DEFAULT 'dashboard';
+    ALTER TABLE roles ADD COLUMN IF NOT EXISTS default_landing_page VARCHAR(40);
+    ALTER TABLE terminals ADD COLUMN IF NOT EXISTS app_profile VARCHAR(30) NOT NULL DEFAULT 'admin';
     ALTER TABLE company_settings
       ADD COLUMN IF NOT EXISTS loyalty_enabled BOOLEAN NOT NULL DEFAULT FALSE;
     ALTER TABLE company_settings
@@ -434,6 +540,49 @@ export async function initializeDatabase(pool) {
     ON product_store_stock(company_id, product_id);
 
     /*
+     * INVENTORY BATCHES — store-level batch/expiry tracking.
+     *
+     * Company → Product → StoreProduct(stock) → InventoryBatch. The same
+     * product can carry different batches with different expiry dates per
+     * store; batch numbers may repeat ACROSS stores (manufacturer boxes are
+     * per-delivery, not per-world) but never twice in the same store for the
+     * same product. Quantities are held on the batch row itself and are only
+     * mutated through the batch-aware inventory movement helpers in
+     * services/inventory.js, so the ledger, store stock and batch quantities
+     * stay consistent in the same transaction.
+     *
+     * Expired batches are NEVER deleted automatically — they stay visible
+     * for identification, reporting and wastage.
+     */
+    CREATE TABLE IF NOT EXISTS inventory_batches (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+      store_id UUID NOT NULL REFERENCES stores(id) ON DELETE CASCADE,
+      product_id UUID NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+      batch_number VARCHAR(100),
+      expiry_date DATE,
+      quantity NUMERIC(12,3) NOT NULL DEFAULT 0,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      /* One batch per number within a store+product: the same manufacturer
+         batch number is legitimate in different stores (and for different
+         products), never duplicated inside one store's product. */
+      UNIQUE (company_id, store_id, product_id, batch_number)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_inventory_batches_store
+    ON inventory_batches(company_id, store_id);
+
+    CREATE INDEX IF NOT EXISTS idx_inventory_batches_product
+    ON inventory_batches(company_id, product_id);
+
+    CREATE INDEX IF NOT EXISTS idx_inventory_batches_expiry
+    ON inventory_batches(company_id, store_id, expiry_date);
+    ALTER TABLE inventory_batches ADD COLUMN IF NOT EXISTS manufacturing_date DATE;
+    ALTER TABLE inventory_batches ADD COLUMN IF NOT EXISTS manufacturing_date_source VARCHAR(10);
+    ALTER TABLE inventory_batches ADD COLUMN IF NOT EXISTS expiry_date_source VARCHAR(10);
+
+    /*
      * STOCK TRANSFERS — moving stock between a company's own stores.
      * Execution is atomic: the TRANSFER_OUT (source) and TRANSFER_IN
      * (destination) inventory movements for every line are written in one
@@ -478,11 +627,11 @@ export async function initializeDatabase(pool) {
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
       store_id UUID REFERENCES stores(id) ON DELETE SET NULL,
-      platform VARCHAR(20) NOT NULL CHECK (platform IN ('uber', 'deliveroo')),
+      platform VARCHAR(20) NOT NULL CHECK (platform IN ('uber', 'deliveroo', 'direct')),
       external_order_id VARCHAR(255) NOT NULL,
       external_reference VARCHAR(255),
       status VARCHAR(30) NOT NULL DEFAULT 'RECEIVED' CHECK (
-        status IN ('RECEIVED', 'ACCEPTED', 'PREPARING', 'READY', 'COMPLETED', 'REJECTED', 'CANCELLED')
+        status IN ('RECEIVED', 'ACCEPTED', 'PREPARING', 'READY', 'READY_FOR_PICKUP', 'READY_FOR_DELIVERY', 'COLLECTED', 'COMPLETED', 'REJECTED', 'CANCELLED')
       ),
       customer_name VARCHAR(255),
       customer_phone VARCHAR(50),
@@ -497,6 +646,8 @@ export async function initializeDatabase(pool) {
       delivery_fee NUMERIC(12,2) NOT NULL DEFAULT 0,
       total NUMERIC(12,2) NOT NULL DEFAULT 0,
       notes TEXT,
+      payment_method VARCHAR(50),
+      payment_status VARCHAR(30) NOT NULL DEFAULT 'pending',
       cancel_reason TEXT,
       platform_data JSONB,
       accepted_at TIMESTAMPTZ,
@@ -589,7 +740,9 @@ export async function initializeDatabase(pool) {
 
     ALTER TABLE online_orders
       ADD COLUMN IF NOT EXISTS inventory_reserved BOOLEAN NOT NULL DEFAULT FALSE,
-      ADD COLUMN IF NOT EXISTS inventory_released BOOLEAN NOT NULL DEFAULT FALSE;
+      ADD COLUMN IF NOT EXISTS inventory_released BOOLEAN NOT NULL DEFAULT FALSE,
+      ADD COLUMN IF NOT EXISTS payment_method VARCHAR(50),
+      ADD COLUMN IF NOT EXISTS payment_status VARCHAR(30) NOT NULL DEFAULT 'pending';
 
     /*
      * PLATFORM API AUDIT LOG (Uber / Deliveroo)
@@ -683,7 +836,7 @@ export async function initializeDatabase(pool) {
       purchase_date DATE NOT NULL DEFAULT CURRENT_DATE,
       notes TEXT,
       status VARCHAR(20) NOT NULL DEFAULT 'DRAFT' CHECK (
-        status IN ('DRAFT', 'RECEIVED', 'CANCELLED')
+        status IN ('DRAFT', 'PARTIALLY_RECEIVED', 'RECEIVED', 'CANCELLED')
       ),
       subtotal NUMERIC(12,2) NOT NULL DEFAULT 0,
       total NUMERIC(12,2) NOT NULL DEFAULT 0,
@@ -700,15 +853,80 @@ export async function initializeDatabase(pool) {
       purchase_id UUID NOT NULL REFERENCES purchases(id) ON DELETE CASCADE,
       product_id UUID NOT NULL REFERENCES products(id),
       quantity NUMERIC(12,3) NOT NULL CHECK (quantity > 0),
+      received_quantity NUMERIC(12,3) NOT NULL DEFAULT 0 CHECK (received_quantity >= 0 AND received_quantity <= quantity),
       unit_cost NUMERIC(12,2) NOT NULL CHECK (unit_cost >= 0),
-      line_total NUMERIC(12,2) NOT NULL DEFAULT 0
+      line_total NUMERIC(12,2) NOT NULL DEFAULT 0,
+      /* Batch/expiry captured at PO line level (nullable: non-batch goods). */
+      batch_number VARCHAR(100),
+      expiry_date DATE
     );
+    ALTER TABLE purchase_items ADD COLUMN IF NOT EXISTS manufacturing_date DATE;
 
     CREATE INDEX IF NOT EXISTS idx_purchases_company_date
     ON purchases(company_id, purchase_date DESC);
 
     CREATE INDEX IF NOT EXISTS idx_purchase_items_purchase
     ON purchase_items(purchase_id);
+
+    /* Batch/expiry on PO lines (additive migration for existing installs). */
+    ALTER TABLE purchase_items
+      ADD COLUMN IF NOT EXISTS batch_number VARCHAR(100);
+    ALTER TABLE purchase_items
+      ADD COLUMN IF NOT EXISTS expiry_date DATE;
+    ALTER TABLE purchase_items
+      ADD COLUMN IF NOT EXISTS received_quantity NUMERIC(12,3) NOT NULL DEFAULT 0;
+    ALTER TABLE purchases DROP CONSTRAINT IF EXISTS purchases_status_check;
+    ALTER TABLE purchases ADD CONSTRAINT purchases_status_check
+      CHECK (status IN ('DRAFT', 'PARTIALLY_RECEIVED', 'RECEIVED', 'CANCELLED'));
+
+    CREATE TABLE IF NOT EXISTS purchase_receipts (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+      purchase_id UUID NOT NULL REFERENCES purchases(id) ON DELETE CASCADE,
+      store_id UUID NOT NULL REFERENCES stores(id),
+      received_by UUID REFERENCES users(id) ON DELETE SET NULL,
+      received_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      reference_number VARCHAR(100),
+      notes TEXT
+    );
+    CREATE TABLE IF NOT EXISTS purchase_receipt_items (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      receipt_id UUID NOT NULL REFERENCES purchase_receipts(id) ON DELETE CASCADE,
+      purchase_item_id UUID NOT NULL REFERENCES purchase_items(id) ON DELETE CASCADE,
+      product_id UUID NOT NULL REFERENCES products(id),
+      quantity NUMERIC(12,3) NOT NULL CHECK (quantity > 0),
+      unit_cost NUMERIC(12,2) NOT NULL CHECK (unit_cost >= 0),
+      batch_number VARCHAR(100),
+      expiry_date DATE
+    );
+    /* Manufacturing date on receipt lines. Additive/idempotent; must run
+       AFTER purchase_receipt_items exists (PO line-level manufacturing_date
+       is handled separately above, before purchase_receipts is created). */
+    ALTER TABLE purchase_receipt_items ADD COLUMN IF NOT EXISTS manufacturing_date DATE;
+    CREATE INDEX IF NOT EXISTS idx_purchase_receipts_purchase ON purchase_receipts(purchase_id, received_at);
+
+    CREATE TABLE IF NOT EXISTS supplier_products (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+      supplier_id UUID NOT NULL REFERENCES suppliers(id) ON DELETE CASCADE,
+      product_id UUID NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+      supplier_sku VARCHAR(100),
+      supplier_description TEXT,
+      cost_price NUMERIC(12,2) NOT NULL CHECK (cost_price >= 0),
+      effective_from DATE NOT NULL DEFAULT CURRENT_DATE,
+      effective_to DATE,
+      preferred BOOLEAN NOT NULL DEFAULT FALSE,
+      active BOOLEAN NOT NULL DEFAULT TRUE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      CHECK (effective_to IS NULL OR effective_to >= effective_from),
+      UNIQUE (company_id, supplier_id, product_id, effective_from)
+    );
+    CREATE INDEX IF NOT EXISTS idx_supplier_products_supplier ON supplier_products(company_id, supplier_id, active);
+    CREATE INDEX IF NOT EXISTS idx_supplier_products_product ON supplier_products(company_id, product_id, active);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_supplier_products_one_preferred
+      ON supplier_products(company_id, product_id)
+      WHERE preferred = TRUE AND active = TRUE;
 
     CREATE TABLE IF NOT EXISTS stock_returns (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -743,11 +961,70 @@ export async function initializeDatabase(pool) {
       reason TEXT
     );
 
+    CREATE TABLE IF NOT EXISTS supplier_invoices (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+      supplier_id UUID NOT NULL REFERENCES suppliers(id) ON DELETE RESTRICT,
+      store_id UUID REFERENCES stores(id) ON DELETE SET NULL,
+      purchase_id UUID REFERENCES purchases(id) ON DELETE SET NULL,
+      invoice_number VARCHAR(100) NOT NULL,
+      invoice_date DATE NOT NULL DEFAULT CURRENT_DATE, due_date DATE,
+      subtotal NUMERIC(12,2) NOT NULL DEFAULT 0 CHECK (subtotal >= 0),
+      tax NUMERIC(12,2) NOT NULL DEFAULT 0 CHECK (tax >= 0),
+      total NUMERIC(12,2) NOT NULL CHECK (total >= 0),
+      status VARCHAR(20) NOT NULL DEFAULT 'OPEN' CHECK (status IN ('OPEN','PARTIALLY_PAID','PAID','VOID')),
+      notes TEXT, created_by UUID REFERENCES users(id) ON DELETE SET NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE (company_id, supplier_id, invoice_number)
+    );
+    CREATE TABLE IF NOT EXISTS supplier_payments (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+      supplier_id UUID NOT NULL REFERENCES suppliers(id) ON DELETE RESTRICT,
+      store_id UUID REFERENCES stores(id) ON DELETE SET NULL,
+      amount NUMERIC(12,2) NOT NULL CHECK (amount > 0),
+      payment_date DATE NOT NULL DEFAULT CURRENT_DATE, payment_method VARCHAR(50), reference VARCHAR(100),
+      status VARCHAR(20) NOT NULL DEFAULT 'COMPLETED' CHECK (status IN ('PENDING','COMPLETED','CANCELLED')),
+      notes TEXT, idempotency_key VARCHAR(100), created_by UUID REFERENCES users(id) ON DELETE SET NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), UNIQUE (company_id, idempotency_key)
+    );
+    CREATE TABLE IF NOT EXISTS supplier_payment_allocations (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      payment_id UUID NOT NULL REFERENCES supplier_payments(id) ON DELETE CASCADE,
+      invoice_id UUID NOT NULL REFERENCES supplier_invoices(id) ON DELETE CASCADE,
+      amount NUMERIC(12,2) NOT NULL CHECK (amount > 0), UNIQUE (payment_id, invoice_id)
+    );
+    CREATE TABLE IF NOT EXISTS supplier_ledger_entries (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+      supplier_id UUID NOT NULL REFERENCES suppliers(id) ON DELETE RESTRICT,
+      store_id UUID REFERENCES stores(id) ON DELETE SET NULL,
+      entry_type VARCHAR(30) NOT NULL CHECK (entry_type IN ('INVOICE','PAYMENT','RETURN_CREDIT','OPENING')),
+      reference_type VARCHAR(40), reference_id UUID, reference VARCHAR(100), amount NUMERIC(12,2) NOT NULL CHECK (amount > 0),
+      debit BOOLEAN NOT NULL, description TEXT, idempotency_key VARCHAR(100), created_by UUID REFERENCES users(id) ON DELETE SET NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_supplier_ledger_account ON supplier_ledger_entries(company_id, supplier_id, created_at, id);
+    ALTER TABLE supplier_ledger_entries ADD COLUMN IF NOT EXISTS reference VARCHAR(100);
+    ALTER TABLE supplier_ledger_entries ADD COLUMN IF NOT EXISTS idempotency_key VARCHAR(100);
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_supplier_ledger_idempotency
+      ON supplier_ledger_entries(company_id, idempotency_key)
+      WHERE idempotency_key IS NOT NULL;
+
     CREATE INDEX IF NOT EXISTS idx_stock_returns_company
     ON stock_returns(company_id, created_at);
 
     CREATE INDEX IF NOT EXISTS idx_stock_return_items_return
     ON stock_return_items(return_id);
+
+    /* Product exchanges: link columns on the existing return leg so one
+       exchange is traceable (return -> original sale / replacement sale)
+       without a second returns/inventory/payment system. */
+    ALTER TABLE stock_returns
+      ADD COLUMN IF NOT EXISTS exchange_mode VARCHAR(20),
+      ADD COLUMN IF NOT EXISTS replacement_sale_id UUID,
+      ADD COLUMN IF NOT EXISTS replacement_total NUMERIC(12,2),
+      ADD COLUMN IF NOT EXISTS exchange_difference NUMERIC(12,2);
 
     CREATE TABLE IF NOT EXISTS customers (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -905,6 +1182,8 @@ export async function initializeDatabase(pool) {
 
     ALTER TABLE sales
       ADD COLUMN IF NOT EXISTS client_request_id UUID;
+    ALTER TABLE sales
+      ADD COLUMN IF NOT EXISTS client_request_fingerprint TEXT;
 
     CREATE UNIQUE INDEX IF NOT EXISTS ux_sales_client_request
     ON sales(company_id, client_request_id);
@@ -975,6 +1254,69 @@ export async function initializeDatabase(pool) {
       status VARCHAR(50) NOT NULL DEFAULT 'completed',
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
+
+    CREATE TABLE IF NOT EXISTS layaways (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+      store_id UUID NOT NULL REFERENCES stores(id) ON DELETE CASCADE,
+      customer_id UUID REFERENCES customers(id) ON DELETE SET NULL,
+      created_by UUID NOT NULL REFERENCES users(id),
+      total NUMERIC(12,2) NOT NULL CHECK (total >= 0),
+      paid_amount NUMERIC(12,2) NOT NULL DEFAULT 0 CHECK (paid_amount >= 0),
+      balance NUMERIC(12,2) NOT NULL DEFAULT 0 CHECK (balance >= 0),
+      status VARCHAR(20) NOT NULL DEFAULT 'OPEN'
+        CHECK (status IN ('OPEN', 'COMPLETED', 'CANCELLED')),
+      due_date DATE, notes TEXT,
+      completed_sale_id UUID REFERENCES sales(id) ON DELETE SET NULL,
+      completed_at TIMESTAMPTZ,
+      completed_by UUID REFERENCES users(id) ON DELETE SET NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_layaways_store_status
+      ON layaways(company_id, store_id, status, created_at DESC);
+    CREATE TABLE IF NOT EXISTS layaway_items (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      layaway_id UUID NOT NULL REFERENCES layaways(id) ON DELETE CASCADE,
+      product_id UUID NOT NULL REFERENCES products(id),
+      product_name VARCHAR(255) NOT NULL,
+      quantity NUMERIC(12,3) NOT NULL CHECK (quantity > 0),
+      unit_price NUMERIC(12,2) NOT NULL CHECK (unit_price >= 0),
+      tax NUMERIC(12,2) NOT NULL DEFAULT 0,
+      total NUMERIC(12,2) NOT NULL CHECK (total >= 0)
+      ,track_stock BOOLEAN NOT NULL DEFAULT TRUE
+    );
+    CREATE INDEX IF NOT EXISTS idx_layaway_items_layaway ON layaway_items(layaway_id);
+    CREATE TABLE IF NOT EXISTS layaway_payments (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      layaway_id UUID NOT NULL REFERENCES layaways(id) ON DELETE CASCADE,
+      company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+      store_id UUID NOT NULL REFERENCES stores(id) ON DELETE CASCADE,
+      user_id UUID NOT NULL REFERENCES users(id),
+      payment_method VARCHAR(50) NOT NULL,
+      amount NUMERIC(12,2) NOT NULL CHECK (amount > 0),
+      provider VARCHAR(100), provider_transaction_id VARCHAR(255),
+      status VARCHAR(50) NOT NULL DEFAULT 'completed',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_layaway_payments_layaway ON layaway_payments(layaway_id);
+    ALTER TABLE layaways ADD COLUMN IF NOT EXISTS completed_at TIMESTAMPTZ;
+    ALTER TABLE layaways ADD COLUMN IF NOT EXISTS completed_by UUID REFERENCES users(id) ON DELETE SET NULL;
+    ALTER TABLE layaway_items ADD COLUMN IF NOT EXISTS track_stock BOOLEAN NOT NULL DEFAULT TRUE;
+    /* Older early layaway builds briefly exposed PAID. Keep those rows open
+       so completion remains the only terminal transition. */
+    UPDATE layaways SET status = 'OPEN' WHERE status = 'PAID';
+    DO $$ BEGIN
+      IF EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conrelid = 'layaways'::regclass AND conname = 'layaways_status_check'
+      ) THEN
+        ALTER TABLE layaways DROP CONSTRAINT layaways_status_check;
+      END IF;
+      ALTER TABLE layaways ADD CONSTRAINT layaways_status_check
+        CHECK (status IN ('OPEN', 'COMPLETED', 'CANCELLED'));
+    EXCEPTION WHEN duplicate_object THEN NULL;
+    END $$;
 
     CREATE TABLE IF NOT EXISTS held_sales (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -1056,9 +1398,70 @@ export async function initializeDatabase(pool) {
       action VARCHAR(100) NOT NULL,
       entity_type VARCHAR(100),
       entity_id UUID,
+      business_division_id UUID,
+      store_id UUID REFERENCES stores(id) ON DELETE SET NULL,
+      terminal_id UUID REFERENCES terminals(id) ON DELETE SET NULL,
+      session_id UUID,
+      ip_address INET,
+      actor_username VARCHAR(255),
       details JSONB,
+      result VARCHAR(20) NOT NULL DEFAULT 'success' CHECK (result IN ('success','failure','denied')),
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
+    CREATE INDEX IF NOT EXISTS idx_audit_company ON audit_logs(company_id);
+    CREATE INDEX IF NOT EXISTS idx_audit_created ON audit_logs(created_at);
+    CREATE INDEX IF NOT EXISTS idx_audit_company_action ON audit_logs(company_id, action);
+    CREATE INDEX IF NOT EXISTS idx_audit_entity ON audit_logs(entity_type, entity_id) WHERE entity_id IS NOT NULL;
+    /* Backfill new columns on pre-existing audit_logs tables (idempotent). */
+    ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS business_division_id UUID;
+    ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS store_id UUID;
+    ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS terminal_id UUID;
+    ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS session_id UUID;
+    ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS ip_address INET;
+    ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS actor_username VARCHAR(255);
+    ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS result VARCHAR(20) NOT NULL DEFAULT 'success' CHECK (result IN ('success','failure','denied'));
+
+
+    /*
+     * Staff attendance (clock in/out). One attendance session per staff
+     * member per company: an OPEN row (clock_out NULL) is the user's active
+     * clock-in. uq_attendance_open_per_user makes "at most one open session
+     * per user" atomic - the API's SELECT-then-INSERT guard alone is racy.
+     * worked_minutes is computed SERVER-SIDE from clock_in/clock_out at
+     * clock-out time; the client never supplies it.
+     */
+    CREATE TABLE IF NOT EXISTS attendance_records (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+      store_id UUID NOT NULL REFERENCES stores(id) ON DELETE CASCADE,
+      user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      status VARCHAR(20) NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'closed')),
+      clock_in TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      clock_out TIMESTAMPTZ,
+      worked_minutes INTEGER,
+      note TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      CONSTRAINT attendance_clock_out_after_in CHECK (
+        clock_out IS NULL OR clock_out >= clock_in
+      )
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_attendance_records_company_created
+    ON attendance_records(company_id, clock_in DESC);
+
+    CREATE INDEX IF NOT EXISTS idx_attendance_records_store_created
+    ON attendance_records(company_id, store_id, clock_in DESC);
+
+    CREATE INDEX IF NOT EXISTS idx_attendance_records_user_created
+    ON attendance_records(user_id, clock_in DESC);
+
+    /* At most one OPEN attendance session per user (company-wide).
+     * A user clocking in again while an open row exists hits this index,
+     * which the API surfaces as 409. */
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_attendance_open_per_user
+    ON attendance_records(user_id)
+    WHERE status = 'open';
 
     CREATE TABLE IF NOT EXISTS integrations (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -1102,6 +1505,81 @@ export async function initializeDatabase(pool) {
       ADD COLUMN IF NOT EXISTS return_id UUID REFERENCES stock_returns(id) ON DELETE SET NULL;
   `);
 
+  await pool.query(`
+    ALTER TABLE products
+      ADD COLUMN IF NOT EXISTS parent_product_id UUID REFERENCES products(id) ON DELETE SET NULL,
+      ADD COLUMN IF NOT EXISTS product_kind VARCHAR(20) NOT NULL DEFAULT 'standard',
+      ADD COLUMN IF NOT EXISTS variant_attributes JSONB NOT NULL DEFAULT '{}'::jsonb;
+    CREATE INDEX IF NOT EXISTS idx_products_parent ON products(parent_product_id);
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_products_variant_attributes
+      ON products(company_id, parent_product_id, variant_attributes)
+      WHERE parent_product_id IS NOT NULL AND active = true;
+    CREATE TABLE IF NOT EXISTS product_modifier_groups (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+      product_id UUID NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+      name VARCHAR(200) NOT NULL,
+      required BOOLEAN NOT NULL DEFAULT FALSE,
+      max_selections INTEGER NOT NULL DEFAULT 1 CHECK (max_selections > 0),
+      display_order INTEGER NOT NULL DEFAULT 0,
+      active BOOLEAN NOT NULL DEFAULT TRUE
+    );
+    CREATE TABLE IF NOT EXISTS product_modifier_options (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      group_id UUID NOT NULL REFERENCES product_modifier_groups(id) ON DELETE CASCADE,
+      name VARCHAR(200) NOT NULL,
+      price NUMERIC(12,2) NOT NULL DEFAULT 0 CHECK (price >= 0),
+      track_stock BOOLEAN NOT NULL DEFAULT FALSE,
+      inventory_product_id UUID REFERENCES products(id) ON DELETE SET NULL,
+      display_order INTEGER NOT NULL DEFAULT 0,
+      active BOOLEAN NOT NULL DEFAULT TRUE
+    );
+    CREATE TABLE IF NOT EXISTS product_bundle_components (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      bundle_product_id UUID NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+      component_product_id UUID NOT NULL REFERENCES products(id) ON DELETE RESTRICT,
+      quantity NUMERIC(12,3) NOT NULL CHECK (quantity > 0),
+      UNIQUE (bundle_product_id, component_product_id),
+      CHECK (bundle_product_id <> component_product_id)
+    );
+    ALTER TABLE sale_items
+      ADD COLUMN IF NOT EXISTS modifier_data JSONB NOT NULL DEFAULT '[]'::jsonb,
+      ADD COLUMN IF NOT EXISTS bundle_components JSONB NOT NULL DEFAULT '[]'::jsonb;
+    CREATE TABLE IF NOT EXISTS sale_item_modifiers (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      sale_item_id UUID NOT NULL REFERENCES sale_items(id) ON DELETE CASCADE,
+      modifier_option_id UUID NOT NULL REFERENCES product_modifier_options(id),
+      quantity NUMERIC(12,3) NOT NULL CHECK (quantity > 0),
+      unit_price NUMERIC(12,2) NOT NULL CHECK (unit_price >= 0),
+      total NUMERIC(12,2) NOT NULL CHECK (total >= 0)
+    );
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS business_divisions (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+      code VARCHAR(20) NOT NULL,
+      name VARCHAR(200) NOT NULL,
+      description TEXT,
+      active BOOLEAN NOT NULL DEFAULT TRUE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE (company_id, code),
+      UNIQUE (company_id, name)
+    );
+    CREATE INDEX IF NOT EXISTS idx_business_divisions_company ON business_divisions(company_id, active);
+    ALTER TABLE stores ADD COLUMN IF NOT EXISTS business_division_id UUID REFERENCES business_divisions(id) ON DELETE SET NULL;
+    CREATE INDEX IF NOT EXISTS idx_stores_division ON stores(company_id, business_division_id);
+    CREATE TABLE IF NOT EXISTS user_business_divisions (
+      user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      business_division_id UUID NOT NULL REFERENCES business_divisions(id) ON DELETE CASCADE,
+      active BOOLEAN NOT NULL DEFAULT TRUE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      PRIMARY KEY (user_id, business_division_id)
+    );
+  `);
+
   const permissions = [
     ["sale.view", "View Sales"],
     ["sale.create", "Create Sale"],
@@ -1116,6 +1594,11 @@ export async function initializeDatabase(pool) {
     ["sale.refund_without_receipt", "Refund Without Receipt"],
     ["sale.price_change", "Change Price"],
     ["sale.hold", "Hold Sale"],
+    ["layaway.view", "View Layaways"],
+    ["layaway.create", "Create Layaway"],
+    ["layaway.payment", "Take Layaway Payment"],
+    ["layaway.complete", "Complete Layaway"],
+    ["layaway.cancel", "Cancel Layaway"],
     ["cash.open_drawer", "Open Cash Drawer"],
     ["cash.payout", "Cash Payout"],
     ["cash.adjustment", "Cash Adjustment"],
@@ -1149,6 +1632,8 @@ export async function initializeDatabase(pool) {
     ["user.view", "View Users"],
     ["user.create", "Create User"],
     ["user.edit", "Edit User"],
+    ["business_division.view", "View Business Divisions"],
+    ["business_division.manage", "Manage Business Divisions"],
     ["user.delete", "Delete User"],
     ["inventory.view", "View Inventory"],
     ["inventory.movements.view", "View Stock Movements"],
@@ -1170,6 +1655,11 @@ export async function initializeDatabase(pool) {
     ["reports.till.view", "Till Report"],
     ["reports.vat.view", "Tax / VAT Report"],
     ["reports.summary.view", "Reports Summary"],
+    ["reports.custom.view", "View Custom Reports"],
+    ["reports.custom.create", "Create Custom Reports"],
+    ["reports.custom.edit", "Edit Custom Reports"],
+    ["reports.custom.delete", "Archive Custom Reports"],
+    ["reports.custom.share", "Share Custom Reports"],
     ["report.export", "Export Reports"],
     ["user.manage", "Manage Users"],
     ["role.manage", "Manage Roles"],
@@ -1181,12 +1671,23 @@ export async function initializeDatabase(pool) {
     ["online_orders.view", "View Online Orders"],
     ["online_orders.manage", "Manage Online Orders"],
     ["online_orders.configure", "Configure Online Platforms"],
+    /* Staff attendance (clock in/out). attendance.view gates the management
+     * records list; clock in/out itself is available to every active user. */
+    ["attendance.view", "View Staff Attendance"],
+    /* T10-AUDIT: central audit log access (Staff & Security -> Audit Log). */
+    ["audit.view", "View Audit Log"],
     /* T10Z - Combos / Meal Deals. Granular, matching the existing naming style. */
     ["combo.view", "View Combo / Meal Deals"],
     ["combo.create", "Create Combo / Meal Deals"],
     ["combo.edit", "Edit Combo / Meal Deals"],
     ["combo.delete", "Delete Combo / Meal Deals"],
     ["combo.activate", "Activate / Deactivate Combo / Meal Deals"]
+    ,["hospitality.tables.view", "View Hospitality Tables"]
+    ,["hospitality.tables.manage", "Manage Hospitality Floors and Tables"]
+    ,["hospitality.reservations.view", "View Hospitality Reservations"]
+    ,["hospitality.reservations.manage", "Manage Hospitality Reservations"]
+    ,["hospitality.kds.view", "View Kitchen Display"]
+    ,["hospitality.kds.manage", "Manage Kitchen Display Status"]
   ];
 
   for (const [code, name] of permissions) {
@@ -1398,6 +1899,45 @@ ON secure_invoice_links(company_id, created_at DESC);
       CONSTRAINT combo_deal_group_categories_unique UNIQUE (group_id, category_id)
     );
 
+    /* Server-authoritative price lists, customer groups, scheduled prices and promotions. */
+    CREATE TABLE IF NOT EXISTS customer_groups (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+      name VARCHAR(150) NOT NULL,
+      active BOOLEAN NOT NULL DEFAULT TRUE,
+      UNIQUE (company_id, name)
+    );
+    ALTER TABLE customers ADD COLUMN IF NOT EXISTS customer_group_id UUID REFERENCES customer_groups(id) ON DELETE SET NULL;
+    CREATE TABLE IF NOT EXISTS price_lists (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(), company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+      name VARCHAR(150) NOT NULL, channel VARCHAR(50) NOT NULL DEFAULT 'retail', active BOOLEAN NOT NULL DEFAULT TRUE,
+      UNIQUE (company_id, name)
+    );
+    CREATE TABLE IF NOT EXISTS price_list_prices (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(), price_list_id UUID NOT NULL REFERENCES price_lists(id) ON DELETE CASCADE,
+      product_id UUID NOT NULL REFERENCES products(id) ON DELETE CASCADE, price NUMERIC(12,2) NOT NULL CHECK (price >= 0),
+      UNIQUE (price_list_id, product_id)
+    );
+    ALTER TABLE customers ADD COLUMN IF NOT EXISTS price_list_id UUID REFERENCES price_lists(id) ON DELETE SET NULL;
+    CREATE TABLE IF NOT EXISTS scheduled_product_prices (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(), company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+      product_id UUID NOT NULL REFERENCES products(id) ON DELETE CASCADE, price NUMERIC(12,2) NOT NULL CHECK (price >= 0),
+      starts_at TIMESTAMPTZ NOT NULL, ends_at TIMESTAMPTZ, active BOOLEAN NOT NULL DEFAULT TRUE,
+      CHECK (ends_at IS NULL OR ends_at > starts_at)
+    );
+    CREATE TABLE IF NOT EXISTS promotions (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(), company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+      name VARCHAR(200) NOT NULL, discount_type VARCHAR(20) NOT NULL CHECK (discount_type IN ('percent','fixed')),
+      discount_value NUMERIC(12,2) NOT NULL CHECK (discount_value >= 0), starts_at TIMESTAMPTZ, ends_at TIMESTAMPTZ,
+      active BOOLEAN NOT NULL DEFAULT TRUE, product_id UUID REFERENCES products(id) ON DELETE CASCADE,
+      category_id UUID REFERENCES categories(id) ON DELETE CASCADE,
+      buy_quantity INTEGER CHECK (buy_quantity IS NULL OR buy_quantity > 0), get_quantity INTEGER CHECK (get_quantity IS NULL OR get_quantity >= 0),
+      offer_type VARCHAR(20) CHECK (offer_type IS NULL OR offer_type IN ('fixed_set','percent')),
+      set_price NUMERIC(12,2) CHECK (set_price IS NULL OR set_price >= 0),
+      discount_percent NUMERIC(5,2) CHECK (discount_percent IS NULL OR discount_percent BETWEEN 0 AND 100),
+      CHECK (ends_at IS NULL OR starts_at IS NULL OR ends_at > starts_at)
+    );
+
     CREATE INDEX IF NOT EXISTS idx_combo_group_categories_group
     ON combo_deal_group_categories(group_id);
 
@@ -1439,5 +1979,225 @@ ON secure_invoice_links(company_id, created_at DESC);
     ON sale_combo_applications(company_id, created_at DESC);
   `);
 
+    /*
+     * T10-ONLINE: Platform CHECK extended to support 'direct' platform
+     * (generic external client orders). Status CHECK extended with
+     * SELF_PICKUP/DELIVERY-specific statuses. Both use drop-and-recreate
+     * pattern for existing databases.
+     */
+    try {
+      await pool.query(`
+        ALTER TABLE platform_layouts ADD COLUMN IF NOT EXISTS is_default BOOLEAN NOT NULL DEFAULT FALSE;
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_platform_layouts_default_scope
+          ON platform_layouts(object_id, page_type, COALESCE(company_id, '00000000-0000-0000-0000-000000000000'::uuid))
+          WHERE is_default=true AND role_id IS NULL AND active=true;
+        ALTER TABLE online_orders
+          DROP CONSTRAINT IF EXISTS online_orders_platform_check;
+        ALTER TABLE online_orders
+          ADD CONSTRAINT online_orders_platform_check
+          CHECK (platform IN ('uber', 'deliveroo', 'direct'));
+      `);
+    } catch {
+      /* Constraint may already exist or table may not exist yet. */
+    }
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS hospitality_floors (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(), company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+        store_id UUID NOT NULL REFERENCES stores(id) ON DELETE CASCADE, name VARCHAR(100) NOT NULL,
+        display_order INTEGER NOT NULL DEFAULT 0, active BOOLEAN NOT NULL DEFAULT TRUE,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE (company_id, store_id, name)
+      );
+      CREATE TABLE IF NOT EXISTS hospitality_tables (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(), company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+        store_id UUID NOT NULL REFERENCES stores(id) ON DELETE CASCADE, floor_id UUID NOT NULL REFERENCES hospitality_floors(id) ON DELETE CASCADE,
+        table_number VARCHAR(30) NOT NULL, name VARCHAR(100), capacity INTEGER NOT NULL DEFAULT 2 CHECK (capacity > 0),
+        shape VARCHAR(20) NOT NULL DEFAULT 'square', position_x NUMERIC(8,2) NOT NULL DEFAULT 0, position_y NUMERIC(8,2) NOT NULL DEFAULT 0,
+        active BOOLEAN NOT NULL DEFAULT TRUE, status VARCHAR(20) NOT NULL DEFAULT 'EMPTY',
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE (company_id, store_id, floor_id, table_number)
+      );
+      CREATE TABLE IF NOT EXISTS hospitality_reservations (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(), company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+        store_id UUID NOT NULL REFERENCES stores(id) ON DELETE CASCADE, table_id UUID REFERENCES hospitality_tables(id) ON DELETE SET NULL,
+        customer_id UUID REFERENCES customers(id) ON DELETE SET NULL, customer_name VARCHAR(200) NOT NULL,
+        reservation_date DATE NOT NULL, reservation_time TIME NOT NULL, guests INTEGER NOT NULL CHECK (guests > 0),
+        status VARCHAR(20) NOT NULL DEFAULT 'RESERVED', notes TEXT, created_by UUID REFERENCES users(id) ON DELETE SET NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+      CREATE TABLE IF NOT EXISTS hospitality_kds_tickets (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(), company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+        store_id UUID NOT NULL REFERENCES stores(id) ON DELETE CASCADE, sale_id UUID, table_id UUID REFERENCES hospitality_tables(id) ON DELETE SET NULL,
+        order_number VARCHAR(50), items JSONB NOT NULL DEFAULT '[]'::jsonb, notes TEXT, station VARCHAR(100),
+        status VARCHAR(20) NOT NULL DEFAULT 'NEW', created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+      CREATE TABLE IF NOT EXISTS platform_reports (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(), object_id UUID NOT NULL REFERENCES platform_objects(id) ON DELETE CASCADE,
+        company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE, report_key VARCHAR(100) NOT NULL,
+        label VARCHAR(200) NOT NULL, description TEXT, config JSONB NOT NULL DEFAULT '{}'::jsonb,
+        active BOOLEAN NOT NULL DEFAULT TRUE, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE(company_id, report_key)
+      );
+      CREATE TABLE IF NOT EXISTS platform_apps (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(), company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+        app_key VARCHAR(100) NOT NULL, label VARCHAR(200) NOT NULL, description TEXT, config JSONB NOT NULL DEFAULT '{}'::jsonb,
+        active BOOLEAN NOT NULL DEFAULT TRUE, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE(company_id, app_key)
+      );
+      CREATE TABLE IF NOT EXISTS platform_pages (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(), app_id UUID NOT NULL REFERENCES platform_apps(id) ON DELETE CASCADE,
+        company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE, page_key VARCHAR(100) NOT NULL,
+        label VARCHAR(200) NOT NULL, route_path VARCHAR(200) NOT NULL DEFAULT '/', page_type VARCHAR(30) NOT NULL DEFAULT 'object',
+        definition JSONB NOT NULL DEFAULT '{}'::jsonb, active BOOLEAN NOT NULL DEFAULT TRUE,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE(app_id, page_key)
+      );
+      CREATE TABLE IF NOT EXISTS platform_automation_logs (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(), rule_id UUID REFERENCES platform_rules(id) ON DELETE SET NULL,
+        object_id UUID REFERENCES platform_objects(id) ON DELETE SET NULL, record_id UUID,
+        company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE, trigger VARCHAR(40) NOT NULL,
+        status VARCHAR(20) NOT NULL, details JSONB NOT NULL DEFAULT '{}'::jsonb,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+      CREATE TABLE IF NOT EXISTS platform_message_templates (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+        name VARCHAR(200) NOT NULL,
+        api_key VARCHAR(100) NOT NULL,
+        description TEXT,
+        channel VARCHAR(20) NOT NULL CHECK (channel IN ('EMAIL','SMS','WHATSAPP')),
+        object_id UUID REFERENCES platform_objects(id) ON DELETE SET NULL,
+        subject TEXT,
+        body TEXT NOT NULL,
+        active BOOLEAN NOT NULL DEFAULT TRUE,
+        created_by UUID REFERENCES users(id) ON DELETE SET NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE(company_id, api_key)
+      );
+      CREATE INDEX IF NOT EXISTS idx_platform_message_templates_company
+        ON platform_message_templates(company_id, active);
+      CREATE TABLE IF NOT EXISTS platform_action_jobs (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+        kind VARCHAR(100) NOT NULL,
+        payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+        status VARCHAR(20) NOT NULL DEFAULT 'PENDING',
+        attempts INTEGER NOT NULL DEFAULT 0,
+        last_error TEXT,
+        next_attempt_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        completed_at TIMESTAMPTZ,
+        idempotency_key VARCHAR(255) NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE(company_id, idempotency_key)
+      );
+      CREATE INDEX IF NOT EXISTS idx_platform_action_jobs_due
+        ON platform_action_jobs(status, next_attempt_at);
+      CREATE TABLE IF NOT EXISTS platform_notifications (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        company_id UUID REFERENCES companies(id) ON DELETE CASCADE,
+        user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+        title VARCHAR(200),
+        message TEXT NOT NULL,
+        status VARCHAR(20) NOT NULL DEFAULT 'UNREAD',
+        metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+      CREATE INDEX IF NOT EXISTS idx_platform_notifications_company
+        ON platform_notifications(company_id, created_at DESC);
+      CREATE TABLE IF NOT EXISTS platform_workflow_runs (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+        workflow_id UUID REFERENCES platform_rules(id) ON DELETE SET NULL,
+        workflow_name VARCHAR(200),
+        object_id UUID REFERENCES platform_objects(id) ON DELETE SET NULL,
+        record_id UUID,
+        trigger_key VARCHAR(100),
+        parent_run_id UUID REFERENCES platform_workflow_runs(id) ON DELETE SET NULL,
+        status VARCHAR(20) NOT NULL DEFAULT 'PENDING',
+        started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        completed_at TIMESTAMPTZ,
+        error_text TEXT,
+        metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+      CREATE INDEX IF NOT EXISTS idx_platform_workflow_runs_company
+        ON platform_workflow_runs(company_id, created_at DESC);
+      CREATE TABLE IF NOT EXISTS platform_workflow_step_runs (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        run_id UUID NOT NULL REFERENCES platform_workflow_runs(id) ON DELETE CASCADE,
+        step_identifier VARCHAR(200),
+        step_order INTEGER NOT NULL DEFAULT 0,
+        action_type VARCHAR(60),
+        status VARCHAR(20) NOT NULL DEFAULT 'PENDING',
+        started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        completed_at TIMESTAMPTZ,
+        error_text TEXT,
+        durable_job_id UUID REFERENCES platform_action_jobs(id) ON DELETE SET NULL,
+        child_run_id UUID REFERENCES platform_workflow_runs(id) ON DELETE SET NULL,
+        metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+      CREATE INDEX IF NOT EXISTS idx_platform_workflow_step_runs_run_order
+        ON platform_workflow_step_runs(run_id, step_order);
+      CREATE TABLE IF NOT EXISTS platform_workflow_compensation_runs (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        run_id UUID NOT NULL REFERENCES platform_workflow_runs(id) ON DELETE CASCADE,
+        step_run_id UUID REFERENCES platform_workflow_step_runs(id) ON DELETE SET NULL,
+        company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+        action_type VARCHAR(60),
+        status VARCHAR(20) NOT NULL,
+        error_text TEXT,
+        metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_platform_workflow_compensation_once
+        ON platform_workflow_compensation_runs(run_id, step_run_id);
+      CREATE TABLE IF NOT EXISTS platform_communication_deliveries (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+        store_id UUID REFERENCES stores(id) ON DELETE SET NULL,
+        channel VARCHAR(20) NOT NULL CHECK (channel IN ('EMAIL','SMS','WHATSAPP')),
+        template_id UUID REFERENCES platform_message_templates(id) ON DELETE SET NULL,
+        object_id UUID REFERENCES platform_objects(id) ON DELETE SET NULL,
+        record_id UUID,
+        recipient TEXT NOT NULL,
+        provider_name VARCHAR(100),
+        status VARCHAR(20) NOT NULL DEFAULT 'PENDING',
+        attempts INTEGER NOT NULL DEFAULT 0,
+        failure_reason TEXT,
+        provider_message_id VARCHAR(255),
+        triggered_by_rule UUID REFERENCES platform_rules(id) ON DELETE SET NULL,
+        attempted_at TIMESTAMPTZ,
+        sent_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+      CREATE INDEX IF NOT EXISTS idx_platform_communication_deliveries_company
+        ON platform_communication_deliveries(company_id, created_at DESC);
+    `);
+
+    try {
+      await pool.query(`
+        ALTER TABLE online_orders
+          DROP CONSTRAINT IF EXISTS online_orders_status_check;
+        ALTER TABLE online_orders
+          ADD CONSTRAINT online_orders_status_check
+          CHECK (status IN ('RECEIVED', 'ACCEPTED', 'PREPARING', 'READY', 'READY_FOR_PICKUP', 'READY_FOR_DELIVERY', 'COLLECTED', 'COMPLETED', 'REJECTED', 'CANCELLED'));
+      `);
+    } catch {
+      /* Constraint may already exist or table may not exist yet. */
+    }
+    /* Platform bootstrap: one hashed development Superadmin, never returned
+       by normal company-user APIs and safe to replace/remove after setup. */
+    await pool.query(
+      `INSERT INTO users (company_id,username,password_hash,full_name,is_superadmin)
+       VALUES (NULL,'superadmin',$1,'Platform Superadmin',TRUE)
+       ON CONFLICT (username) DO NOTHING`,
+      [await bcrypt.hash("marvel", 12)]
+    );
   console.log("onePOS: database ready");
 }

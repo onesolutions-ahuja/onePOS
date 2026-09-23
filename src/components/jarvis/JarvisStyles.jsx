@@ -22,19 +22,92 @@
  */
 
 export const JARVIS_STYLES = `
+/* -------------------------------------------------------- corner pocket */
+
+.jarvis-corner {
+  position: fixed;
+  z-index: 40;
+  left: 50%;
+  bottom: clamp(4px, 1vw, 10px);
+  transform: translateX(-50%);
+  width: max-content;
+  height: auto;
+  pointer-events: none;
+}
+.jarvis-corner > [data-testid="jarvis-orb-host"] {
+  position: fixed;
+  left: 50%;
+  bottom: max(40px, calc(env(safe-area-inset-bottom) + 40px));
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+.jarvis-corner.jarvis-dock-anchor {
+  position: absolute;
+  left: 50%;
+  bottom: 7px;
+  transform: translateX(-50%);
+  z-index: 2;
+}
+.jarvis-corner.jarvis-dock-anchor > [data-testid="jarvis-orb-host"] {
+  position: relative;
+  left: auto;
+  bottom: auto;
+  transform: none;
+}
+.jarvis-corner [data-testid="jarvis-orb"],
+.jarvis-corner [data-testid="jarvis-orb-label"],
+.jarvis-corner [data-testid="jarvis-orb-state"] {
+  pointer-events: auto;
+}
+
+/* The dock owns the embedded launcher. Its panel is a sibling overlay rather
+   than a child of the dock, so it can rise above the dock without being clipped
+   by the dock's scroll/overflow context. */
+.jarvis-panel-overlay {
+  z-index: 70;
+  pointer-events: none;
+}
+.jarvis-panel-overlay--dock {
+  align-items: flex-end;
+  justify-content: center;
+  padding: 0.75rem 0.75rem calc(76px + env(safe-area-inset-bottom));
+}
+.jarvis-panel-overlay--dock > .jarvis-panel-backdrop {
+  bottom: calc(76px + env(safe-area-inset-bottom));
+  pointer-events: auto;
+}
+.jarvis-panel-overlay--dock > [data-testid="jarvis-panel"] {
+  width: min(400px, calc(100vw - 1.5rem));
+  max-height: min(78dvh, calc(100dvh - 5.5rem - env(safe-area-inset-bottom)));
+  pointer-events: auto;
+}
+
 /* ------------------------------------------------------------- orb base */
 
 .jarvis-orb {
   position: relative;
-  width: 58px;
-  height: 58px;
+  width: var(--jarvis-orb-size);
+  height: var(--jarvis-orb-size);
   border-radius: 9999px;
-  background: radial-gradient(circle at 50% 45%, #0b2f2d 0%, #0d3b39 62%, #104744 100%);
+  background: radial-gradient(circle at 35% 24%, #effdff 0%, #83efff 12%, #29c9f3 28%, #3478e8 48%, #9253e9 72%, #182765 100%);
   box-shadow:
-    0 6px 18px rgba(13, 59, 57, 0.35),
-    0 0 22px rgba(34, 211, 238, 0.18),
-    inset 0 0 0 1px rgba(215, 236, 234, 0.2);
+    0 4px 14px rgba(12, 36, 83, 0.35),
+    0 0 24px rgba(77, 218, 255, 0.4),
+    inset 0 0 0 1px rgba(235, 253, 255, 0.6);
   transition: transform 180ms ease, box-shadow 180ms ease;
+}
+.jarvis-orb-container {
+  --jarvis-orb-size: 50px;
+  --jarvis-circle-size: calc(var(--jarvis-orb-size) * 1.2);
+  width: var(--jarvis-circle-size);
+  height: var(--jarvis-circle-size);
+  display: grid;
+  place-items: center;
+  flex: 0 0 var(--jarvis-circle-size);
+  border-radius: 9999px;
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  box-shadow: 0 5px 16px rgba(4, 26, 24, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.16);
 }
 .jarvis-orb:hover {
   transform: translateY(-1px) scale(1.05);
@@ -61,7 +134,7 @@ export const JARVIS_STYLES = `
   position: absolute;
   inset: -5px;
   border-radius: 9999px;
-  border: 1px solid rgba(34, 211, 238, 0.35);
+  border: 1px solid rgba(34, 211, 238, 0.5);
   opacity: 0.5;
   animation: jarvis-orb-halo 6.5s ease-in-out infinite;
 }
@@ -83,9 +156,13 @@ export const JARVIS_STYLES = `
   inset: 3px;
   border-radius: 9999px;
   overflow: hidden;
-  background: radial-gradient(circle at 40% 35%, #125a56 0%, #104744 55%, #0d3b39 100%);
-  box-shadow: inset 0 0 14px rgba(238, 247, 246, 0.22);
-  animation: jarvis-orb-hue 26s linear infinite;
+  background:
+    radial-gradient(circle at 34% 22%, rgba(255, 255, 255, 0.95) 0 4%, rgba(142, 245, 255, 0.75) 15%, transparent 35%),
+    radial-gradient(circle at 70% 76%, rgba(255, 74, 221, 0.78), transparent 48%),
+    radial-gradient(circle at 30% 72%, rgba(29, 178, 255, 0.84), transparent 54%),
+    #243b9b;
+  box-shadow: inset 0 0 14px rgba(238, 247, 246, 0.45);
+  animation: jarvis-orb-crystal 12s ease-in-out infinite alternate;
 }
 
 /* Flow layer 1 - the big teal plasma blob, orbiting an off-centre pivot so
@@ -97,9 +174,9 @@ export const JARVIS_STYLES = `
   left: -25%;
   top: -25%;
   border-radius: 50%;
-  background: radial-gradient(circle at 32% 30%, rgba(130, 193, 187, 0.95) 0%, rgba(79, 166, 158, 0.55) 38%, rgba(79, 166, 158, 0) 70%);
-  filter: blur(5px);
-  opacity: 0.9;
+  background: linear-gradient(168deg, transparent 28%, rgba(232, 255, 255, 0.96) 39%, rgba(36, 224, 255, 0.95) 46%, rgba(255, 92, 227, 0.92) 53%, rgba(131, 75, 255, 0.78) 61%, transparent 72%);
+  filter: blur(2px);
+  opacity: 0.92;
   transform-origin: 62% 58%;
   animation: jarvis-orb-orbit 16s linear infinite;
 }
@@ -113,9 +190,9 @@ export const JARVIS_STYLES = `
   left: -10%;
   top: -10%;
   border-radius: 50%;
-  background: radial-gradient(circle at 68% 66%, rgba(52, 211, 153, 0.6) 0%, rgba(16, 185, 129, 0.35) 45%, rgba(16, 185, 129, 0) 72%);
-  filter: blur(7px);
-  opacity: 0.75;
+  background: linear-gradient(12deg, transparent 28%, rgba(34, 203, 255, 0.82) 41%, rgba(255, 67, 212, 0.88) 49%, rgba(255, 239, 255, 0.82) 55%, transparent 69%);
+  filter: blur(3px);
+  opacity: 0.84;
   animation: jarvis-orb-drift 11s ease-in-out infinite alternate;
 }
 
@@ -147,6 +224,33 @@ export const JARVIS_STYLES = `
   filter: blur(9px);
   opacity: 0.65;
   animation: jarvis-orb-drift-alt 14s ease-in-out infinite alternate;
+}
+
+.jarvis-orb-core::before,
+.jarvis-orb-core::after {
+  content: "";
+  position: absolute;
+  inset: -35%;
+  border-radius: 50%;
+  pointer-events: none;
+}
+.jarvis-orb-core::before {
+  background: conic-gradient(
+    from 20deg,
+    transparent 0 28%,
+    rgba(63, 229, 255, 0.75) 34%,
+    rgba(255, 78, 221, 0.88) 40%,
+    transparent 48% 68%,
+    rgba(155, 93, 255, 0.7) 75%,
+    transparent 82%
+  );
+  filter: blur(4px);
+  animation: jarvis-orb-ribbon 7s linear infinite;
+}
+.jarvis-orb-core::after {
+  inset: 5%;
+  border: 1px solid rgba(232, 255, 255, 0.4);
+  box-shadow: inset 0 0 9px rgba(214, 250, 255, 0.35);
 }
 
 /* Rotating conic light sweep over the plasma. */
@@ -213,6 +317,7 @@ export const JARVIS_STYLES = `
   box-shadow: 0 0 6px rgba(34, 211, 238, 0.9);
   animation: jarvis-orb-spark 5s ease-in-out infinite;
 }
+
 /* ------------------------------------------------------------- states */
 
 /* Listening: brighter multi-colour flow, faster orbiting and an outward
@@ -251,6 +356,33 @@ export const JARVIS_STYLES = `
 .jarvis-orb--response .jarvis-orb-flow4 { animation-duration: 3.2s; }
 .jarvis-orb--response .jarvis-orb-spark { animation: jarvis-orb-spark 1.2s ease-in-out infinite; }
 
+/* ------------------------------------------------------ WebGL orb surface */
+
+/* The button remains the interaction surface; the transparent canvas carries
+   the dimensional knot so it can sit over any POS background. */
+.jarvis-orb {
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+  overflow: visible;
+}
+.jarvis-orb-video {
+  position: absolute;
+  inset: 0;
+  width: var(--jarvis-orb-size);
+  height: var(--jarvis-orb-size);
+  display: block;
+  pointer-events: none;
+  transform: none;
+  border-radius: 0;
+  filter:
+    drop-shadow(0 0 3px rgba(114, 221, 255, 0.55))
+    drop-shadow(0 3px 8px rgba(52, 24, 117, 0.28));
+}
+.jarvis-orb:hover {
+  box-shadow: none;
+}
+
 /* --------------------------------------------------------- keyframes */
 
 @keyframes jarvis-orb-sheen { to { transform: rotate(360deg); } }
@@ -276,6 +408,15 @@ export const JARVIS_STYLES = `
 }
 /* The continuous colour drift of the whole aurora (idle -> full spectrum). */
 @keyframes jarvis-orb-hue { to { filter: hue-rotate(360deg); } }
+@keyframes jarvis-orb-crystal {
+  0% { transform: scale(0.98); filter: saturate(0.95) brightness(0.95); }
+  50% { transform: scale(1.03); filter: saturate(1.3) brightness(1.12); }
+  100% { transform: scale(1); filter: saturate(1.08) brightness(1); }
+}
+@keyframes jarvis-orb-ribbon {
+  from { transform: rotate(0deg) scale(0.9); }
+  to { transform: rotate(360deg) scale(1.08); }
+}
 @keyframes jarvis-orb-halo { 0%, 100% { opacity: 0.28; transform: scale(0.99); } 50% { opacity: 0.6; transform: scale(1.04); } }
 @keyframes jarvis-orb-ring { 0% { opacity: 0.7; transform: scale(1); } 70% { opacity: 0; transform: scale(1.4); } 100% { opacity: 0; } }
 @keyframes jarvis-orb-listen { 0% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.45), 0 8px 22px rgba(13, 59, 57, 0.35); } 100% { box-shadow: 0 0 0 18px rgba(16, 185, 129, 0), 0 8px 22px rgba(13, 59, 57, 0.35); } }
@@ -323,7 +464,10 @@ export const JARVIS_STYLES = `
 }
 
 @media (max-width: 640px) {
-  .jarvis-orb { width: 52px; height: 52px; }
+  .jarvis-orb-container {
+    --jarvis-orb-size: 40px;
+  }
+  .jarvis-corner:not(.jarvis-dock-anchor) { bottom: max(4px, env(safe-area-inset-bottom)); }
 }
 `;
 

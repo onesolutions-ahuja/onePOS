@@ -65,9 +65,9 @@ describe('Superadmin Settings → Server / API Configuration', () => {
     assert.match(serverApiSettings, /Change Server/);
   });
 
-  test('Superadmin-only gating: isAdmin required to render ServerApiSettings', () => {
-    assert.match(settingsAdmin, /isAdmin && <ServerApiSettings/);
-    assert.match(settingsAdmin, /function SettingsAdmin\(\{ initialTab = "General", isAdmin = false \}\)/);
+  test('Superadmin-only gating: isSuperadmin required to render ServerApiSettings', () => {
+    assert.match(settingsAdmin, /isSuperadmin && <ServerApiSettings/);
+    assert.match(settingsAdmin, /function SettingsAdmin\(\{ initialTab = "General", isAdmin = false, isSuperadmin = false/);
   });
 
   test('AdminLayout passes isAdmin to SettingsAdmin', () => {
@@ -75,8 +75,8 @@ describe('Superadmin Settings → Server / API Configuration', () => {
   });
 
   test('non-Superadmin cannot access Server / API Configuration', () => {
-    const adminLine = settingsAdmin.match(/isAdmin && <ServerApiSettings[\s\S]*?\//);
-    assert.ok(adminLine, 'ServerApiSettings gated on isAdmin');
+    const adminLine = settingsAdmin.match(/isSuperadmin && <ServerApiSettings[\s\S]*?\//);
+    assert.ok(adminLine, 'ServerApiSettings gated on isSuperadmin');
   });
 });
 

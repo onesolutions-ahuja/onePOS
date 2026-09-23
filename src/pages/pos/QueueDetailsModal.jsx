@@ -9,6 +9,7 @@ import {
   retryAllFailed,
   subscribeQueue,
 } from "../../services/offlineQueue.js";
+import { PrintReceiptModal } from "./TillActionsModals.jsx";
 
 /*
  * T8G: queue details view. Shows what the till is holding offline and what
@@ -20,6 +21,7 @@ function QueueDetailsModal({ onClose }) {
   const [entries, setEntries] = useState(() => getQueueEntries());
   const [stats, setStats] = useState(() => getSyncStats());
   const [busy, setBusy] = useState(() => getQueueSnapshot().syncing);
+  const [viewSale, setViewSale] = useState(null);
 
   useEffect(() => {
     const refresh = () => {
@@ -63,6 +65,7 @@ function QueueDetailsModal({ onClose }) {
             </button>
           </div>
         )}
+        {viewSale && <PrintReceiptModal lastSale={viewSale} onClose={() => setViewSale(null)} />}
       </div>
     </div>
   );
@@ -102,10 +105,10 @@ function QueueList({ entries, busy }) {
       <div className="text-xs text-slate-500">{entry.createdAt ? new Date(entry.createdAt).toLocaleString() : "Time unavailable"} · {entry.itemCount} items · £{entry.total.toFixed(2)} · {entry.attempts} attempts</div>
       {entry.paymentUnverified && <p className="text-amber-800">Card payment unconfirmed. Not submitted; requires review.</p>}
       {entry.lastError && <p role="status" className="text-red-700">{entry.lastError}</p>}
+      {entry.saleId && <button data-testid="view-confirmed-receipt" onClick={() => setViewSale({ id: entry.saleId, receiptNumber: entry.receiptNumber || null, total: entry.total })}>View / print confirmed receipt</button>}
       {entry.status === "failed" && !entry.paymentUnverified && <button disabled={busy} onClick={() => retryFailedEntry(entry.id)} className="mt-2 px-3 py-1 bg-blue-50 text-blue-700 rounded disabled:opacity-50"><RotateCcw size={12} className="inline" /> Retry</button>}
     </div>)}
   </div>;
 }
 
 export default QueueDetailsModal;
-

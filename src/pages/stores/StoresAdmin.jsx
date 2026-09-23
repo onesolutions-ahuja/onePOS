@@ -1,3 +1,4 @@
+import PlatformExtensionFields from "../../components/platform/PlatformExtensionFields.jsx";
 import { useEffect, useState } from "react";
 import { Store, Plus, Edit, Trash2, RotateCcw, Archive, Loader2, AlertCircle, Check, MapPin, Phone } from "lucide-react";
 import { apiRequest } from "../../services/api.js";
@@ -27,7 +28,12 @@ import { Button, Input, Label, Card, CardHeader, Badge, EmptyState, Alert, Toggl
 const EMPTY_FORM = { name: "", code: "", addressLine1: "", city: "", postcode: "", phone: "" };
 
 export default function StoresAdmin() {
+  const [platform, setPlatform] = useState(null);
+  const [platformReady, setPlatformReady] = useState(false);
   const [stores, setStores] = useState([]);
+  const [divisions, setDivisions] = useState([]);
+  const [storeDivisions, setStoreDivisions] = useState({});
+  const [savingDivision, setSavingDivision] = useState("");
   const [stats, setStats] = useState({});
   const [loading, setLoading] = useState(true);
   /* Page-level error (loading) vs form-level error (saving) are separate so a
@@ -55,6 +61,7 @@ export default function StoresAdmin() {
     canCreate: false,
     canEdit: false,
     canDelete: false,
+    canManageDivisions: false,
   });
   const canManage = perm.canEdit || perm.canDelete || perm.canCreate;
 
@@ -70,6 +77,7 @@ export default function StoresAdmin() {
           canCreate: isAdmin || codes.includes("store.create"),
           canEdit: isAdmin || codes.includes("store.edit"),
           canDelete: isAdmin || codes.includes("store.delete"),
+          canManageDivisions: isAdmin || codes.includes("business_division.manage"),
         });
       })
       .catch(() => { /* Controls stay hidden; the API still enforces access. */ });
@@ -85,6 +93,23 @@ export default function StoresAdmin() {
       if (!data.success) throw new Error(data.message);
       const list = Array.isArray(data.data) ? data.data : [];
       setStores(list);
+      try {
+        const divisionResponse = await apiRequest("/api/business-divisions");
+        const divisionList = divisionResponse.success && Array.isArray(divisionResponse.data) ? divisionResponse.data : [];
+        setDivisions(divisionList);
+        const details = await Promise.all(divisionList.map((division) =>
+          apiRequest(`/api/business-divisions/${division.id}`).catch(() => null)
+        ));
+        const assignments = {};
+        details.forEach((response) => {
+          (response?.data?.stores || []).forEach((store) => { assignments[store.id] = response.data; });
+        });
+        setStoreDivisions(assignments);
+      } catch (divisionError) {
+        if (divisionError.status !== 401 && divisionError.status !== 403) {
+          console.error("Load business divisions error:", divisionError);
+        }
+      }
       /* Statistics are computed per store from the existing sales/inventory
          data. A failed stats call leaves that card's numbers unknown (null)
          instead of inventing values. */
@@ -107,6 +132,30 @@ export default function StoresAdmin() {
   };
 
   useEffect(() => { loadStores(); }, []);
+
+  const canManageDivisions = perm.canManageDivisions;
+
+  const assignDivision = async (store, divisionId) => {
+    setSavingDivision(store.id);
+    setError("");
+    try {
+      const result = await apiRequest(`/api/stores/${store.id}/business-division`, {
+        method: "PUT",
+        body: JSON.stringify({ businessDivisionId: divisionId || null }),
+      });
+      if (!result.success) throw new Error(result.message);
+      setStoreDivisions((current) => {
+        const next = { ...current };
+        if (!divisionId) delete next[store.id];
+        else next[store.id] = divisions.find((division) => division.id === divisionId);
+        return next;
+      });
+    } catch (err) {
+      setError(err.message || "Unable to assign business division");
+    } finally {
+      setSavingDivision("");
+    }
+  };
 
   const isActive = (store) => store.active !== false;
 
@@ -140,6 +189,7 @@ export default function StoresAdmin() {
 
   const handleSubmit = async (event) => {
     event.preventDefault();
+    if (!platformReady) return;
     if (!form.name.trim()) {
       setFormError("Store name is required");
       return;
@@ -148,6 +198,7 @@ export default function StoresAdmin() {
     setFormError("");
     try {
       const payload = {
+      platform,
         name: form.name.trim(),
         code: form.code,
         addressLine1: form.addressLine1,
@@ -308,7 +359,7 @@ export default function StoresAdmin() {
               </div>
             </div>
             <div className="flex gap-2 pt-2">
-              <Button type="submit" disabled={saving}>
+              <Button type="submit" disabled={saving || !platformReady}>
                 {saving ? <Loader2 size={14} className="animate-spin mr-1" /> : <Check size={14} className="mr-1" />}
                 {saving ? "Saving..." : editingStore ? "Update store" : "Create store"}
               </Button>
@@ -317,6 +368,7 @@ export default function StoresAdmin() {
             {formError ? (
               <div className="text-red-600 text-sm flex items-center gap-1"><AlertCircle size={14} />{formError}</div>
             ) : null}
+            <PlatformExtensionFields objectKey="store" recordId={editingId} coreValues={form} onChange={setPlatform} onReady={setPlatformReady} />
           </form>
         </Card>
       ) : null}
@@ -381,6 +433,26 @@ export default function StoresAdmin() {
                         </span>
                       </div>
                     ) : null}
+                    <div className="px-4 pb-3">
+                      <div className="text-xs text-slate-400 mb-1">Business Division</div>
+                      {canManageDivisions ? (
+                        <select
+                          value={storeDivisions[store.id]?.id || ""}
+                          onChange={(event) => assignDivision(store, event.target.value)}
+                          disabled={savingDivision === store.id}
+                          className="w-full h-9 px-2 border rounded bg-white text-sm disabled:opacity-50"
+                        >
+                          <option value="">No division</option>
+                          {divisions.filter((division) => division.active || division.id === storeDivisions[store.id]?.id).map((division) => (
+                            <option key={division.id} value={division.id}>{division.code} — {division.name}</option>
+                          ))}
+                        </select>
+                      ) : (
+                        <div className="text-sm text-slate-600">
+                          {storeDivisions[store.id] ? `${storeDivisions[store.id].code} — ${storeDivisions[store.id].name}` : "Not assigned"}
+                        </div>
+                      )}
+                    </div>
                     {store.phone ? (
                       <div className="flex items-center gap-1.5">
                         <Phone size={13} className="shrink-0 text-slate-400" />

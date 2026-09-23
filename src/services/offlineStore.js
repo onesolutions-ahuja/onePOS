@@ -249,7 +249,11 @@ export async function saveOfflineSession(user, permissions) {
     return writeJson(SESSION_KEY, {
       fingerprint, expiresAt: payload.exp * 1000,
       user: { id: user.id, companyId: user.companyId, storeId: user.storeId },
-      permissions: { isAdmin: permissions.isAdmin === true, permissions: (permissions.permissions || []).filter((code) => typeof code === "string" && code.startsWith("sale.")) },
+      permissions: {
+        isAdmin: permissions.isAdmin === true,
+        jarvesEnabled: permissions.jarvesEnabled === true,
+        permissions: (permissions.permissions || []).filter((code) => typeof code === "string" && code.startsWith("sale.")),
+      },
     });
   } catch { return false; }
 }
@@ -265,4 +269,3 @@ export async function loadOfflineSession() {
   } catch { return null; }
 }
 export function clearOfflineSession() { removeJson(SESSION_KEY); }
-

@@ -16,7 +16,7 @@ export default function CustomersReport({ from, to }) {
   const customers = data || [];
 
   if (loading) return <ReportTable title="Customers" headers={["Customer", "Transactions", "Spend", "Returns", "Net spend"]} rows={[]} />;
-  if (error) return <div className="p-6 text-sm text-slate-500 bg-white border rounded-xl">Unable to load customers: {error}</div>;
+  if (error) return <div className="onepos-alert onepos-alert-error">Unable to load customers: {error}</div>;
 
   return (
     <ReportTable

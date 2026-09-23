@@ -208,7 +208,7 @@ function InvoiceDeliverySettings({ channel, onMessage, onError }) {
     }
   };
 
-  if (loading) return <div className="p-8 text-center text-slate-400">Loading {config.label} settings...</div>;
+  if (loading) return <div className="onepos-empty"><span className="onepos-empty-title">Loading {config.label} settings…</span></div>;
   if (!state || !form) return null;
 
   const activationReady = testResult?.success === true && !credentialsChanged;
@@ -216,20 +216,20 @@ function InvoiceDeliverySettings({ channel, onMessage, onError }) {
 
   return (
     <div className="space-y-5 max-w-3xl">
-      <div className="bg-white border border-slate-200 rounded-xl p-5">
+      <div className="onepos-card onepos-card-body">
         <div className="flex items-center justify-between flex-wrap gap-3">
           <div className="flex items-center gap-2">
             <Icon size={18} className={config.accent} />
-            <h2 className="font-semibold">{config.label} invoice delivery</h2>
+            <h2 className="onepos-card-title">{config.label} invoice delivery</h2>
           </div>
           <div className="flex items-center gap-2">
-            <span className={`px-2 py-1 rounded-full text-xs font-medium ${enabled ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-500"}`}>
+            <span className={`onepos-badge ${enabled ? "onepos-badge-success" : "onepos-badge-neutral"}`}>
               {enabled ? "ON" : "OFF"}
             </span>
-            <span className={`px-2 py-1 rounded-full text-xs font-medium ${state.configured ? "bg-blue-50 text-blue-700" : "bg-slate-100 text-slate-500"}`}>
+            <span className={`onepos-badge ${state.configured ? "onepos-badge-info" : "onepos-badge-neutral"}`}>
               {state.configured ? "Configured" : "Not configured"}
             </span>
-            <button type="button" onClick={load} className="h-8 w-8 flex items-center justify-center border border-slate-200 rounded-lg text-slate-500 hover:bg-slate-50" title="Reload">
+            <button type="button" onClick={load} className="onepos-btn onepos-btn-sm onepos-btn-secondary" title="Reload">
               <RefreshCw size={14} />
             </button>
           </div>
@@ -241,12 +241,12 @@ function InvoiceDeliverySettings({ channel, onMessage, onError }) {
         </p>
       </div>
 
-      <div className="bg-white border border-slate-200 rounded-xl p-5">
-        <h3 className="font-semibold mb-4">Provider configuration</h3>
+      <div className="onepos-card onepos-card-body">
+        <h3 className="onepos-section-title">Provider configuration</h3>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           {config.fields.map(([formKey, cfgKey, label, required]) => (
-            <label key={formKey} className="text-sm text-slate-600">
-              <span className="block mb-1 font-medium">
+            <label key={formKey} className="onepos-label">
+              <span className="block mb-1">
                 {label}
                 {required ? <span className="text-red-400"> *</span> : null}
               </span>
@@ -257,13 +257,13 @@ function InvoiceDeliverySettings({ channel, onMessage, onError }) {
                 value={form[formKey] || ""}
                 placeholder={state[cfgKey] || ""}
                 onChange={(event) => update(formKey, event.target.value)}
-                className="w-full h-10 px-3 border border-slate-200 rounded-lg disabled:opacity-60"
+                className="onepos-input disabled:opacity-60"
               />
             </label>
           ))}
           {config.secretFields.map(([formKey, cfgKey, label]) => (
-            <label key={formKey} className="text-sm text-slate-600">
-              <span className="block mb-1 font-medium">
+            <label key={formKey} className="onepos-label">
+              <span className="block mb-1">
                 {label}
                 {tokenConfigured && state[`${cfgKey}_masked`] ? (
                   <span className="ml-2 text-xs text-emerald-600 font-normal">{state[`${cfgKey}_masked`]}</span>
@@ -276,7 +276,7 @@ function InvoiceDeliverySettings({ channel, onMessage, onError }) {
                 value={form[formKey] || ""}
                 placeholder={tokenConfigured ? "Leave blank to keep the stored value" : "Not set"}
                 onChange={(event) => onSecretChange(formKey, event.target.value)}
-                className="w-full h-10 px-3 border border-slate-200 rounded-lg disabled:opacity-60"
+                className="onepos-input disabled:opacity-60"
               />
             </label>
           ))}
@@ -287,7 +287,7 @@ function InvoiceDeliverySettings({ channel, onMessage, onError }) {
             type="button"
             onClick={runTest}
             disabled={testing}
-            className="h-9 px-4 border border-slate-300 rounded-lg text-sm hover:bg-slate-50 disabled:opacity-50 flex items-center gap-2"
+            className="onepos-btn onepos-btn-secondary"
           >
             <ShieldCheck size={15} />
             {testing ? "Testing connection… please wait" : "Test Connection"}
@@ -297,7 +297,7 @@ function InvoiceDeliverySettings({ channel, onMessage, onError }) {
               type="button"
               onClick={() => save(false)}
               disabled={saving}
-              className="h-9 px-4 bg-blue-600 text-white rounded-lg text-sm font-medium disabled:opacity-50 flex items-center gap-2"
+              className="onepos-btn onepos-btn-primary"
             >
               <Save size={15} /> {saving ? "Saving…" : "Save changes"}
             </button>
@@ -307,13 +307,13 @@ function InvoiceDeliverySettings({ channel, onMessage, onError }) {
               onClick={() => save(true)}
               disabled={!activationReady || saving}
               title={activationReady ? "Save and activate" : "Run a successful connection test first"}
-              className="h-9 px-4 bg-emerald-600 text-white rounded-lg text-sm font-medium disabled:opacity-40 disabled:cursor-not-allowed"
+              className="onepos-btn onepos-btn-primary"
             >
               {saving ? "Saving…" : "Save & Activate"}
             </button>
           )}
           {testResult && (
-            <span className={`text-sm font-medium ${testResult.success ? "text-emerald-700" : "text-red-700"}`}>
+            <span className={`onepos-alert ${testResult.success ? "onepos-alert-success" : " onepos-alert-error"} inline-flex`} role="status">
               {testResult.success ? "✓ " : "✕ "}
               {testResult.message}
             </span>
@@ -322,8 +322,8 @@ function InvoiceDeliverySettings({ channel, onMessage, onError }) {
         {testing && <p className="text-xs text-slate-500 mt-2">Testing connection… please wait. Configuration is locked while testing.</p>}
       </div>
 
-      <div className="bg-white border border-slate-200 rounded-xl p-5">
-        <h3 className="font-semibold mb-1">Automatic sending after sale</h3>
+      <div className="onepos-card onepos-card-body">
+        <h3 className="onepos-section-title">Automatic sending after sale</h3>
         <p className="text-xs text-slate-500 mb-3">
           When ON, every completed sale automatically sends the customer their invoice link (if the customer has a
           {channel === "sms" ? " phone number" : "n email address"}). When OFF, invoices are only sent manually from
@@ -334,7 +334,7 @@ function InvoiceDeliverySettings({ channel, onMessage, onError }) {
             value={state.auto_send_enabled ? "on" : "off"}
             disabled={saving || !enabled}
             onChange={(event) => toggleAutoSend(event.target.value === "on")}
-            className="h-9 px-3 border border-slate-200 rounded-lg text-sm disabled:opacity-50"
+            className="onepos-input w-auto disabled:opacity-50"
           >
             <option value="off">OFF — send nothing automatically</option>
             <option value="on">ON — send invoice to the customer after each sale</option>
@@ -343,8 +343,8 @@ function InvoiceDeliverySettings({ channel, onMessage, onError }) {
         </div>
       </div>
 
-      <div className="bg-white border border-slate-200 rounded-xl p-5">
-        <h3 className="font-semibold mb-1">Send real test message</h3>
+      <div className="onepos-card onepos-card-body">
+        <h3 className="onepos-section-title">Send real test message</h3>
         <p className="text-xs text-slate-500 mb-4">
           Sends a real {config.label} message with a secure invoice link to the demo recipient you enter — never a
           stored customer. Requires {config.label} delivery to be ON and one of your own sale IDs.
@@ -356,7 +356,7 @@ function InvoiceDeliverySettings({ channel, onMessage, onError }) {
             onChange={(event) => setTestRecipient(event.target.value)}
             placeholder={config.recipientPlaceholder}
             disabled={!enabled || testSendBusy}
-            className="h-9 px-3 border border-slate-200 rounded-lg text-sm w-64 disabled:opacity-50"
+            className="onepos-input w-64 disabled:opacity-50"
           />
           <input
             type="text"
@@ -364,20 +364,20 @@ function InvoiceDeliverySettings({ channel, onMessage, onError }) {
             onChange={(event) => setTestSaleId(event.target.value)}
             placeholder="Sale ID (required)"
             disabled={!enabled || testSendBusy}
-            className="h-9 px-3 border border-slate-200 rounded-lg text-sm w-64 disabled:opacity-50"
+            className="onepos-input w-64 disabled:opacity-50"
           />
           <button
             type="button"
             onClick={sendTestReal}
             disabled={!enabled || testSendBusy || !testRecipient || !testSaleId}
             title={!enabled ? `Activate ${config.label} delivery first` : "Send a real test message"}
-            className="h-9 px-4 bg-emerald-600 text-white rounded-lg text-sm font-medium disabled:opacity-40 disabled:cursor-not-allowed"
+            className="onepos-btn onepos-btn-primary"
           >
             {testSendBusy ? "Sending…" : "Send real test message"}
           </button>
         </div>
         {testSendResult && (
-          <p className={`text-sm mt-3 font-medium ${testSendResult.success ? "text-emerald-700" : "text-red-700"}`}>
+          <p className={`onepos-alert ${testSendResult.success ? "onepos-alert-success" : "onepos-alert-error"}`} role="status">
             {testSendResult.success ? `✓ Test message sent via ${config.label}.` : `✕ ${testSendResult.message}`}
           </p>
         )}

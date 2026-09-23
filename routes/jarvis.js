@@ -21,8 +21,9 @@ import express from "express";
 import { buildJarvisRequestContext } from "../services/jarvis/permissions.js";
 import { normalizeJarvisMessage, JARVIS_MAX_MESSAGE_LENGTH } from "../services/jarvis/service.js";
 import { JarvisError, JARVIS_ERROR_CODES, toJarvisError } from "../services/jarvis/errors.js";
+import { hasEntitlement } from "../services/licensing.js";
 
-export default function createJarvisRouter({ authenticate, jarvis, getRolePermissionCodes = null, jarvesAccess = null } = {}) {
+export default function createJarvisRouter({ authenticate, jarvis, getRolePermissionCodes = null, jarvesAccess = null, entitlementAccess = null } = {}) {
   if (typeof authenticate !== "function") {
     throw new Error("createJarvisRouter requires the existing authenticate middleware");
   }
@@ -64,6 +65,9 @@ export default function createJarvisRouter({ authenticate, jarvis, getRolePermis
 
     try {
       await requireJarvesEnabled(req.user);
+      if (typeof entitlementAccess === "function" && !hasEntitlement(await entitlementAccess(req.user.companyId), "jarvis")) {
+        throw new JarvisError(JARVIS_ERROR_CODES.JARVES_NOT_ENABLED);
+      }
       const context = await buildJarvisRequestContext(req.user, { getRolePermissionCodes });
       const result = await jarvis.ask({ message, context });
 

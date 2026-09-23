@@ -257,7 +257,6 @@ async function logDeliveryOutcome(
         JSON.stringify({
           outcome,
           trigger: trigger ?? "auto",
-          trigger: trigger ?? "auto",
           delivery_mode: deliveryMode ?? null,
           http_status: httpStatus ?? null,
           duration_ms: durationMs ?? null,

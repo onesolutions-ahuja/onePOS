@@ -3,6 +3,7 @@ import useReportData from "./shared/useReportData.js";
 import { getSummary, getSales, getProducts, getPayments } from "../../services/reports.js";
 import ReportHeader from "./ReportHeader.jsx";
 import SummaryCards from "./SummaryCards.jsx";
+import SalesReportsModule from "./SalesReportsModule.jsx";
 import SalesReport from "./SalesReport.jsx";
 import ProductsReport from "./ProductsReport.jsx";
 import PaymentsReport from "./PaymentsReport.jsx";
@@ -37,8 +38,8 @@ export default function ReportsAdmin() {
     "Unable to load reports"
   );
 
-  if (loading) return <div className="p-10 text-center text-slate-400">Loading reports...</div>;
-  if (error) return <div className="bg-white border rounded-xl p-8 max-w-xl"><h1 className="font-bold text-red-700">Unable to load reports</h1><p className="text-sm mt-2">{error}</p><button onClick={reload} className="mt-4 px-4 py-2 bg-blue-600 text-white rounded text-sm">Retry</button></div>;
+  if (loading) return <div className="onepos-empty">Loading reports...</div>;
+  if (error) return <div className="onepos-card onepos-card-body max-w-xl"><h1 className="onepos-section-title text-red-700">Unable to load reports</h1><p className="text-sm mt-2">{error}</p><button onClick={reload} className="onepos-btn onepos-btn-primary mt-4">Retry</button></div>;
 
   return (
     <div>
@@ -52,6 +53,7 @@ export default function ReportsAdmin() {
         onRun={reload}
       />
       <SummaryCards report={data.report} />
+      <SalesReportsModule from={from} to={to} />
       <div className="grid grid-cols-2 gap-5">
         <SalesReport daily={data.dailySales} />
         <PaymentsReport payments={data.payments} />

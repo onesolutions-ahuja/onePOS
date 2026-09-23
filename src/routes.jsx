@@ -21,6 +21,9 @@ import EcosystemPage from "./marketing/pages/EcosystemPage";
 import IndustryPage from "./marketing/pages/IndustryPage";
 import ResourcesPage from "./marketing/pages/ResourcesPage";
 import FAQPage from "./marketing/pages/FAQPage";
+import HelpCentrePage from "./marketing/pages/HelpCentrePage";
+import HelpCategoryPage from "./marketing/pages/HelpCategoryPage";
+import HelpArticlePage from "./marketing/pages/HelpArticlePage";
 
 /*
  * Legacy marketing URLs kept working so old links, the sitemap and search
@@ -79,6 +82,13 @@ export const MARKETING_PATHS = [
   "/ecosystem",
   "/resources",
   "/faq",
+  "/help",
+  "/help/getting-started",
+  "/help/tutorials",
+  "/help/troubleshooting",
+  "/help/training",
+  "/help/product-guides",
+  "/help/visual-guides",
   "/industry/retail",
   "/industry/convenience",
   "/industry/off-licence",
@@ -112,6 +122,9 @@ export function MarketingRoutes() {
         <Route path="industry/:sector" element={<IndustryPage />} />
         <Route path="resources" element={<ResourcesPage />} />
         <Route path="faq" element={<FAQPage />} />
+        <Route path="help" element={<HelpCentrePage />} />
+        <Route path="help/article/:slug" element={<HelpArticlePage />} />
+        <Route path="help/:category" element={<HelpCategoryPage />} />
 
         {/* Diagnostics — OfflineQueueDebug is read-only and device-local; it
             renders "(empty or not logged in)" when no session token exists,
