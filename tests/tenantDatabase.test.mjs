@@ -8,6 +8,7 @@ import {
   TENANT_DATABASE_UNAVAILABLE,
   tenantDatabaseDiagnostic,
   validateTenantSchema,
+  initializeTenantSchema,
   getRequestPool,
 } from "../services/tenantDatabase.js";
 
@@ -132,6 +133,39 @@ test("customer database outage fails without falling back to shared pool", async
 test("schema validation identifies a compatible customer database", async () => {
   const pool = new FakePool({});
   assert.equal(await validateTenantSchema(pool), "COMPATIBLE");
+});
+
+test("fresh bootstrap runs canonical schema before compatibility migrations", async () => {
+  const pool = {
+    queries: [],
+    schemaReady: false,
+    async query(sql) {
+      this.queries.push(sql);
+      if (sql.includes("to_regclass")) {
+        return {
+          rows: [this.schemaReady
+            ? { companies: "companies", products: "products", sales: "sales", migrations: null }
+            : { companies: null, products: null, sales: null, migrations: null }],
+        };
+      }
+      if (sql.includes("CREATE TABLE IF NOT EXISTS companies")) this.schemaReady = true;
+      return { rows: [] };
+    },
+  };
+  const state = await initializeTenantSchema(pool);
+  assert.equal(state, "COMPATIBLE");
+  assert.match(pool.queries[1], /CREATE TABLE IF NOT EXISTS companies/);
+  assert.match(pool.queries[2], /CREATE TABLE IF NOT EXISTS companies/);
+});
+
+test("partial bootstrap is classified for safe retry", async () => {
+  const pool = {
+    async query(sql) {
+      if (sql.includes("to_regclass")) return { rows: [{ companies: "companies", products: null, sales: null, migrations: null }] };
+      return { rows: [] };
+    },
+  };
+  assert.equal(await validateTenantSchema(pool), "MIGRATION_REQUIRED");
 });
 
 test("tenant database diagnostics retain only safe technical fields", () => {

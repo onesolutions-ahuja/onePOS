@@ -1,5 +1,7 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
 import { AsyncLocalStorage } from "node:async_hooks";
+import { readFile } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
 import { initializeDatabase } from "../database/init.js";
 import { resolveDatabaseMode } from "./tenantResolver.js";
 
@@ -50,12 +52,16 @@ export function sanitizeTenantDatabaseError(error) {
 
 export function tenantDatabaseDiagnostic(error) {
   const cause = error?.cause || error;
-  return {
+  const relationMatch = String(cause?.message || "").match(/relation "([^"]+)" does not exist/i);
+  const diagnostic = {
     code: cause?.code || "UNKNOWN",
     category: cause?.category || (cause?.code ? "postgresql" : "connection"),
-    errno: cause?.errno || undefined,
-    syscall: cause?.syscall || undefined,
   };
+  if (cause?.errno) diagnostic.errno = cause.errno;
+  if (cause?.syscall) diagnostic.syscall = cause.syscall;
+  if (relationMatch?.[1]) diagnostic.relation = relationMatch[1];
+  if (error?.step) diagnostic.step = error.step;
+  return diagnostic;
 }
 
 function connectionString(config, env = process.env) {
@@ -200,7 +206,7 @@ export async function validateTenantSchema(pool) {
     );
     const row = result.rows[0] || {};
     if (!row.companies && !row.products && !row.sales) return TENANT_SCHEMA_STATES.UNINITIALIZED;
-    if (!row.companies || !row.products || !row.sales) return TENANT_SCHEMA_STATES.UNSUPPORTED;
+    if (!row.companies || !row.products || !row.sales) return TENANT_SCHEMA_STATES.MIGRATION_REQUIRED;
     return TENANT_SCHEMA_STATES.COMPATIBLE;
   } catch {
     return TENANT_SCHEMA_STATES.UNSUPPORTED;
@@ -209,7 +215,24 @@ export async function validateTenantSchema(pool) {
 
 export async function initializeTenantSchema(pool) {
   const state = await validateTenantSchema(pool);
-  if (state !== TENANT_SCHEMA_STATES.UNINITIALIZED) return state;
-  await initializeDatabase(pool);
+  if (![TENANT_SCHEMA_STATES.UNINITIALIZED, TENANT_SCHEMA_STATES.MIGRATION_REQUIRED].includes(state)) return state;
+  const schemaPath = fileURLToPath(new URL("../database/schema.sql", import.meta.url));
+  try {
+    const canonicalSchema = await readFile(schemaPath, "utf8");
+    await pool.query(canonicalSchema);
+  } catch (error) {
+    const wrapped = sanitizeTenantDatabaseError(error);
+    wrapped.operation = "initialize_schema";
+    wrapped.step = "canonical_schema";
+    throw wrapped;
+  }
+  try {
+    await initializeDatabase(pool);
+  } catch (error) {
+    const wrapped = sanitizeTenantDatabaseError(error);
+    wrapped.operation = "initialize_schema";
+    wrapped.step = "compatibility_migrations";
+    throw wrapped;
+  }
   return validateTenantSchema(pool);
 }

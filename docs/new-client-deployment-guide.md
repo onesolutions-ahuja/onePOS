@@ -134,12 +134,25 @@ This is the correct target architecture, but full automated provisioning still n
 
 Each client database must run the same onePOS schema version.
 
-Planned requirements:
-- initialize a new tenant database
-- apply tenant schema migrations
-- detect version drift
-- safely upgrade out-of-date tenant databases
-- leave source data untouched during validation
+Initialization executes the canonical ordered schema in `database/schema.sql`
+before the additive compatibility migrations in `database/init.js`. This is
+important for a completely empty PostgreSQL database: indexes, constraints,
+alterations, and seed queries cannot run until their base tables exist.
+Initialization is idempotent and a partially initialized database is reported
+as `MIGRATION_REQUIRED`, allowing a later explicit Superadmin retry without
+dropping or recreating existing data.
+
+The lifecycle is:
+1. Save the Customer-Managed configuration
+2. Test Connection (connectivity only; no schema changes)
+3. Initialize Database (canonical schema, then compatibility migrations)
+4. Validate Schema
+5. Activate only after validation reports `COMPATIBLE`
+
+Initialization diagnostics log only the operation, company ID, PostgreSQL
+code/category, safe relation name when PostgreSQL provides one, and a
+bootstrap step (`canonical_schema` or `compatibility_migrations`). Passwords,
+connection strings, and other secrets are never returned or logged.
 
 This is intentionally conservative and avoids destructive migration.
 
