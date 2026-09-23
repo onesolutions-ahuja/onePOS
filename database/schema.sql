@@ -385,9 +385,6 @@ ON ean_product_master(ean);
 
 ALTER TABLE ean_product_master ADD COLUMN IF NOT EXISTS image_url TEXT NULL;
 
--- Product image (data URL or remote URL), set from the Product Master form
--- or pre-filled from the global catalogue. Additive; NULL = no image.
-ALTER TABLE products ADD COLUMN IF NOT EXISTS image_url TEXT NULL;
 ALTER TABLE ean_product_master ADD COLUMN IF NOT EXISTS source TEXT NULL;
 
 -- EAN lookup audit only; no limits, pricing or customer product changes.
@@ -433,6 +430,10 @@ CREATE TABLE IF NOT EXISTS products (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+-- Product image (data URL or remote URL), set from the Product Master form
+-- or pre-filled from the global catalogue. Additive; NULL = no image.
+ALTER TABLE products ADD COLUMN IF NOT EXISTS image_url TEXT NULL;
 
 CREATE INDEX IF NOT EXISTS idx_products_company
 ON products(company_id);
@@ -869,8 +870,6 @@ CREATE TABLE IF NOT EXISTS customer_groups (
     UNIQUE (company_id, name)
 );
 
-ALTER TABLE customers ADD COLUMN IF NOT EXISTS customer_group_id UUID REFERENCES customer_groups(id) ON DELETE SET NULL;
-
 CREATE TABLE IF NOT EXISTS price_lists (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
@@ -879,8 +878,6 @@ CREATE TABLE IF NOT EXISTS price_lists (
     active BOOLEAN NOT NULL DEFAULT TRUE,
     UNIQUE (company_id, name)
 );
-
-ALTER TABLE customers ADD COLUMN IF NOT EXISTS price_list_id UUID REFERENCES price_lists(id) ON DELETE SET NULL;
 
 CREATE TABLE IF NOT EXISTS price_list_prices (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -946,6 +943,10 @@ CREATE TABLE IF NOT EXISTS customers (
     credit_enabled BOOLEAN NOT NULL DEFAULT FALSE,
     credit_limit NUMERIC(12,2) NULL
 );
+
+ALTER TABLE customers ADD COLUMN IF NOT EXISTS customer_group_id UUID REFERENCES customer_groups(id) ON DELETE SET NULL;
+ALTER TABLE customers ADD COLUMN IF NOT EXISTS price_list_id UUID REFERENCES price_lists(id) ON DELETE SET NULL;
+
 CREATE INDEX IF NOT EXISTS idx_customers_company
 ON customers(company_id);
 
