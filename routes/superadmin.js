@@ -16,7 +16,7 @@ import {
   validateTenantSchema,
 } from "../services/tenantDatabase.js";
 
-export default function createSuperadminRouter({ authenticate, db, tenantDatabaseRouter, env = process.env }) {
+export default function createSuperadminRouter({ authenticate, db, pool, tenantDatabaseRouter, env = process.env }) {
   const router = express.Router();
   const requireSuperadmin = async (req, res, next) => {
     try {
@@ -229,33 +229,54 @@ export default function createSuperadminRouter({ authenticate, db, tenantDatabas
       return res.status(400).json({ success: false, message: "Customer database host, database and username are required" });
     }
     const existing = await tenantDatabaseRouter.loadConfig(req.params.id);
+    const incomingPort = Number(req.body?.port) || 5432;
+    const routingChanged = existing.database_mode !== mode
+      || (existing.host || null) !== (req.body.host || null)
+      || Number(existing.port || 5432) !== incomingPort
+      || (existing.database || null) !== (req.body.database || null)
+      || (existing.username || null) !== (req.body.username || null)
+      || (existing.ssl_mode || "require") !== (req.body.sslMode || "require")
+      || Boolean(req.body?.password);
     const encryptedPassword = req.body?.password
       ? encryptDatabaseSecret(req.body.password, env)
       : existing.password_ciphertext || null;
+    const nextActive = routingChanged ? false : existing.active === true;
+    const nextSchemaState = routingChanged
+      ? (mode === "ONEPOS_MANAGED" ? TENANT_SCHEMA_STATES.COMPATIBLE : TENANT_SCHEMA_STATES.UNINITIALIZED)
+      : (existing.schema_state || (mode === "ONEPOS_MANAGED" ? TENANT_SCHEMA_STATES.COMPATIBLE : TENANT_SCHEMA_STATES.UNINITIALIZED));
     await db(
       `INSERT INTO tenant_database_configs
        (company_id,database_mode,host,port,database_name,username,password_ciphertext,ssl_mode,active,schema_state,updated_by,updated_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,false,$9,$10,NOW())
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,NOW())
        ON CONFLICT (company_id) DO UPDATE SET
          database_mode=EXCLUDED.database_mode,host=EXCLUDED.host,port=EXCLUDED.port,
          database_name=EXCLUDED.database_name,username=EXCLUDED.username,
          password_ciphertext=COALESCE(EXCLUDED.password_ciphertext,tenant_database_configs.password_ciphertext),
-         ssl_mode=EXCLUDED.ssl_mode,active=false,schema_state=EXCLUDED.schema_state,
+         ssl_mode=EXCLUDED.ssl_mode,active=EXCLUDED.active,schema_state=EXCLUDED.schema_state,
          updated_by=EXCLUDED.updated_by,updated_at=NOW()`,
       [
         req.params.id,
         mode,
         req.body.host || null,
-        req.body.port || 5432,
+        incomingPort,
         req.body.database || null,
         req.body.username || null,
         encryptedPassword,
         req.body.sslMode || "require",
-        mode === "ONEPOS_MANAGED" ? TENANT_SCHEMA_STATES.COMPATIBLE : TENANT_SCHEMA_STATES.UNINITIALIZED,
+        nextActive,
+        nextSchemaState,
         req.user.id,
       ]
     );
-    res.json({ success: true, data: { databaseMode: mode, credentialsConfigured: Boolean(encryptedPassword), active: false } });
+    res.json({
+      success: true,
+      data: {
+        databaseMode: mode,
+        credentialsConfigured: Boolean(encryptedPassword),
+        active: nextActive,
+        schemaState: nextSchemaState,
+      },
+    });
   });
 
   router.post("/superadmin/companies/:id/database/test", async (req, res) => {

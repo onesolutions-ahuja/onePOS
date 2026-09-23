@@ -137,6 +137,10 @@ export default function LicensingAdmin() {
   };
 
   const runDatabaseAction = async (action, successMessage) => {
+    if (!databaseCompany) {
+      setError("Select a company before running this database action.");
+      return;
+    }
     setDatabaseBusy(true); setError(""); setMessage("");
     try {
       const result = await apiRequest(`/api/superadmin/companies/${databaseCompany}/database/${action}`, {
@@ -145,8 +149,10 @@ export default function LicensingAdmin() {
       });
       if (!result.success) throw new Error(result.message || `Unable to ${action.replace("-", " ")}`);
       setDatabaseConfig((current) => ({ ...current, ...(result.data || {}), schemaState: result.data?.schemaState || current?.schemaState }));
-      setMessage(successMessage(result.data));
-    } catch (err) { setError(err.message || "Database operation failed"); }
+      setMessage(successMessage(result.data) || `${action.replace("-", " ")} completed successfully.`);
+    } catch (err) {
+      setError(err.message || `Unable to ${action.replace("-", " ")}`);
+    }
     finally { setDatabaseBusy(false); }
   };
 
