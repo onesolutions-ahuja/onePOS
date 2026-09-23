@@ -7,6 +7,7 @@ import WhatsAppSettings from "./whatsapp/WhatsAppSettings.jsx";
 import InvoiceDeliverySettings from "./invoiceDeliverySettings.jsx";
 import { Toggle } from "../../components/ui.jsx";
 import UserFormModal from "./UserFormModal.jsx";
+import CompanyUsers from "../superadmin/CompanyUsers.jsx";
 import PlatformAdmin from "./PlatformAdmin.jsx";
 import MessageTemplatesAdmin from "./MessageTemplatesAdmin.jsx";
 import AppearancePreferences from "./AppearancePreferences.jsx";
@@ -227,7 +228,10 @@ setForm({
         {tab === "Customer Loyalty" && <LoyaltySettings settings={settings} form={form} setForm={setForm} onSave={saveSettings} />}
         {tab === "SMS Delivery" && <InvoiceDeliverySettings channel="sms" onMessage={setMessage} onError={setError} />}
         {tab === "Email Delivery" && <InvoiceDeliverySettings channel="email" onMessage={setMessage} onError={setError} />}
-        {tab === "Users" && <UsersSettings onMessage={setMessage} onError={setError} />}
+        {tab === "Users" && <>
+          {isSuperadmin && <CompanyUsers />}
+          <UsersSettings onMessage={setMessage} onError={setError} />
+        </>}
         {tab === "Roles & Permissions" && <RolesSettings onMessage={setMessage} onError={setError} />}
         {tab === "Users & Permissions" && <UsersPermissionsSettings onMessage={setMessage} onError={setError} />}
         {tab === "Receipts" && <ReceiptSettings settings={settings} form={form} setForm={setForm} onSave={saveSettings} />}

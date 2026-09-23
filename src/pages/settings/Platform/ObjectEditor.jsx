@@ -266,7 +266,7 @@ export default function ObjectEditor({
                 Relationships
               </button>
               <button type="button" className="platform-secondary-button" onClick={() => onNavigate?.("layouts")}>
-                Page Layouts
+                Forms
               </button>
               <button type="button" className="platform-secondary-button" onClick={() => onNavigate?.("rules")}>
                 Validation Rules

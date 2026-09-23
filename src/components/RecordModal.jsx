@@ -74,6 +74,10 @@ export default function RecordModal({
     onClose?.();
   }, [dirty, confirmDiscard, onClose]);
 
+  // Keep keyboard handlers current without restarting the open/close focus lifecycle.
+  const requestCloseRef = useRef(requestClose);
+  useEffect(() => { requestCloseRef.current = requestClose; }, [requestClose]);
+
   useEffect(() => {
     if (!open) return undefined;
     if (typeof document === "undefined") return undefined;
@@ -84,7 +88,7 @@ export default function RecordModal({
     const onKeyDown = (event) => {
       if (event.key === "Escape") {
         event.stopPropagation();
-        requestClose();
+        requestCloseRef.current();
         return;
       }
       if (event.key !== "Tab") return;
@@ -118,7 +122,7 @@ export default function RecordModal({
       const restore = restoreRef.current;
       if (restore && typeof restore.focus === "function") restore.focus();
     };
-  }, [open, requestClose]);
+  }, [open]);
 
   /* Lazy: nothing is mounted (or kept) while closed. */
   if (!open) return null;

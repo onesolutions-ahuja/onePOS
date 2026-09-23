@@ -98,7 +98,7 @@ test("provisioning a Company Admin does not change existing tenant routing state
       if (sql.includes("INSERT INTO roles")) return { rows: [{ id: "role-admin" }] };
       if (sql.includes("INSERT INTO users")) return { rows: [{
         id: "admin-1", company_id: "company-1", username: "admin@example.com", email: "admin@example.com",
-        full_name: "Company Administrator", must_change_password: true, is_superadmin: false,
+        full_name: "Company Administrator", must_change_password: false, is_superadmin: false,
       }] };
       if (sql.includes("tenant_database_configs")) configQueries.push(sql);
       return { rows: [] };

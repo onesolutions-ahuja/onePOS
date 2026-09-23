@@ -2,6 +2,8 @@ import React, { useEffect, useMemo, useState } from "react";
 import { apiRequest } from "../../../services/api.js";
 import ObjectSearch from "./ObjectSearch.jsx";
 import ObjectForm from "./ObjectForm.jsx";
+import FormRenderer from "./FormRenderer.jsx";
+import RecordModal from "../../../components/RecordModal.jsx";
 import ObjectHistory from "./ObjectHistory.jsx";
 
 function getObjectKey(object) {
@@ -162,6 +164,7 @@ export default function ObjectPage({
   const [fields, setFields] = useState([]);
   const [recordTypes, setRecordTypes] = useState([]);
   const [creating, setCreating] = useState(false);
+  const [quickCreating, setQuickCreating] = useState(false);
   const [selectedRecordTypeId, setSelectedRecordTypeId] = useState("");
   const [records, setRecords] = useState(
     suppliedRecord
@@ -173,6 +176,8 @@ export default function ObjectPage({
     useState(suppliedRecord || null);
   const [history, setHistory] = useState([]);
   const [detailLayout, setDetailLayout] = useState(null);
+  const [createLayout, setCreateLayout] = useState(null);
+  const [quickCreateLayout, setQuickCreateLayout] = useState(null);
   const [relatedLists, setRelatedLists] = useState({});
   const [editingRecord, setEditingRecord] = useState(false);
   const [executingAction, setExecutingAction] = useState("");
@@ -332,6 +337,12 @@ export default function ObjectPage({
     try {
       const response = await apiRequest(`/api/platform/layouts/effective?objectId=${encodeURIComponent(objectId)}&pageType=detail`);
       setDetailLayout(response?.data || null);
+      const [createResponse, quickResponse] = await Promise.all([
+        apiRequest(`/api/platform/layouts/effective?objectId=${encodeURIComponent(objectId)}&pageType=create`),
+        apiRequest(`/api/platform/layouts/effective?objectId=${encodeURIComponent(objectId)}&pageType=quick_create`),
+      ]);
+      setCreateLayout(createResponse?.data || null);
+      setQuickCreateLayout(quickResponse?.data || null);
     } catch {
       setDetailLayout(null);
     }
@@ -394,6 +405,7 @@ export default function ObjectPage({
       body: JSON.stringify({ data: { ...initialValues, ...values }, recordTypeId: creating?.childKey ? null : selectedRecordTypeId || null }),
     });
     setCreating(false);
+    setQuickCreating(false);
     await loadRecords();
     if (creating?.relationship) {
       const component = (detailLayout?.definition?.components || []).find((item) => item.relationship_key === creating.relationship.relationship_key);
@@ -598,7 +610,10 @@ export default function ObjectPage({
                 Metadata-driven read-only records
               </span>
             </div>
-            <button type="button" className="platform-secondary-button" onClick={() => setCreating((value) => !value)}>+ New Record</button>
+            <div className="flex gap-2">
+              <button type="button" className="platform-secondary-button" onClick={() => setQuickCreating(true)}>Quick Create</button>
+              <button type="button" className="platform-secondary-button" onClick={() => setCreating((value) => !value)}>+ New Record</button>
+            </div>
 
             {recordsLoading ? (
               <span className="platform-loading-label">
@@ -607,10 +622,24 @@ export default function ObjectPage({
             ) : null}
           </div>
           {creating ? (
+            <RecordModal open={Boolean(creating)} mode="create" title="Create record" size="lg" onClose={() => setCreating(false)} formId="platform-create-record-form">
             <div className="platform-create-record">
               {recordTypes.length ? <label className="platform-form-field"><span>Record Type</span><select value={selectedRecordTypeId} onChange={(event) => setSelectedRecordTypeId(event.target.value)}><option value="">No record type</option>{recordTypes.map((type) => <option key={type.id} value={type.id}>{type.label}{type.is_default ? " (default)" : ""}</option>)}</select></label> : null}
-              <ObjectForm fields={creating?.fields || activeFields} initialValues={creating?.initialValues || {}} onSubmit={createRecord} onCancel={() => setCreating(false)} submitLabel="Create Record" title="Create record" />
+              <ObjectForm formId="platform-create-record-form" showActions={false} fields={creating?.fields || activeFields} initialValues={creating?.initialValues || {}} onSubmit={createRecord} onCancel={() => setCreating(false)} submitLabel="Create Record" title="" />
             </div>
+            </RecordModal>
+          ) : null}
+          {quickCreating ? (
+            <RecordModal open mode="create" title="Quick Create" subtitle="Uses the active Quick Create form for this object." size="md" onClose={() => setQuickCreating(false)} formId="platform-quick-create-form">
+              <FormRenderer
+                formId="platform-quick-create-form"
+                definition={quickCreateLayout?.definition || createLayout?.definition || detailLayout?.definition}
+                fields={activeFields}
+                initialValues={{}}
+                mode="quick_create"
+                onSubmit={createRecord}
+              />
+            </RecordModal>
           ) : null}
 
           {records.length === 0 ? (
@@ -731,9 +760,11 @@ export default function ObjectPage({
                 </button>
               ))}
               {editingRecord ? (
-                <ObjectForm fields={activeFields} initialValues={selectedRecord} onSubmit={saveEditedRecord} onCancel={() => setEditingRecord(false)} submitLabel="Save Record" title="Edit record" />
+                <RecordModal open mode="edit" title="Edit record" size="lg" onClose={() => setEditingRecord(false)} formId="platform-edit-record-form">
+                  <FormRenderer formId="platform-edit-record-form" definition={createLayout?.definition || detailLayout?.definition} fields={activeFields} initialValues={selectedRecord} mode="edit" onSubmit={saveEditedRecord} />
+                </RecordModal>
               ) : null}
-              {activeFields.map((field) => {
+              {detailLayout ? <FormRenderer definition={detailLayout.definition} fields={activeFields} initialValues={selectedRecord} mode="view" /> : activeFields.map((field) => {
                 const value = getFieldValue(
                   selectedRecord,
                   field

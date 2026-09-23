@@ -464,7 +464,7 @@ export default function createAdminRouter({
       if (String(newPassword).length < 8) return res.status(400).json({ success: false, message: "New password must be at least 8 characters" });
       if (String(req.params.id) === String(req.user.id)) return res.status(400).json({ success: false, message: "Use change-password for your own account" });
       const hash = await bcrypt.hash(String(newPassword), 12);
-      const result = await db("UPDATE users SET password_hash=$1, must_change_password=TRUE, updated_at=NOW() WHERE id=$2 AND company_id=$3 RETURNING id, username", [hash, req.params.id, req.user.companyId]);
+      const result = await db("UPDATE users SET password_hash=$1, must_change_password=FALSE, updated_at=NOW() WHERE id=$2 AND company_id=$3 RETURNING id, username", [hash, req.params.id, req.user.companyId]);
       if (!result.rows.length) return res.status(404).json({ success: false, message: "User not found" });
       res.json({ success: true, message: "Password reset successfully", data: result.rows[0] });
     } catch (error) {

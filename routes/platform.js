@@ -23,7 +23,7 @@ import { getCompanyEntitlements, isPackageLicensed } from "../services/licensing
 import { resolvePageLayout } from "../services/platformLayoutResolver.js";
 
 const FIELD_TYPES = new Set(["text", "number", "decimal", "currency", "boolean", "date", "datetime", "email", "phone", "select", "picklist", "multiselect", "lookup", "formula", "rollup"]);
-const PAGE_TYPES = new Set(["list", "detail", "create", "edit"]);
+const PAGE_TYPES = new Set(["list", "detail", "view", "create", "edit", "quick_create"]);
 const RELATIONSHIP_TYPES = new Set(["lookup", "one_to_many", "many_to_many"]);
 const RELATIONSHIP_POLICIES = new Set(["restrict", "cascade", "set_null"]);
 
@@ -75,7 +75,19 @@ async function validateLayoutDefinition(db, definition, object, req) {
   );
   const allowedFields = new Set(fields.rows.map((field) => field.api_name));
   const sectionIds = new Set(sections.map((section) => section.id).filter(Boolean));
-  for (const component of components) {
+  if (sections.length !== sectionIds.size) return "Layout sections must have unique ids";
+  const componentIds = new Set();
+  for (const [index, component] of components.entries()) {
+    if (!component || typeof component !== "object") return "Layout contains an invalid component";
+    const componentId = String(component.id || `${component.type || "component"}-${component.field_key || index + 1}`);
+    if (componentIds.has(componentId)) return "Layout components must have unique ids";
+    componentIds.add(componentId);
+    if (component.type && !["field", "text", "divider", "spacer", "header", "action", "related_list"].includes(component.type)) {
+      return `Unsupported layout component type "${component.type}"`;
+    }
+    if (component.width && !["full", "1/2", "1/3", "2/3", "1/4"].includes(component.width)) {
+      return `Unsupported component width "${component.width}"`;
+    }
     if (component?.type !== "field") continue;
     if (typeof component.field_key !== "string" || !allowedFields.has(component.field_key)) {
       return `Field "${component?.field_key || ""}" does not belong to this object`;

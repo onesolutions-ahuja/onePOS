@@ -45,7 +45,7 @@ test("duplicate conflict message is safe and company-neutral", () => {
   assert.doesNotMatch(DUPLICATE_EMAIL_MESSAGE, /company-[a-z0-9-]+/i);
 });
 
-test("session carries mandatory first-login password change without superadmin elevation", () => {
+test("session makes password changes optional without superadmin elevation", () => {
   const token = createSessionToken({
     id: "user-1",
     company_id: "company-1",
@@ -54,4 +54,7 @@ test("session carries mandatory first-login password change without superadmin e
     must_change_password: true,
   });
   assert.ok(token);
+  const claims = JSON.parse(Buffer.from(token.split(".")[1], "base64url").toString());
+  assert.equal(claims.mustChangePassword, false);
+  assert.equal(claims.isSuperadmin, false);
 });

@@ -120,6 +120,21 @@ export default function createSuperadminRouter({ authenticate, db, pool, tenantD
     });
   });
 
+  router.get("/superadmin/companies/:id/users", async (req, res) => {
+    try {
+      const result = await db(
+        `SELECT u.id,u.full_name,u.email,u.username,u.active,r.name AS role_name
+           FROM users u LEFT JOIN roles r ON r.id=u.role_id AND r.company_id=u.company_id
+          WHERE u.company_id=$1 AND u.is_superadmin=false
+          ORDER BY u.full_name,u.email`,
+        [req.params.id]
+      );
+      res.json({ success: true, data: result.rows });
+    } catch {
+      res.status(500).json({ success: false, message: "Unable to load company users" });
+    }
+  });
+
   router.get("/superadmin/users/email-conflicts", async (req, res) => {
     const conflicts = await listDuplicateNormalizedEmails(db);
     res.json({
@@ -194,7 +209,7 @@ export default function createSuperadminRouter({ authenticate, db, pool, tenantD
       const userResult = await client.query(
         `INSERT INTO users
           (company_id,role_id,username,email,password_hash,full_name,must_change_password,is_superadmin)
-         VALUES ($1,$2,$3,$4,$5,'Company Administrator',TRUE,FALSE)
+         VALUES ($1,$2,$3,$4,$5,'Company Administrator',FALSE,FALSE)
          RETURNING id,company_id,username,email,full_name,must_change_password,is_superadmin`,
         [req.params.id, roleId, email, email, passwordHash]
       );
@@ -206,7 +221,7 @@ export default function createSuperadminRouter({ authenticate, db, pool, tenantD
           temporaryPasswordIssued: true,
           password: undefined,
         },
-        message: "Initial Company Admin provisioned. The temporary password must be changed at first login.",
+        message: "Initial Company Admin provisioned. The password can be changed from the account menu.",
       });
     } catch (error) {
       try { await client.query("ROLLBACK"); } catch {}

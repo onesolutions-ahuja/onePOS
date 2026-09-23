@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { apiRequest } from "../../services/api.js";
+import { databaseConfigurationPayload } from "../../services/tenantDatabaseForm.js";
 
 const DEFAULT_KEYS = ["pos", "inventory", "purchasing", "customers", "reports", "loyalty", "jarvis"];
 
@@ -107,7 +108,7 @@ export default function LicensingAdmin() {
       const normalizedEmail = clientAdminEmail.trim().toLowerCase();
       setClientAdminEmail(normalizedEmail);
       setDatabaseConfig((current) => ({ ...current, initialAdminEmail: normalizedEmail }));
-      setMessage("Initial Company Admin provisioned. Temporary password is marvel and must be changed at first login.");
+      setMessage("Initial Company Admin saved. Initial password is marvel. You can change it from the account menu.");
     } catch (err) { setError(err.message || "Unable to provision Company Admin"); }
     finally { setDatabaseBusy(false); }
   };
@@ -117,15 +118,7 @@ export default function LicensingAdmin() {
     try {
       const result = await apiRequest(`/api/superadmin/companies/${databaseCompany}/database`, {
         method: "PUT",
-        body: JSON.stringify({
-          databaseMode: databaseForm.databaseMode,
-          host: databaseForm.host,
-          port: Number(databaseForm.port) || 5432,
-          database: databaseForm.database,
-          username: databaseForm.username,
-          sslMode: databaseForm.sslMode,
-          ...(databaseForm.password ? {} : { password: undefined }),
-        }),
+        body: JSON.stringify(databaseConfigurationPayload(databaseForm)),
         signal: AbortSignal.timeout(30000),
       });
       if (!result.success) throw new Error(result.message || "Unable to save database configuration");
@@ -226,6 +219,12 @@ export default function LicensingAdmin() {
               </div>
             )}
             <div className="border-t border-slate-200 pt-4" data-testid="client-admin-provisioning">
+              {databaseConfig?.initialAdminEmail ? (
+                <div className="space-y-2">
+                  <p role="status">Company Admin saved: <strong>{databaseConfig.initialAdminEmail}</strong></p>
+                  <a className="onepos-btn onepos-btn-secondary" href={`/app/settings/users?companyId=${encodeURIComponent(databaseCompany)}`}>View in Users</a>
+                </div>
+              ) : <>
               <label className="text-sm text-slate-700" htmlFor="client-admin-email">Client Admin Email
                 <input id="client-admin-email" type="email" autoComplete="email" className="onepos-input mt-1 w-full" value={clientAdminEmail} onChange={(event) => setClientAdminEmail(event.target.value)} placeholder="client-admin@example.com" />
               </label>
@@ -233,6 +232,7 @@ export default function LicensingAdmin() {
               <button id="provision-client-admin" type="button" className="onepos-btn onepos-btn-secondary mt-3" onClick={provisionClientAdmin} disabled={databaseBusy || !clientAdminEmail.trim() || Boolean(databaseConfig?.initialAdminEmail)}>
                 {databaseConfig?.initialAdminEmail ? "Initial Company Admin configured" : "Provision initial Company Admin"}
               </button>
+              </>}
             </div>
             <div className="flex flex-wrap gap-2">
               <button type="button" className="onepos-btn onepos-btn-primary" onClick={saveDatabaseConfig} disabled={databaseBusy}>{databaseBusy ? "Saving..." : "Save configuration"}</button>

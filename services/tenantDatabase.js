@@ -170,6 +170,18 @@ export function createTenantDatabaseRouter({ controlPool, sharedPool, PoolFactor
   return { cache, loadConfig, resolveForCompany, getPoolForConfig, testExternalConfig, closeAll };
 }
 
+export function createAuthenticatedDatabaseMiddleware({ router, pool }) {
+  return async (req, res, next) => {
+    // Accounts and passwords live centrally, even for customer-managed companies.
+    if (req.path.startsWith("/api/auth/") || !router || req.user?.isSuperadmin === true) {
+      req.tenantDatabase = { companyId: req.user?.companyId || null, mode: "ONEPOS_MANAGED", pool };
+      req.tenantPool = pool;
+      return next();
+    }
+    return createRequestDatabaseMiddleware({ router })(req, res, next);
+  };
+}
+
 export function createRequestDatabaseMiddleware({ router }) {
   return async function requestDatabaseContext(req, res, next) {
     if (!req.user?.companyId) return next();

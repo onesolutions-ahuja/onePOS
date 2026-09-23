@@ -1,3 +1,4 @@
+import { createChangePasswordHandler } from "./services/changePassword.js";
 import "dotenv/config";
 import express from "express";
 import cors from "cors";
@@ -58,7 +59,7 @@ import { createJarvisTools } from "./services/jarvis/tools/index.js"; // JARVES 
 import { createJarvesAccessChecker } from "./services/jarvis/licensing.js"; // JARVES V2 - licence gate
 import { companyAdministrativeAccess, isPlatformSuperadmin, permissionAllows } from "./services/authorization.js";
 import { createTenantPoolManager, getRequestHostname, resolveTenantFromHostname } from "./services/tenantResolver.js";
-import { createTenantDatabaseRouter, createRequestDatabaseMiddleware, getRequestDatabaseContext, getRequestPool } from "./services/tenantDatabase.js";
+import { createTenantDatabaseRouter, createAuthenticatedDatabaseMiddleware, getRequestDatabaseContext, getRequestPool } from "./services/tenantDatabase.js";
 /* Inventory primitives live in services/inventory.js (shared with every
  * stock writer: POS sales, purchases, returns, adjustments). */
 import {
@@ -234,14 +235,7 @@ const writeAudit = createAuditWriter({ db });
 
 const createToken = createSessionToken;
 const authenticate = createAuthenticate({
-  onAuthenticated: async (req, res, next) => {
-    if (!tenantDatabaseRouter || req.user?.isSuperadmin === true) {
-      req.tenantDatabase = { companyId: req.user?.companyId || null, mode: "ONEPOS_MANAGED", pool };
-      req.tenantPool = pool;
-      return next();
-    }
-    return createRequestDatabaseMiddleware({ router: tenantDatabaseRouter })(req, res, next);
-  },
+  onAuthenticated: createAuthenticatedDatabaseMiddleware({ router: tenantDatabaseRouter, pool }),
 });
 
 /*
@@ -596,7 +590,7 @@ app.post("/api/auth/login", async (req, res) => {
         companyId: user.company_id,
         storeId: user.store_id,
         isSuperadmin: user.is_superadmin === true,
-        mustChangePassword: user.must_change_password === true,
+        mustChangePassword: false,
       },
     });
   } catch (error) {
@@ -654,7 +648,7 @@ app.get("/api/auth/me", authenticate, async (req, res) => {
         companyId: user.company_id,
         storeId: user.store_id,
         isSuperadmin: user.is_superadmin === true,
-        mustChangePassword: user.must_change_password === true,
+        mustChangePassword: false,
       },
     });
   } catch (error) {
@@ -800,82 +794,7 @@ app.put("/api/auth/me/preferences", authenticate, async (req, res) => {
 |--------------------------------------------------------------------------
 */
 
-app.post("/api/auth/change-password", authenticate, async (req, res) => {
-  try {
-    const { currentPassword, newPassword } = req.body;
-
-    if (!currentPassword || !newPassword) {
-      return res.status(400).json({
-        success: false,
-        message: "Current password and new password are required",
-      });
-    }
-
-    if (newPassword.length < 8) {
-      return res.status(400).json({
-        success: false,
-        message: "New password must be at least 8 characters",
-      });
-    }
-
-    // Fetch existing hash
-    const result = await db(
-      `
-      SELECT id, password_hash
-      FROM users
-      WHERE id = $1
-      LIMIT 1
-      `,
-      [req.user.id]
-    );
-
-    if (!result.rows.length) {
-      return res.status(404).json({
-        success: false,
-        message: "User not found",
-      });
-    }
-
-    const user = result.rows[0];
-
-    const validCurrent = await bcrypt.compare(
-      currentPassword,
-      user.password_hash
-    );
-
-    if (!validCurrent) {
-      return res.status(401).json({
-        success: false,
-        message: "Current password is incorrect",
-      });
-    }
-
-    // Reuse the same bcrypt hashing used at registration/login
-    const newPasswordHash = await bcrypt.hash(newPassword, 12);
-
-    await db(
-      `
-      UPDATE users
-      SET password_hash = $1
-          , must_change_password = FALSE
-      WHERE id = $2
-      `,
-      [newPasswordHash, user.id]
-    );
-
-    res.json({
-      success: true,
-      message: "Password updated successfully",
-    });
-  } catch (error) {
-    console.error("Change password error:", error);
-
-    res.status(500).json({
-      success: false,
-      message: "Unable to change password",
-    });
-  }
-});
+app.post("/api/auth/change-password", authenticate, createChangePasswordHandler({ db, bcrypt }));
 
 /*
 |--------------------------------------------------------------------------

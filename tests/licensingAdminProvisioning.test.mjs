@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
+import { databaseConfigurationPayload } from "../src/services/tenantDatabaseForm.js";
 
 const sourcePath = new URL("../src/pages/superadmin/LicensingAdmin.jsx", import.meta.url);
 
@@ -14,7 +15,24 @@ test("Superadmin licensing UI contains independent client-admin provisioning con
   assert.match(source, /finally \{\s*setDatabaseBusy\(false\);\s*\}/);
   assert.match(source, /signal:\s*AbortSignal\.timeout\(30000\)/);
   assert.match(source, /databaseConfig\?\.credentialsConfigured/);
-  assert.match(source, /\.\.\.\(databaseForm\.password \? \{\} : \{ password: undefined \}\)/);
+  assert.match(source, /JSON\.stringify\(databaseConfigurationPayload\(databaseForm\)\)/);
+});
+
+test("database save sends an entered password and omits a blank password to preserve saved credentials", () => {
+  const form = {
+    databaseMode: "CUSTOMER_MANAGED", host: "db.example", port: "5432",
+    database: "postgres", username: "tenant", sslMode: "require", password: "fixture-password",
+  };
+  const payload = JSON.parse(JSON.stringify(databaseConfigurationPayload(form)));
+  assert.equal(payload.password, "fixture-password");
+  assert.equal(payload.port, 5432);
+  assert.equal(form.password, "fixture-password");
+  const unchanged = JSON.parse(JSON.stringify(databaseConfigurationPayload({ ...form, password: "" })));
+  assert.equal(Object.hasOwn(unchanged, "password"), false);
+  assert.deepEqual(unchanged, {
+    databaseMode: "CUSTOMER_MANAGED", host: "db.example", port: 5432,
+    database: "postgres", username: "tenant", sslMode: "require",
+  });
 });
 
 test("provisioning code only submits the selected company and admin email", async () => {

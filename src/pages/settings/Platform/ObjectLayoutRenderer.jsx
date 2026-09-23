@@ -20,9 +20,11 @@ export default function ObjectLayoutRenderer({
     .filter((component) => component?.visible !== false)
     .map((component, index) => (
       <React.Fragment key={component?.id ?? `${sectionKey}-${index}`}>
-        {typeof renderComponent === "function"
-          ? renderComponent(component, context)
-          : null}
+        <div className={`object-layout-item object-layout-width-${String(component?.width || "full").replace("/", "-")}`}>
+          {typeof renderComponent === "function"
+            ? renderComponent(component, context)
+            : null}
+        </div>
       </React.Fragment>
     ));
 
@@ -32,7 +34,9 @@ export default function ObjectLayoutRenderer({
         ? sections.filter((section) => section?.visible !== false).map((section, sectionIndex) => {
           const items = Array.isArray(section.items)
             ? section.items
-            : Array.isArray(section.components) ? section.components : [];
+            : Array.isArray(section.components)
+              ? section.components
+              : components.filter((item) => item?.section_id === section.id);
           const columns = Number(section.columns) === 2 ? 2 : 1;
           const columnItems = columns === 2
             ? [
@@ -47,6 +51,19 @@ export default function ObjectLayoutRenderer({
                 {columnItems.map((column, columnIndex) => (
                   <div key={columnIndex} className="object-layout-column">
                     {renderItems(column, `${sectionIndex}-${columnIndex}`)}
+                    <style>{`
+                      .object-layout-columns { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:16px; }
+                      .object-layout-column { display:contents; }
+                      .object-layout-item { min-width:0; }
+                      .object-layout-width-full { grid-column:span 4; }
+                      .object-layout-width-1-2 { grid-column:span 2; }
+                      .object-layout-width-1-3,.object-layout-width-1-4 { grid-column:span 1; }
+                      .object-layout-width-2-3 { grid-column:span 3; }
+                      @media (max-width: 700px) {
+                        .object-layout-columns { grid-template-columns:1fr; }
+                        .object-layout-item { grid-column:span 1; }
+                      }
+                    `}</style>
                   </div>
                 ))}
               </div>

@@ -2,12 +2,15 @@ import React, { useEffect, useState } from "react";
 import { apiRequest } from "../../../services/api.js";
 import { toSafeApiName, withGeneratedApiName } from "./safeApiName.js";
 import PlatformFieldPicker from "./PlatformFieldPicker.jsx";
+import FormRenderer from "./FormRenderer.jsx";
+import { diagnoseFormDefinition } from "./formDefinition.js";
 
 const PAGE_TYPES = [
   { value: "list", label: "List" },
-  { value: "detail", label: "Detail" },
+  { value: "detail", label: "View Details" },
   { value: "create", label: "Create" },
   { value: "edit", label: "Edit" },
+  { value: "quick_create", label: "Quick Create" },
 ];
 
 const EMPTY_LAYOUT = {
@@ -102,10 +105,15 @@ export default function LayoutEditor({
     useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const [previewMode, setPreviewMode] = useState("");
 
   const layoutId =
     layout?.id ||
     layout?.layout_id;
+  const diagnostics = diagnoseFormDefinition({
+    sections: form.sections,
+    components: form.components,
+  }, fields);
 
   useEffect(() => {
     if (!objects?.length) {
@@ -205,7 +213,7 @@ export default function LayoutEditor({
 
   function addComponent(component) {
     const sectionId = form.sections[0]?.id || "section-1";
-    update("components", [...form.components, { ...component, section_id: sectionId }]);
+    update("components", [...form.components, { id: `${component.type || "component"}-${Date.now()}`, ...component, section_id: sectionId, order: form.components.length }]);
   }
 
   function addSection() {
@@ -273,6 +281,8 @@ export default function LayoutEditor({
         visible: true,
         required: false,
         width: "full",
+        id: `field-${fieldKey}-${Date.now()}`,
+        order: form.components.length,
         section_id: form.sections[0]?.id || "section-1",
       },
     ];
@@ -313,7 +323,7 @@ export default function LayoutEditor({
       next[index],
     ];
 
-    update("components", next);
+    update("components", next.map((component, order) => ({ ...component, order })));
   }
 
   function updateComponent(
@@ -333,6 +343,23 @@ export default function LayoutEditor({
       );
 
     update("components", next);
+  }
+
+  function dropComponent(targetIndex, event) {
+    event.preventDefault();
+    const sourceIndex = Number(event.dataTransfer.getData("text/plain"));
+    if (!Number.isInteger(sourceIndex) || sourceIndex === targetIndex || !form.components[sourceIndex]) return;
+    const next = [...form.components];
+    const [moved] = next.splice(sourceIndex, 1);
+    next.splice(targetIndex, 0, moved);
+    update("components", next.map((component, order) => ({ ...component, order })));
+  }
+
+  function dropOnSection(sectionId, event) {
+    event.preventDefault();
+    const sourceIndex = Number(event.dataTransfer.getData("text/plain"));
+    if (!Number.isInteger(sourceIndex) || !form.components[sourceIndex]) return;
+    update("components", form.components.map((component, index) => index === sourceIndex ? { ...component, section_id: sectionId } : component));
   }
 
   async function saveLayout(event) {
@@ -425,12 +452,39 @@ export default function LayoutEditor({
         >
           Cancel
         </button>
+        <button type="button" className="platform-secondary-button" onClick={() => setPreviewMode(previewMode ? "" : (form.page_type === "detail" ? "view" : form.page_type))}>
+          {previewMode ? "Close Preview" : "Preview"}
+        </button>
       </div>
 
       {error ? (
         <div className="platform-alert platform-alert-error">
           {error}
         </div>
+      ) : null}
+      {diagnostics.length ? (
+        <div className="platform-alert platform-alert-warning" role="status">
+          <strong>Configuration diagnostics</strong>
+          <ul>{diagnostics.map((issue, index) => <li key={`${issue.message}-${index}`}>{issue.severity}: {issue.message}</li>)}</ul>
+        </div>
+      ) : null}
+      {previewMode ? (
+        <section className="platform-layout-card">
+          <div className="platform-card-heading">
+            <h3>Runtime Preview</h3>
+            <label>Mode <select value={previewMode} onChange={(event) => setPreviewMode(event.target.value)}>
+              {PAGE_TYPES.filter((page) => page.value !== "list").map((page) => <option key={page.value} value={page.value}>{page.label}</option>)}
+            </select></label>
+          </div>
+          <div style={{ padding: 18 }}>
+            <FormRenderer
+              definition={{ sections: form.sections, components: form.components }}
+              fields={fields}
+              mode={previewMode}
+              initialValues={Object.fromEntries(fields.map((field) => [field.api_name || field.field_key || field.name, field.default_value ?? ""]))}
+            />
+          </div>
+        </section>
       ) : null}
 
       <form onSubmit={saveLayout}>
@@ -444,7 +498,7 @@ export default function LayoutEditor({
           </div>
           <div className="platform-component-list">
             {form.sections.map((section, index) => (
-              <div className="platform-component-row" key={section.id}>
+              <div className="platform-component-row" key={section.id} onDragOver={(event) => event.preventDefault()} onDrop={(event) => dropOnSection(section.id, event)}>
                 <div className="platform-component-position">{index + 1}</div>
                 <label>
                   <span>Section name</span>
@@ -756,6 +810,16 @@ export default function LayoutEditor({
           </div>
 
           <div className="platform-field-picker">
+            <div className="platform-component-picker" style={{ gridColumn: "1 / -1" }}>
+              {[
+                ["header", "Header", "New section heading"],
+                ["text", "Info text", "Add helpful context"],
+                ["divider", "Divider", "",],
+                ["spacer", "Spacer", "",],
+              ].map(([type, label, text]) => (
+                <button type="button" key={type} onClick={() => addComponent({ type, label, text, visible: true })}>Add {label}</button>
+              ))}
+            </div>
             {loadingFields ? (
               <div className="platform-muted">
                 Loading fields…
@@ -843,6 +907,10 @@ export default function LayoutEditor({
                     key={componentKey(
                       component
                     )}
+                    draggable
+                    onDragStart={(event) => event.dataTransfer.setData("text/plain", String(index))}
+                    onDragOver={(event) => event.preventDefault()}
+                    onDrop={(event) => dropComponent(index, event)}
                   >
                     <div className="platform-component-position">
                       {index + 1}
@@ -871,6 +939,21 @@ export default function LayoutEditor({
                         {form.sections.map((section) => <option key={section.id} value={section.id}>{section.label || section.id}</option>)}
                       </select>
                     </label>
+                    <label>
+                      <span>Width</span>
+                      <select value={component.width || "full"} onChange={(event) => updateComponent(index, "width", event.target.value)}>
+                        {["full", "1/2", "1/3", "2/3", "1/4"].map((width) => <option key={width} value={width}>{width}</option>)}
+                      </select>
+                    </label>
+                    {component.type === "field" ? (
+                      <>
+                        <label><span>Label</span><input value={component.label || ""} onChange={(event) => updateComponent(index, "label", event.target.value)} /></label>
+                        <label><span>Help text</span><input value={component.help_text || ""} onChange={(event) => updateComponent(index, "help_text", event.target.value)} /></label>
+                        <label><span>Placeholder</span><input value={component.placeholder || ""} onChange={(event) => updateComponent(index, "placeholder", event.target.value)} /></label>
+                        <label className="platform-inline-checkbox"><input type="checkbox" checked={component.required === true} onChange={(event) => updateComponent(index, "required", event.target.checked)} /><span>Required</span></label>
+                        <label className="platform-inline-checkbox"><input type="checkbox" checked={component.readOnly === true} onChange={(event) => updateComponent(index, "readOnly", event.target.checked)} /><span>Read-only</span></label>
+                      </>
+                    ) : null}
 
                     {component.type === "related_list" ? (
                       <>
@@ -961,19 +1044,17 @@ export default function LayoutEditor({
                         <option value="full">
                           Full
                         </option>
-                        <option value="half">
-                          Half
-                        </option>
-                        <option value="third">
-                          Third
-                        </option>
+                        <option value="1/2">1/2</option>
+                        <option value="1/3">1/3</option>
+                        <option value="2/3">2/3</option>
+                        <option value="1/4">1/4</option>
                       </select>
                     </label>
 
                     {component.type === "field" ? (
                       <>
                         <label className="platform-inline-checkbox">
-                          <input type="checkbox" checked={component.read_only === true} onChange={(event) => updateComponent(index, "read_only", event.target.checked)} />
+                          <input type="checkbox" checked={component.readOnly === true || component.read_only === true} onChange={(event) => updateComponent(index, "readOnly", event.target.checked)} />
                           <span>Read-only</span>
                         </label>
                         <label className="platform-inline-checkbox">

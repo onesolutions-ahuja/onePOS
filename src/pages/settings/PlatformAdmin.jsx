@@ -1,11 +1,11 @@
-import { useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import { apiRequest } from "../../services/api.js";
 import ObjectList from "./Platform/ObjectList.jsx";
 import ObjectEditor from "./Platform/ObjectEditor.jsx";
 import RelationshipList from "./Platform/RelationshipList.jsx";
 import RelationshipEditor from "./Platform/RelationshipEditor.jsx";
-import LayoutList from "./Platform/LayoutList.jsx";
-import LayoutEditor from "./Platform/LayoutEditor.jsx";
+const LayoutList = lazy(() => import("./Platform/LayoutList.jsx"));
+const LayoutEditor = lazy(() => import("./Platform/LayoutEditor.jsx"));
 import RuleList from "./Platform/RuleList.jsx";
 import RuleEditor from "./Platform/RuleEditor.jsx";
 import ObjectPage from "./Platform/ObjectPage.jsx";
@@ -133,8 +133,8 @@ export default function PlatformAdmin({ onMessage, onError }) {
     return <div className="space-y-4"><button type="button" onClick={() => setView(selectedObject ? "editor" : "objects")} className="text-sm text-slate-600">← {selectedObject ? "Object configuration" : "Platform objects"}</button><RelationshipList objectId={selectedObject?.id || selectedObject?.object_id} onNavigate={navigate} onMessage={onMessage} onError={onError} /></div>;
   }
 
-  if (view === "layouts-editor") return <LayoutEditor layout={selectedLayout} initialObjectId={selectedObject?.id || selectedObject?.object_id || ""} onCancel={() => setView("layouts")} onSave={() => { onMessage(selectedLayout ? "Layout updated." : "Layout created."); setView("layouts"); }} />;
-  if (view === "layouts") return <LayoutList objectId={selectedObject?.id || selectedObject?.object_id} onNew={() => navigate("new-layout")} onEdit={(layout) => navigate("edit-layout", layout)} onMessage={onMessage} onError={onError} onBack={() => setView(selectedObject ? "editor" : "objects")} />;
+  if (view === "layouts-editor") return <Suspense fallback={<div className="p-8 text-sm text-slate-500">Loading form builder…</div>}><LayoutEditor layout={selectedLayout} initialObjectId={selectedObject?.id || selectedObject?.object_id || ""} onCancel={() => setView("layouts")} onSave={() => { onMessage(selectedLayout ? "Form updated." : "Form created."); setView("layouts"); }} /></Suspense>;
+  if (view === "layouts") return <Suspense fallback={<div className="p-8 text-sm text-slate-500">Loading forms…</div>}><LayoutList objectId={selectedObject?.id || selectedObject?.object_id} onNew={() => navigate("new-layout")} onEdit={(layout) => navigate("edit-layout", layout)} onMessage={onMessage} onError={onError} onBack={() => setView(selectedObject ? "editor" : "objects")} /></Suspense>;
   if (view === "rules-editor") return <RuleEditor rule={selectedRule} initialObjectId={selectedObject?.id || selectedObject?.object_id || ""} onCancel={() => setView("rules")} onSave={() => { onMessage(selectedRule ? "Rule updated." : "Rule created."); setView("rules"); }} />;
   if (view === "rules") return <RuleList objectId={selectedObject?.id || selectedObject?.object_id} onNew={() => navigate("new-rule")} onEdit={(rule) => navigate("edit-rule", rule)} onBack={() => setView(selectedObject ? "editor" : "objects")} />;
   if (view === "value-sets") return <ValueSetList onBack={() => setView("objects")} onMessage={onMessage} onError={onError} />;

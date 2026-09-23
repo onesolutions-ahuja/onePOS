@@ -169,6 +169,8 @@ export default function ObjectForm({
   embedded = false,
   conditionFields = null,
   contextValues = null,
+  formId,
+  showActions = true,
 }) {
   const Container = embedded ? "div" : "form";
   const activeFields = useMemo(
@@ -546,6 +548,7 @@ export default function ObjectForm({
 
   return (
     <Container
+      id={formId}
       className="platform-object-form"
       onSubmit={embedded ? undefined : handleSubmit}
       noValidate={embedded ? undefined : true}
@@ -600,7 +603,7 @@ export default function ObjectForm({
             </button>
           ) : null}
 
-          {onSubmit ? (
+          {onSubmit && showActions ? (
             <button
               type="submit"
               className="platform-form-submit"
