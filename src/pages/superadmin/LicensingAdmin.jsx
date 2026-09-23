@@ -92,14 +92,21 @@ export default function LicensingAdmin() {
   };
 
   const provisionClientAdmin = async () => {
+    if (!databaseCompany || !clientAdminEmail.trim()) {
+      setError("Select a company and enter the client admin email.");
+      return;
+    }
     setDatabaseBusy(true); setError(""); setMessage("");
     try {
       const result = await apiRequest(`/api/superadmin/companies/${databaseCompany}/provision-admin`, {
         method: "POST",
         body: JSON.stringify({ email: clientAdminEmail }),
+        signal: AbortSignal.timeout(30000),
       });
       if (!result.success) throw new Error(result.message || "Unable to provision Company Admin");
-      setClientAdminEmail(clientAdminEmail.trim().toLowerCase());
+      const normalizedEmail = clientAdminEmail.trim().toLowerCase();
+      setClientAdminEmail(normalizedEmail);
+      setDatabaseConfig((current) => ({ ...current, initialAdminEmail: normalizedEmail }));
       setMessage("Initial Company Admin provisioned. Temporary password is marvel and must be changed at first login.");
     } catch (err) { setError(err.message || "Unable to provision Company Admin"); }
     finally { setDatabaseBusy(false); }
@@ -111,10 +118,15 @@ export default function LicensingAdmin() {
       const result = await apiRequest(`/api/superadmin/companies/${databaseCompany}/database`, {
         method: "PUT",
         body: JSON.stringify({
-          ...databaseForm,
+          databaseMode: databaseForm.databaseMode,
+          host: databaseForm.host,
           port: Number(databaseForm.port) || 5432,
+          database: databaseForm.database,
+          username: databaseForm.username,
+          sslMode: databaseForm.sslMode,
           ...(databaseForm.password ? {} : { password: undefined }),
         }),
+        signal: AbortSignal.timeout(30000),
       });
       if (!result.success) throw new Error(result.message || "Unable to save database configuration");
       setDatabaseConfig((current) => ({ ...current, ...result.data }));
@@ -127,7 +139,10 @@ export default function LicensingAdmin() {
   const runDatabaseAction = async (action, successMessage) => {
     setDatabaseBusy(true); setError(""); setMessage("");
     try {
-      const result = await apiRequest(`/api/superadmin/companies/${databaseCompany}/database/${action}`, { method: "POST" });
+      const result = await apiRequest(`/api/superadmin/companies/${databaseCompany}/database/${action}`, {
+        method: "POST",
+        signal: AbortSignal.timeout(30000),
+      });
       if (!result.success) throw new Error(result.message || `Unable to ${action.replace("-", " ")}`);
       setDatabaseConfig((current) => ({ ...current, ...(result.data || {}), schemaState: result.data?.schemaState || current?.schemaState }));
       setMessage(successMessage(result.data));
@@ -204,12 +219,12 @@ export default function LicensingAdmin() {
                 <span className="ml-4">Active: {databaseConfig.active ? "Yes" : "No"}</span>
               </div>
             )}
-            <div className="border-t border-slate-200 pt-4">
-              <label className="text-sm text-slate-700">Client Admin Email
-                <input type="email" autoComplete="email" className="onepos-input mt-1 w-full" value={clientAdminEmail} onChange={(event) => setClientAdminEmail(event.target.value)} placeholder="client-admin@example.com" />
+            <div className="border-t border-slate-200 pt-4" data-testid="client-admin-provisioning">
+              <label className="text-sm text-slate-700" htmlFor="client-admin-email">Client Admin Email
+                <input id="client-admin-email" type="email" autoComplete="email" className="onepos-input mt-1 w-full" value={clientAdminEmail} onChange={(event) => setClientAdminEmail(event.target.value)} placeholder="client-admin@example.com" />
               </label>
               <p className="text-xs text-slate-500 mt-1">Creates one Company Admin in the central identity database. Platform Superadmin access is never granted.</p>
-              <button type="button" className="onepos-btn onepos-btn-secondary mt-3" onClick={provisionClientAdmin} disabled={databaseBusy || !clientAdminEmail.trim() || Boolean(databaseConfig?.initialAdminEmail)}>
+              <button id="provision-client-admin" type="button" className="onepos-btn onepos-btn-secondary mt-3" onClick={provisionClientAdmin} disabled={databaseBusy || !clientAdminEmail.trim() || Boolean(databaseConfig?.initialAdminEmail)}>
                 {databaseConfig?.initialAdminEmail ? "Initial Company Admin configured" : "Provision initial Company Admin"}
               </button>
             </div>
