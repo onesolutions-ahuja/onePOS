@@ -191,6 +191,20 @@ Company Admin accounts remain company-scoped and cannot access these
 superadmin/database configuration endpoints. Normal client traffic still
 executes against the resolved tenant database and not a merged global database.
 
+For a new or existing company, Platform Developer Superadmin provisions the
+initial Company Admin from the company database-routing screen using the
+client's email address. The identity row is created in the central control
+plane and is bound to that company; no `superadmin@companyname` account is
+created. The temporary provisioning password is hashed, marked for mandatory
+first-login change, and never stored or logged in plaintext.
+
+User email uniqueness is normalized as `trim().toLowerCase()` and enforced by
+the central database unique index when the existing-data audit is clean. The
+Superadmin email-conflict report intentionally skips index creation if legacy
+duplicate normalized emails exist. Resolve those accounts one by one, without
+deleting or merging them automatically, then rerun initialization to create
+the index safely.
+
 ---
 
 ## K. Background jobs and task execution

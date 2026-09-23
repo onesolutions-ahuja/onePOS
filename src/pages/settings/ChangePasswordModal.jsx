@@ -13,7 +13,7 @@ import RecordModal from "../../components/RecordModal.jsx";
  * Chrome (overlay, header, footer, focus, Escape, unsaved-change protection,
  * desktop dialog vs mobile sheet) now comes from the shared RecordModal.
  */
-export default function ChangePasswordModal({ open, onClose }) {
+export default function ChangePasswordModal({ open, onClose, onChanged = null, required = false }) {
   const [form, setForm] = useState({ currentPassword: "", newPassword: "", confirmPassword: "" });
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
@@ -51,6 +51,7 @@ export default function ChangePasswordModal({ open, onClose }) {
       if (!data.success) throw new Error(data.message || "Unable to change password");
       setSuccess("Password changed successfully.");
       setForm({ currentPassword: "", newPassword: "", confirmPassword: "" });
+      onChanged?.();
     } catch (err) {
       /* Server-authoritative: stay open and surface the backend message. */
       setError(err.message || "Unable to change password");
@@ -70,7 +71,7 @@ export default function ChangePasswordModal({ open, onClose }) {
       saving={saving}
       formId="onepos-change-password-form"
       saveLabel="Save Password"
-      onClose={close}
+      onClose={required ? () => {} : close}
     >
       <form id="onepos-change-password-form" onSubmit={submit} className="space-y-3">
         {error && <div className="onepos-alert onepos-alert-error">{error}</div>}

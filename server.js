@@ -505,12 +505,13 @@ app.get("/api", (req, res) => {
 
 app.post("/api/auth/login", async (req, res) => {
   try {
-    const { username, password } = req.body;
+    const email = String(req.body?.email || req.body?.username || "").trim();
+    const { password } = req.body;
 
-    if (!username || !password) {
+    if (!email || !password) {
       return res.status(400).json({
         success: false,
-        message: "Username and password are required",
+        message: "Email and password are required",
       });
     }
 
@@ -534,13 +535,15 @@ app.post("/api/auth/login", async (req, res) => {
         u.role_id,
         u.active,
         u.is_superadmin,
+        u.must_change_password,
         r.name AS role_name
       FROM users u
       LEFT JOIN roles r ON r.id = u.role_id
-      WHERE LOWER(u.username) = LOWER($1)
+      WHERE LOWER(BTRIM(u.email)) = LOWER(BTRIM($1))
+         OR (u.email IS NULL AND LOWER(u.username) = LOWER(BTRIM($1)))
       LIMIT 1
       `,
-      [username.trim()]
+      [email]
     );
 
     if (!result.rows.length) {
@@ -593,6 +596,7 @@ app.post("/api/auth/login", async (req, res) => {
         companyId: user.company_id,
         storeId: user.store_id,
         isSuperadmin: user.is_superadmin === true,
+        mustChangePassword: user.must_change_password === true,
       },
     });
   } catch (error) {
@@ -622,6 +626,7 @@ app.get("/api/auth/me", authenticate, async (req, res) => {
         u.company_id,
         u.store_id,
         u.is_superadmin,
+        u.must_change_password,
         r.name AS role_name
       FROM users u
       LEFT JOIN roles r ON r.id = u.role_id
@@ -649,6 +654,7 @@ app.get("/api/auth/me", authenticate, async (req, res) => {
         companyId: user.company_id,
         storeId: user.store_id,
         isSuperadmin: user.is_superadmin === true,
+        mustChangePassword: user.must_change_password === true,
       },
     });
   } catch (error) {
@@ -851,6 +857,7 @@ app.post("/api/auth/change-password", authenticate, async (req, res) => {
       `
       UPDATE users
       SET password_hash = $1
+          , must_change_password = FALSE
       WHERE id = $2
       `,
       [newPasswordHash, user.id]

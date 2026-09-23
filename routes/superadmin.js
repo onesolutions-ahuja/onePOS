@@ -1,5 +1,13 @@
 import express from "express";
+import bcrypt from "bcryptjs";
 import { mergeEntitlements, normaliseEntitlements } from "../services/licensing.js";
+import {
+  DUPLICATE_EMAIL_MESSAGE,
+  findNormalizedEmailConflict,
+  isValidEmail,
+  listDuplicateNormalizedEmails,
+  normalizeEmail,
+} from "../services/userIdentity.js";
 import {
   encryptDatabaseSecret,
   initializeTenantSchema,
@@ -99,8 +107,117 @@ export default function createSuperadminRouter({ authenticate, db, tenantDatabas
         active: config.active,
         schemaState: config.schema_state || TENANT_SCHEMA_STATES.UNINITIALIZED,
         credentialsConfigured: Boolean(config.password_ciphertext),
+        initialAdminEmail: (await db(
+          `SELECT email FROM users
+             WHERE company_id=$1
+               AND is_superadmin=false
+               AND role_id IN (SELECT id FROM roles WHERE company_id=$1 AND LOWER(name) IN ('administrator','admin','owner'))
+             ORDER BY created_at
+             LIMIT 1`,
+          [req.params.id]
+        )).rows[0]?.email || null,
       },
     });
+  });
+
+  router.get("/superadmin/users/email-conflicts", async (req, res) => {
+    const conflicts = await listDuplicateNormalizedEmails(db);
+    res.json({
+      success: true,
+      data: conflicts,
+      migration: conflicts.length
+        ? "Review each duplicate, assign a unique normalized email, then rerun initialization to create the unique index. Do not delete or merge accounts automatically."
+        : "No normalized email conflicts found.",
+    });
+  });
+
+  router.post("/superadmin/companies/:id/provision-admin", async (req, res) => {
+    const email = normalizeEmail(req.body?.email);
+    if (!email || !isValidEmail(email)) {
+      return res.status(400).json({ success: false, message: "A valid client admin email is required" });
+    }
+    const client = await pool.connect();
+    try {
+      const companyResult = await client.query("SELECT id,name FROM companies WHERE id=$1", [req.params.id]);
+      if (!companyResult.rows.length) return res.status(404).json({ success: false, message: "Company not found" });
+
+      const existingAdmin = await client.query(
+        `SELECT u.id,u.email
+           FROM users u
+           JOIN roles r ON r.id=u.role_id
+          WHERE u.company_id=$1 AND u.is_superadmin=false
+            AND LOWER(r.name) IN ('administrator','admin','owner')
+          ORDER BY u.created_at
+          LIMIT 1`,
+        [req.params.id]
+      );
+      if (existingAdmin.rows.length) {
+        return res.status(409).json({
+          success: false,
+          code: "COMPANY_ADMIN_EXISTS",
+          message: "This company already has an initial Company Admin.",
+          data: { emailConfigured: Boolean(existingAdmin.rows[0].email) },
+        });
+      }
+
+      const conflict = await findNormalizedEmailConflict(
+        (query, params) => client.query(query, params),
+        email
+      );
+      if (conflict) return res.status(409).json({ success: false, code: "EMAIL_ALREADY_REGISTERED", message: DUPLICATE_EMAIL_MESSAGE });
+
+      await client.query("BEGIN");
+      const roleResult = await client.query(
+        `INSERT INTO roles (company_id,name,description,is_system_role)
+         VALUES ($1,'Administrator','Company-level administrative access',TRUE)
+         ON CONFLICT DO NOTHING
+         RETURNING id`,
+        [req.params.id]
+      );
+      let roleId = roleResult.rows[0]?.id;
+      if (!roleId) {
+        const existingRole = await client.query(
+          "SELECT id FROM roles WHERE company_id=$1 AND LOWER(name)='administrator' ORDER BY created_at LIMIT 1",
+          [req.params.id]
+        );
+        roleId = existingRole.rows[0]?.id;
+      }
+      if (!roleId) throw new Error("Unable to create Company Admin role");
+
+      await client.query(
+        `INSERT INTO role_permissions (role_id,permission_id)
+         SELECT $1,id FROM permissions
+         ON CONFLICT DO NOTHING`,
+        [roleId]
+      );
+      const passwordHash = await bcrypt.hash("marvel", 12);
+      const userResult = await client.query(
+        `INSERT INTO users
+          (company_id,role_id,username,email,password_hash,full_name,must_change_password,is_superadmin)
+         VALUES ($1,$2,$3,$4,$5,'Company Administrator',TRUE,FALSE)
+         RETURNING id,company_id,username,email,full_name,must_change_password,is_superadmin`,
+        [req.params.id, roleId, email, email, passwordHash]
+      );
+      await client.query("COMMIT");
+      return res.status(201).json({
+        success: true,
+        data: {
+          ...userResult.rows[0],
+          temporaryPasswordIssued: true,
+          password: undefined,
+        },
+        message: "Initial Company Admin provisioned. The temporary password must be changed at first login.",
+      });
+    } catch (error) {
+      try { await client.query("ROLLBACK"); } catch {}
+      if (error.code === "23505") {
+        return res.status(409).json({ success: false, code: "EMAIL_ALREADY_REGISTERED", message: DUPLICATE_EMAIL_MESSAGE });
+      }
+      console.error("Company Admin provisioning error:", { companyId: req.params.id, code: error.code || "UNKNOWN" });
+      return res.status(500).json({ success: false, message: "Unable to provision initial Company Admin" });
+    } finally {
+      client.release();
+    }
   });
 
   router.put("/superadmin/companies/:id/database", async (req, res) => {

@@ -303,6 +303,26 @@ export async function initializeDatabase(pool) {
     ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS jarves_licence_users INTEGER NOT NULL DEFAULT 0;
     ALTER TABLE users ADD COLUMN IF NOT EXISTS jarves_enabled BOOLEAN NOT NULL DEFAULT FALSE;
     ALTER TABLE users ADD COLUMN IF NOT EXISTS is_superadmin BOOLEAN NOT NULL DEFAULT FALSE;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS must_change_password BOOLEAN NOT NULL DEFAULT FALSE;
+    DO $$
+    DECLARE duplicate_count INTEGER;
+    BEGIN
+      SELECT COUNT(*) INTO duplicate_count
+        FROM (
+          SELECT lower(btrim(email))
+            FROM users
+           WHERE email IS NOT NULL AND btrim(email) <> ''
+           GROUP BY lower(btrim(email))
+          HAVING COUNT(*) > 1
+        ) duplicates;
+      IF duplicate_count = 0 THEN
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_users_global_email_normalized
+          ON users (lower(btrim(email)))
+          WHERE email IS NOT NULL AND btrim(email) <> '';
+      ELSE
+        RAISE WARNING 'Skipping global user email uniqueness index: % normalized duplicate email group(s) require migration', duplicate_count;
+      END IF;
+    END $$;
 
     /*
      * USER PREFERENCES (onePOS Admin presentation).
@@ -2194,9 +2214,10 @@ ON secure_invoice_links(company_id, created_at DESC);
     /* Platform bootstrap: one hashed development Superadmin, never returned
        by normal company-user APIs and safe to replace/remove after setup. */
     await pool.query(
-      `INSERT INTO users (company_id,username,password_hash,full_name,is_superadmin)
-       VALUES (NULL,'superadmin',$1,'Platform Superadmin',TRUE)
-       ON CONFLICT (username) DO NOTHING`,
+      `INSERT INTO users (company_id,username,email,password_hash,full_name,is_superadmin)
+       VALUES (NULL,'superadmin','superadmin@onepos.local',$1,'Platform Superadmin',TRUE)
+       ON CONFLICT (username) DO UPDATE
+       SET email = COALESCE(users.email, EXCLUDED.email)`,
       [await bcrypt.hash("marvel", 12)]
     );
   console.log("onePOS: database ready");

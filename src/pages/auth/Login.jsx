@@ -27,7 +27,7 @@ import { apiRequest } from "../../services/api.js";
  *     configuration.
  */
 export default function Login({ onLogin, sessionMessage = "", onStartSelfCheckout = null, scoStarting = false, scoError = "" }) {
-  const [username, setUsername] = useState("");
+  const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [deviceKey, setDeviceKey] = useState("");
@@ -36,8 +36,8 @@ export default function Login({ onLogin, sessionMessage = "", onStartSelfCheckou
   const login = async () => {
     setError("");
 
-    if (!username.trim() || !password) {
-      setError("Enter your username and password");
+    if (!email.trim() || !password) {
+      setError("Enter your email and password");
       return;
     }
 
@@ -45,7 +45,7 @@ export default function Login({ onLogin, sessionMessage = "", onStartSelfCheckou
       const data = await apiRequest("/api/auth/login", {
         method: "POST",
         body: JSON.stringify({
-          username: username.trim(),
+          email: email.trim(),
           password,
         }),
       });
@@ -109,10 +109,11 @@ export default function Login({ onLogin, sessionMessage = "", onStartSelfCheckou
             >
               <input
                 autoFocus
-                value={username}
-                onChange={(event) => setUsername(event.target.value)}
-                placeholder="Username"
-                autoComplete="username"
+                type="email"
+                value={email}
+                onChange={(event) => setEmail(event.target.value)}
+                placeholder="Email"
+                autoComplete="email"
                 className="w-full h-12 px-3 border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-blue-500"
               />
               <input

@@ -24,6 +24,7 @@ export default function LicensingAdmin() {
     sslMode: "require",
   });
   const [databaseBusy, setDatabaseBusy] = useState(false);
+  const [clientAdminEmail, setClientAdminEmail] = useState("");
 
   const load = async () => {
     try {
@@ -84,9 +85,24 @@ export default function LicensingAdmin() {
         password: "",
         sslMode: data.sslMode || "require",
       });
+      setClientAdminEmail(data.initialAdminEmail || "");
     } catch (err) {
       setError(err.message || "Unable to load database configuration");
     }
+  };
+
+  const provisionClientAdmin = async () => {
+    setDatabaseBusy(true); setError(""); setMessage("");
+    try {
+      const result = await apiRequest(`/api/superadmin/companies/${databaseCompany}/provision-admin`, {
+        method: "POST",
+        body: JSON.stringify({ email: clientAdminEmail }),
+      });
+      if (!result.success) throw new Error(result.message || "Unable to provision Company Admin");
+      setClientAdminEmail(clientAdminEmail.trim().toLowerCase());
+      setMessage("Initial Company Admin provisioned. Temporary password is marvel and must be changed at first login.");
+    } catch (err) { setError(err.message || "Unable to provision Company Admin"); }
+    finally { setDatabaseBusy(false); }
   };
 
   const saveDatabaseConfig = async () => {
@@ -188,6 +204,15 @@ export default function LicensingAdmin() {
                 <span className="ml-4">Active: {databaseConfig.active ? "Yes" : "No"}</span>
               </div>
             )}
+            <div className="border-t border-slate-200 pt-4">
+              <label className="text-sm text-slate-700">Client Admin Email
+                <input type="email" autoComplete="email" className="onepos-input mt-1 w-full" value={clientAdminEmail} onChange={(event) => setClientAdminEmail(event.target.value)} placeholder="client-admin@example.com" />
+              </label>
+              <p className="text-xs text-slate-500 mt-1">Creates one Company Admin in the central identity database. Platform Superadmin access is never granted.</p>
+              <button type="button" className="onepos-btn onepos-btn-secondary mt-3" onClick={provisionClientAdmin} disabled={databaseBusy || !clientAdminEmail.trim() || Boolean(databaseConfig?.initialAdminEmail)}>
+                {databaseConfig?.initialAdminEmail ? "Initial Company Admin configured" : "Provision initial Company Admin"}
+              </button>
+            </div>
             <div className="flex flex-wrap gap-2">
               <button type="button" className="onepos-btn onepos-btn-primary" onClick={saveDatabaseConfig} disabled={databaseBusy}>{databaseBusy ? "Saving..." : "Save configuration"}</button>
               {databaseForm.databaseMode === "CUSTOMER_MANAGED" && <>

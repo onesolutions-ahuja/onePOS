@@ -24,6 +24,7 @@ export function createSessionToken(user, userStores = []) {
       storeId: user.store_id,
       roleId: user.role_id,
       isSuperadmin: user.is_superadmin === true,
+      mustChangePassword: user.must_change_password === true,
       username: user.username,
       assignedStoreIds: userStores.map(us => us.store_id),
     },
@@ -51,6 +52,13 @@ export function createAuthenticate({ onAuthenticated = null } = {}) {
 
     try {
       req.user = jwt.verify(token, JWT_SECRET);
+      if (req.user.mustChangePassword === true && !req.path.endsWith("/auth/change-password")) {
+        return res.status(403).json({
+          success: false,
+          code: "PASSWORD_CHANGE_REQUIRED",
+          message: "Password change required before continuing",
+        });
+      }
       if (!onAuthenticated) return next();
       return Promise.resolve(onAuthenticated(req, res, next)).catch((error) => next(error));
     } catch {

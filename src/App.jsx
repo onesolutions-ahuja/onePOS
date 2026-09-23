@@ -9,6 +9,7 @@ import POS from "./pages/pos/POS.jsx";
 import AdminLayout from "./pages/admin/AdminLayout.jsx";
 import SelfCheckout from "./pages/selfCheckout/SelfCheckout.jsx";
 import JarvisCorner from "./components/jarvis/JarvisCorner.jsx";
+import ChangePasswordModal from "./pages/settings/ChangePasswordModal.jsx";
 
 export default function App() {
   const [loggedIn, setLoggedIn] = useState(false);
@@ -303,6 +304,12 @@ export default function App() {
           onLogout={logout}
           initialPage={adminInitialPage}
         />
+        <ChangePasswordModal
+          open={user?.mustChangePassword === true}
+          required
+          onClose={() => {}}
+          onChanged={() => setUser((current) => ({ ...current, mustChangePassword: false }))}
+        />
       </>
     );
   }
@@ -332,6 +339,12 @@ export default function App() {
         scoStarting={scoStarting}
         scoError={scoError}
         onLogout={logout}
+      />
+      <ChangePasswordModal
+        open={user?.mustChangePassword === true}
+        required
+        onClose={() => {}}
+        onChanged={() => setUser((current) => ({ ...current, mustChangePassword: false }))}
       />
       <JarvisCorner />
     </>

@@ -270,10 +270,12 @@ CREATE TABLE IF NOT EXISTS users (
        is enforced by services/jarvis/licensing.js (never above the allowance). */
     jarves_enabled BOOLEAN NOT NULL DEFAULT FALSE,
     is_superadmin BOOLEAN NOT NULL DEFAULT FALSE,
+    must_change_password BOOLEAN NOT NULL DEFAULT FALSE,
     last_login_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
 
 CREATE INDEX IF NOT EXISTS idx_users_company
 ON users(company_id);

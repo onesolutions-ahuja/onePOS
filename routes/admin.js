@@ -1,5 +1,6 @@
 import { withDomainSave } from "../services/platformDomainRecords.js";
 import express from "express";
+import { DUPLICATE_EMAIL_MESSAGE, normalizeEmail } from "../services/userIdentity.js";
 import {
   JARVES_ALLOWANCE_RESULTS,
   getJarvesLicenceState,
@@ -405,7 +406,8 @@ export default function createAdminRouter({
    */
   router.post("/admin/users", authenticate, authorize("user.create"), async (req, res) => {
     if (!(await hasCompanyAdminAccess(req))) return res.status(403).json({ success: false, message: "Administrator permission required" });
-    const { username, fullName, email = null, password, roleId = null, storeId = null } = req.body;
+    const { username, fullName, password, roleId = null, storeId = null } = req.body;
+    const email = normalizeEmail(req.body?.email);
     if (!username || !fullName || !password) return res.status(400).json({ success: false, message: "Username, full name and password are required" });
     try {
       const assignment = await db(
@@ -420,7 +422,7 @@ export default function createAdminRouter({
       const hash = await bcrypt.hash(password, 12);
       const result = await withDomainSave({ pool, db, savePlatformRecord, key: "employee", req, write: (db) => db("INSERT INTO users (company_id,store_id,role_id,username,password_hash,full_name,email) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id,username,full_name,email,active,store_id,role_id", [req.user.companyId, storeId || null, roleId || null, String(username).trim().toLowerCase(), hash, String(fullName).trim(), email || null]) });
       res.status(201).json({ success: true, data: result.rows[0] });
-    } catch (error) { if (error.code === "PLATFORM_RECORD_INVALID") return res.status(error.status).json({ success: false, code: error.code, message: error.message }); res.status(error.code === "23505" ? 409 : 500).json({ success: false, message: error.code === "23505" ? "Username already exists" : "Unable to create user" }); }
+    } catch (error) { if (error.code === "PLATFORM_RECORD_INVALID") return res.status(error.status).json({ success: false, code: error.code, message: error.message }); res.status(error.code === "23505" ? 409 : 500).json({ success: false, code: error.code === "23505" ? "EMAIL_ALREADY_REGISTERED" : undefined, message: error.code === "23505" ? DUPLICATE_EMAIL_MESSAGE : "Unable to create user" }); }
   });
 
   /*
@@ -438,13 +440,13 @@ export default function createAdminRouter({
       );
       if (!assignment.rows[0].valid_role || !assignment.rows[0].valid_store) return res.status(400).json({ success: false, message: "Role or store does not belong to this company" });
       const passwordClause = req.body.password ? ", password_hash = $8" : "";
-      const params = [req.body.fullName, req.body.email || null, req.body.roleId || null, req.body.storeId || null, req.body.active !== false, req.params.id, req.user.companyId];
+      const params = [req.body.fullName, normalizeEmail(req.body.email), req.body.roleId || null, req.body.storeId || null, req.body.active !== false, req.params.id, req.user.companyId];
       if (req.body.password) params.push(await bcrypt.hash(req.body.password, 12));
       const result = await withDomainSave({ pool, db, savePlatformRecord, key: "employee", req, id: req.params.id, write: (db) => db(`UPDATE users SET full_name=$1,email=$2,role_id=$3,store_id=$4,active=$5,updated_at=NOW()${passwordClause} WHERE id=$6 AND company_id=$7 RETURNING id,username,full_name,email,active,store_id,role_id`, params) });
       if (!result.rows.length) return res.status(404).json({ success: false, message: "User not found" });
       res.json({ success: true, data: result.rows[0] });
     } catch (error) { if (error.code === "PLATFORM_RECORD_INVALID") return res.status(error.status).json({ success: false, code: error.code, message: error.message });
-      res.status(500).json({ success: false, message: "Unable to update user" });
+      res.status(error.code === "23505" ? 409 : 500).json({ success: false, code: error.code === "23505" ? "EMAIL_ALREADY_REGISTERED" : undefined, message: error.code === "23505" ? DUPLICATE_EMAIL_MESSAGE : "Unable to update user" });
     }
   });
 
@@ -462,7 +464,7 @@ export default function createAdminRouter({
       if (String(newPassword).length < 8) return res.status(400).json({ success: false, message: "New password must be at least 8 characters" });
       if (String(req.params.id) === String(req.user.id)) return res.status(400).json({ success: false, message: "Use change-password for your own account" });
       const hash = await bcrypt.hash(String(newPassword), 12);
-      const result = await db("UPDATE users SET password_hash=$1, updated_at=NOW() WHERE id=$2 AND company_id=$3 RETURNING id, username", [hash, req.params.id, req.user.companyId]);
+      const result = await db("UPDATE users SET password_hash=$1, must_change_password=TRUE, updated_at=NOW() WHERE id=$2 AND company_id=$3 RETURNING id, username", [hash, req.params.id, req.user.companyId]);
       if (!result.rows.length) return res.status(404).json({ success: false, message: "User not found" });
       res.json({ success: true, message: "Password reset successfully", data: result.rows[0] });
     } catch (error) {
