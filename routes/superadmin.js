@@ -4,6 +4,7 @@ import {
   encryptDatabaseSecret,
   initializeTenantSchema,
   TENANT_SCHEMA_STATES,
+  tenantDatabaseDiagnostic,
   validateTenantSchema,
 } from "../services/tenantDatabase.js";
 
@@ -144,18 +145,14 @@ export default function createSuperadminRouter({ authenticate, db, tenantDatabas
     try {
       const config = await tenantDatabaseRouter.loadConfig(req.params.id);
       if (config.database_mode !== "CUSTOMER_MANAGED") return res.json({ success: true, data: { status: "SKIPPED", message: "Company uses onePOS Managed storage" } });
-      const override = {
-        ...config,
-        host: req.body?.host || config.host,
-        port: req.body?.port || config.port,
-        database: req.body?.database || config.database,
-        username: req.body?.username || config.username,
-        password_ciphertext: req.body?.password ? encryptDatabaseSecret(req.body.password, env) : config.password_ciphertext,
-        ssl_mode: req.body?.sslMode || config.ssl_mode,
-      };
-      await tenantDatabaseRouter.testExternalConfig(override);
+      await tenantDatabaseRouter.testExternalConfig(config);
       return res.json({ success: true, data: { status: "CONNECTED" } });
-    } catch {
+    } catch (error) {
+      console.error("Tenant database operation failed", {
+        operation: "test_connection",
+        companyId: req.params.id,
+        ...tenantDatabaseDiagnostic(error),
+      });
       return res.status(503).json({ success: false, code: "TENANT_DATABASE_UNAVAILABLE", message: "Unable to connect to customer database" });
     }
   });
@@ -167,7 +164,12 @@ export default function createSuperadminRouter({ authenticate, db, tenantDatabas
       const schemaState = await validateTenantSchema(pool);
       await db("UPDATE tenant_database_configs SET schema_state=$1 WHERE company_id=$2", [schemaState, req.params.id]);
       res.json({ success: true, data: { schemaState } });
-    } catch {
+    } catch (error) {
+      console.error("Tenant database operation failed", {
+        operation: "validate_schema",
+        companyId: req.params.id,
+        ...tenantDatabaseDiagnostic(error),
+      });
       res.status(503).json({ success: false, code: "TENANT_DATABASE_UNAVAILABLE", message: "Unable to validate customer database schema" });
     }
   });
@@ -179,7 +181,12 @@ export default function createSuperadminRouter({ authenticate, db, tenantDatabas
       const schemaState = await initializeTenantSchema(pool);
       await db("UPDATE tenant_database_configs SET schema_state=$1 WHERE company_id=$2", [schemaState, req.params.id]);
       res.json({ success: true, data: { schemaState } });
-    } catch {
+    } catch (error) {
+      console.error("Tenant database operation failed", {
+        operation: "initialize_schema",
+        companyId: req.params.id,
+        ...tenantDatabaseDiagnostic(error),
+      });
       res.status(503).json({ success: false, code: "TENANT_DATABASE_UNAVAILABLE", message: "Unable to initialize customer database" });
     }
   });

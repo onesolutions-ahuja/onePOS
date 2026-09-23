@@ -48,6 +48,16 @@ export function sanitizeTenantDatabaseError(error) {
   return result;
 }
 
+export function tenantDatabaseDiagnostic(error) {
+  const cause = error?.cause || error;
+  return {
+    code: cause?.code || "UNKNOWN",
+    category: cause?.category || (cause?.code ? "postgresql" : "connection"),
+    errno: cause?.errno || undefined,
+    syscall: cause?.syscall || undefined,
+  };
+}
+
 function connectionString(config, env = process.env) {
   if (config.connection_string) return config.connection_string;
   const url = new URL(`postgresql://${encodeURIComponent(config.username)}:${encodeURIComponent(decryptDatabaseSecret(config.password_ciphertext, env))}@${config.host}:${config.port || 5432}/${config.database}`);
@@ -85,7 +95,7 @@ export function createTenantDatabaseRouter({ controlPool, sharedPool, PoolFactor
     return result.rows[0] || { company_id: companyId, database_mode: "ONEPOS_MANAGED", active: true };
   }
 
-  async function getExternalPool(config, { cachePool = true } = {}) {
+  async function getExternalPool(config, { cachePool = true, operation = "connect" } = {}) {
     const key = `${config.company_id}:${config.updated_at || config.password_ciphertext || config.host || "managed"}`;
     if (cachePool && cache.has(key)) return cache.get(key);
     let pool;
@@ -94,7 +104,10 @@ export function createTenantDatabaseRouter({ controlPool, sharedPool, PoolFactor
       await pool.query("SELECT 1");
     } catch (error) {
       try { await pool?.end?.(); } catch { /* preserve the sanitized connection error */ }
-      throw sanitizeTenantDatabaseError(error);
+      const sanitized = sanitizeTenantDatabaseError(error);
+      sanitized.operation = operation;
+      sanitized.companyId = config.company_id;
+      throw sanitized;
     }
     pool.on?.("error", (error) => {
       console.error("Tenant database pool error:", error.code || "connection failure");
@@ -111,12 +124,12 @@ export function createTenantDatabaseRouter({ controlPool, sharedPool, PoolFactor
   }
 
   async function testExternalConfig(config) {
-    const pool = await getExternalPool({ ...config, company_id: `test:${randomBytes(8).toString("hex")}` }, { cachePool: false });
+    const pool = await getExternalPool(config, { cachePool: false, operation: "test_connection" });
     try {
       await pool.query("SELECT 1");
       return true;
     } finally {
-      await pool.end?.().catch(() => {});
+      try { await pool.end?.(); } catch { /* test cleanup must not mask the result */ }
     }
   }
 
@@ -140,7 +153,7 @@ export function createTenantDatabaseRouter({ controlPool, sharedPool, PoolFactor
     if (!config.host || !config.database || !config.username || !config.password_ciphertext) {
       throw sanitizeTenantDatabaseError(new Error("Customer database is not configured"));
     }
-    return getExternalPool(config);
+    return getExternalPool(config, { operation: "resolve_customer_database" });
   }
 
   async function closeAll() {

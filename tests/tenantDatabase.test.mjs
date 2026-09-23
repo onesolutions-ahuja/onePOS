@@ -6,6 +6,7 @@ import {
   decryptDatabaseSecret,
   encryptDatabaseSecret,
   TENANT_DATABASE_UNAVAILABLE,
+  tenantDatabaseDiagnostic,
   validateTenantSchema,
   getRequestPool,
 } from "../services/tenantDatabase.js";
@@ -131,6 +132,17 @@ test("customer database outage fails without falling back to shared pool", async
 test("schema validation identifies a compatible customer database", async () => {
   const pool = new FakePool({});
   assert.equal(await validateTenantSchema(pool), "COMPATIBLE");
+});
+
+test("tenant database diagnostics retain only safe technical fields", () => {
+  const diagnostic = tenantDatabaseDiagnostic(Object.assign(new Error("postgresql://user:password@host/db"), {
+    code: "28P01",
+    errno: "AUTH_FAILED",
+    syscall: "connect",
+    detail: "password=secret",
+  }));
+  assert.deepEqual(diagnostic, { code: "28P01", category: "postgresql", errno: "AUTH_FAILED", syscall: "connect" });
+  assert.doesNotMatch(JSON.stringify(diagnostic), /password|secret|postgresql:\/\//i);
 });
 
 test("request database context remains isolated across concurrent authenticated requests", async () => {

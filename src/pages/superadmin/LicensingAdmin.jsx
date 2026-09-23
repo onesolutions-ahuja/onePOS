@@ -189,12 +189,12 @@ export default function LicensingAdmin() {
               </div>
             )}
             <div className="flex flex-wrap gap-2">
-              <button className="onepos-btn onepos-btn-primary" onClick={saveDatabaseConfig} disabled={databaseBusy}>{databaseBusy ? "Saving..." : "Save configuration"}</button>
+              <button type="button" className="onepos-btn onepos-btn-primary" onClick={saveDatabaseConfig} disabled={databaseBusy}>{databaseBusy ? "Saving..." : "Save configuration"}</button>
               {databaseForm.databaseMode === "CUSTOMER_MANAGED" && <>
-                <button className="onepos-btn onepos-btn-secondary" onClick={() => runDatabaseAction("test", () => "Connection successful.")} disabled={databaseBusy}>Test Connection</button>
-                <button className="onepos-btn onepos-btn-secondary" onClick={() => runDatabaseAction("validate-schema", (data) => `Schema: ${data?.schemaState || "unknown"}.`)} disabled={databaseBusy}>Validate Schema</button>
-                <button className="onepos-btn onepos-btn-secondary" onClick={() => runDatabaseAction("initialize", (data) => `Initialization result: ${data?.schemaState || "unknown"}.`)} disabled={databaseBusy}>Initialize Database</button>
-                <button className="onepos-btn onepos-btn-primary" onClick={() => runDatabaseAction("activate", () => "Customer database activated.")} disabled={databaseBusy || databaseConfig?.schemaState !== "COMPATIBLE"}>Activate</button>
+                <button type="button" className="onepos-btn onepos-btn-secondary" onClick={() => runDatabaseAction("test", () => "Connection successful.")} disabled={databaseBusy}>Test Connection</button>
+                <button type="button" className="onepos-btn onepos-btn-secondary" onClick={() => runDatabaseAction("validate-schema", (data) => `Schema: ${data?.schemaState || "unknown"}.`)} disabled={databaseBusy}>Validate Schema</button>
+                <button type="button" className="onepos-btn onepos-btn-secondary" onClick={() => runDatabaseAction("initialize", (data) => `Initialization result: ${data?.schemaState || "unknown"}.`)} disabled={databaseBusy}>Initialize Database</button>
+                <button type="button" className="onepos-btn onepos-btn-primary" onClick={() => runDatabaseAction("activate", () => "Customer database activated.")} disabled={databaseBusy || databaseConfig?.schemaState !== "COMPATIBLE"}>Activate</button>
               </>}
             </div>
           </div>
