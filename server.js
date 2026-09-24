@@ -1565,7 +1565,7 @@ app.get("/api/setup/database", async (req, res) => {
 |--------------------------------------------------------------------------
 */
 
-const distPath = path.join(__dirname, "..", "dist");
+const distPath = path.join(__dirname, "dist");
 
 /*
  * Keep the operational React application separate from the public marketing
