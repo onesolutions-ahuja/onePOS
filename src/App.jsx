@@ -4,7 +4,7 @@ import { loadOfflineSession, saveOfflineSession, clearOfflineSession } from "./s
 import { isNetworkError } from "./services/networkStatus.js";
 import { getConnectivity, subscribeConnectivity } from "./services/connectivity.js";
 import { parseAppPath } from "./utils/adminRoutes.js";
-import { resolveLandingFlow, resolveLandingPage } from "../../server/services/runtimeAccess.js";
+import { resolveLandingFlow, resolveLandingPage } from "../services/runtimeAccess.js";
 import Login from "./pages/auth/Login.jsx";
 const JarvisCorner = lazy(() => import("./components/jarvis/JarvisCorner.jsx"));
 
