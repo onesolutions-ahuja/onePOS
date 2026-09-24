@@ -24,8 +24,7 @@
  *   - The till action bar wraps (flex-wrap + min-h) instead of one 58px row.
  *   - The header's right-side controls cannot push past the viewport
  *     (shrink-0 cluster; labels collapse below md; left side truncates).
- *   - The legacy src/style.css (dead `body { min-width: 1100px }` trap)
- *     must stay deleted.
+ *   - Any loaded global stylesheet must not impose a fixed body width.
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -143,7 +142,8 @@ test("Categories rail lays out vertically and scrolls only inside itself", () =>
   assert.match(grid, /md:hidden[^>]*overflow-x-auto/, "phone category chip row stays horizontally scrollable");
 });
 
-test("legacy dead stylesheet with the body min-width:1100px trap stays deleted", () => {
-  const legacy = path.join(root, "src", "style.css");
-  assert.ok(!fs.existsSync(legacy), "src/style.css is dead CSS (imported nowhere) and its body min-width:1100px must not come back");
+test("global stylesheet does not impose a fixed body width", () => {
+  const stylesheet = path.join(root, "src", "style.css");
+  assert.ok(fs.existsSync(stylesheet), "the active Windows-compatible stylesheet must remain present");
+  assert.doesNotMatch(fs.readFileSync(stylesheet, "utf8"), /body\s*\{[^}]*min-width\s*:\s*1100px/i);
 });

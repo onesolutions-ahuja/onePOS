@@ -13,10 +13,13 @@ test('repository has explicit website/app/server/package boundaries', () => {
   for (const path of mustExist) assert.equal(existsSync(path), true, `missing ${path}`);
 });
 
-test('legacy paths are compatibility links, not duplicate source trees', () => {
+test('Windows-compatible source boundaries do not depend on symlinks', () => {
   for (const path of ['src', 'routes', 'services', 'utils', 'server.js', 'index.html']) {
-    assert.equal(lstatSync(path).isSymbolicLink(), true, `${path} should be a compatibility symlink`);
+    assert.equal(lstatSync(path).isSymbolicLink(), false, `${path} must be usable without a symlink`);
   }
+  assert.equal(lstatSync('app/src').isSymbolicLink(), false);
+  assert.equal(lstatSync('server/src').isSymbolicLink(), false);
+  assert.equal(existsSync('src/main.jsx'), true, 'the Vite entrypoint must remain available on Windows');
 });
 
 test('tenant architecture forbids per-client source copies', () => {

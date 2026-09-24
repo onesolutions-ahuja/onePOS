@@ -40,24 +40,24 @@ test("T10A-SMALL: empty state and header both open the CRUD form", () => {
 });
 
 test("T10A-SMALL: a single Add/Edit store form is used (no second modal)", () => {
-  const formCount = (page.match(/<form /g) || []).length;
-  assert.equal(formCount, 1, "expected exactly one store form");
-  assert.match(page, /CardHeader title=\{editingStore \? "Edit store" : "Add new store"\}/);
-  /* The same handler creates (POST) and updates (PUT). */
-  assert.match(page, /apiRequest\("\/api\/admin\/stores", \{ method: "POST"/);
-  assert.match(page, /apiRequest\(`\/api\/admin\/stores\/\$\{editingId\}`, \{\n\s+method: "PUT"/);
+  const modalCount = (page.match(/<StandardObjectFormModal\b/g) || []).length;
+  assert.equal(modalCount, 1, "expected exactly one canonical store form modal");
+  assert.match(page, /objectKey="store"/);
+  assert.match(page, /mode=\{editingStore \? "edit" : "create"\}/);
+  assert.match(page, /title=\{editingStore \? "Edit store" : "Add new store"\}/);
+  assert.match(page, /onSaved=\{async \(\) => \{/);
 });
 
 test("T10A-SMALL: archiving is a soft delete - no physical store delete", () => {
   /* Frontend: archive is a PUT of the active flag, never an HTTP DELETE. */
   assert.ok(!/method: "DELETE"/.test(page), "frontend must not issue DELETE requests");
   assert.match(page, /const handleArchive = async \(store\) => \{[\s\S]*?setStoreActive\(store, false\)/);
-  /* The archive payload keeps the existing record fields (name included) so a
-     soft delete can never blank out the stored store. */
+  /* The canonical platform record command updates only the active field, so
+     existing store fields remain untouched by the archive operation. */
   const activateFn = page.slice(page.indexOf("const setStoreActive"), page.indexOf("const handleArchive"));
   assert.match(activateFn, /method: "PUT"/);
-  assert.match(activateFn, /name: store\.name \|\| ""/);
-  assert.match(activateFn, /active,/);
+  assert.match(activateFn, /\/api\/platform\/objects\/store\/records/);
+  assert.match(activateFn, /data: \{ active \}/);
   /* Archived stores leave the active list but stay restorable. */
   assert.match(page, /const activeStores = stores\.filter\(isActive\)/);
   assert.match(page, /setStoreActive\(store, true\)/);

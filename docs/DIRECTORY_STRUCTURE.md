@@ -19,6 +19,10 @@ onePOS/
 
 Never create a source tree per tenant. Tenant-specific configuration belongs in tenant-scoped metadata. A reusable feature such as HRMS is implemented once under `app/apps/hrms` and made available to selected tenants through package installation, licence/entitlement and permissions.
 
-## Compatibility links
+## Windows-compatible entrypoints
 
-The root `src`, `routes`, `services`, `utils`, `server.js`, and `index.html` paths are temporary compatibility links. They keep existing imports, tests and deployment behaviour stable while code is progressively moved to canonical paths.
+The root `src`, `routes`, `services`, `utils`, `server.js`, and `index.html`
+entrypoints remain regular files and directories so the repository works on
+Windows without filesystem symlinks. The app and server boundaries above remain
+the architectural ownership boundaries; do not add another feature
+implementation under a tenant or compatibility path.

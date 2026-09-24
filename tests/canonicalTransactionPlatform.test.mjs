@@ -69,7 +69,7 @@ test("canonical Platform metadata registers transaction, line, payment, and ledg
   assert.match(metadata, /recordTypeKey, label, value/);
   assert.match(systemObjects, /\["payment", "payments"/);
   assert.match(systemObjects, /\["financial_ledger", "financial_ledger_entries"/);
-  assert.equal(existsSync(new URL("../src/utils/platformSystemObjectAccess.js", import.meta.url)), false);
+  assert.equal(existsSync(new URL("../src/utils/platformSystemObjectAccess.js", import.meta.url)), true);
   assert.match(schema, /CREATE TABLE IF NOT EXISTS financial_ledger_entries/);
   assert.match(schema, /ALTER TABLE payments ALTER COLUMN sale_id DROP NOT NULL/);
   assert.match(source("../server.js"), /canonicalTransactionWriter: syncCanonicalSaleTransaction/);

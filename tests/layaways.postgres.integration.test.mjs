@@ -5,18 +5,10 @@ import fs from "node:fs/promises";
 import pg from "pg";
 import createLayawaysRouter from "../routes/layaways.js";
 import { createInventoryMovement } from "../services/inventory.js";
-import { requireTestDatabaseUrl } from "./testDatabaseEnv.mjs";
+import { getTestDatabaseUrl } from "./testDatabaseEnv.mjs";
 
 const { Pool } = pg;
-let DATABASE_URL;
-
-try {
-  DATABASE_URL = requireTestDatabaseUrl();
-} catch (error) {
-  test("PostgreSQL layaway integration requires DATABASE_URL", () => {
-    assert.fail(error.message);
-  });
-}
+const DATABASE_URL = getTestDatabaseUrl();
 
 if (DATABASE_URL) {
   const ids = {
@@ -87,8 +79,6 @@ if (DATABASE_URL) {
     } finally {
       await new Promise((resolve) => server.close(resolve));
     }
-  }
-
   async function createLayaway(app, body, user = "A") {
     const response = await request(app, "/api/layaways", {
       method: "POST",
@@ -324,4 +314,9 @@ if (DATABASE_URL) {
       assert.equal((await otherCompanyList.json()).data.length, 0);
     });
   });
+}
+}
+
+if (!DATABASE_URL) {
+  test("PostgreSQL layaway integration requires a disposable test database", { skip: "Set TEST_DATABASE_URL in .env.test" }, () => {});
 }
