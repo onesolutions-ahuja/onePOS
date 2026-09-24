@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "start": "node server.js",
+    "start": "npm run build && node server.js",
     "preview": "vite preview",
     "android:sync": "vite build && cap sync android",
     "android:open": "cap open android",
