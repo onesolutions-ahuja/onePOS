@@ -46,6 +46,13 @@ function makeSalesCtx({ settingOn = false, stock = 2 } = {}) {
       const s = sql.replace(/\s+/g, " ").trim();
       if (/^BEGIN$|^COMMIT$|^ROLLBACK$/i.test(s)) return { rowCount: 0 };
       if (/pg_advisory_xact_lock/.test(s)) return { rows: [] };
+      if (/FROM till_sessions/.test(s)) {
+        return { rows: [{ id: "till-1", terminal_id: "term-1", terminal_number: "T01", timezone: "Europe/London" }] };
+      }
+      if (/SELECT id FROM users WHERE id = \$1/.test(s)) return { rows: [{ ok: 1 }] };
+      if (/SELECT stock_quantity FROM products WHERE id = \$1 AND company_id = \$2/.test(s)) {
+        return { rows: [{ stock_quantity: state.balance }] };
+      }
       if (/SELECT allow_negative_inventory_billing FROM company_settings/.test(s)) {
         return { rows: [{ allow_negative_inventory_billing: state.settingOn }] };
       }

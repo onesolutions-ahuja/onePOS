@@ -408,11 +408,12 @@ describe("9. Appearance + accent remain orthogonal to the preset", () => {
 /* ---------------- 10. Responsive + safe areas preserved ---------------- */
 
 describe("10. Responsive behaviour and safe areas preserved", () => {
-  test("desktop sidebar hides below the tablet breakpoint (drawer takes over)", () => {
+  test("top-bar navigation remains responsive below the tablet breakpoint", () => {
     assert.match(INDEX_CSS, /@media \(max-width: 1023px\)/);
-    assert.match(INDEX_CSS, /\.onepos-sidebar:not\(\.onepos-sidebar-drawer-panel\) \{ display: none; \}/);
-    assert.match(SHELL, /data-testid="mobile-nav-trigger"/);
-    assert.match(SHELL, /data-testid="admin-sidebar-drawer"/);
+    assert.match(SHELL, /data-testid="admin-nav-menu-trigger"/);
+    assert.match(SHELL, /aria-label="Open pages menu"/);
+    assert.match(SHELL, /hidden sm:block/);
+    assert.doesNotMatch(SHELL, /data-testid="admin-sidebar-drawer"/);
   });
 
   test("safe-area insets are still honoured on header, content and drawer", () => {

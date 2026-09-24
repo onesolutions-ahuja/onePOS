@@ -34,7 +34,7 @@ test("workflow conditions and mappings use the shared object-aware picker", () =
   assert.match(WORKFLOW, /StepConditionEditor[\s\S]*PlatformFieldPicker/);
   assert.match(WORKFLOW, /includeObjectSelector selectedObjectKey=\{step\.config\?\.object/);
   assert.match(WORKFLOW, /Target field/);
-  assert.match(WORKFLOW, /Insert source field/);
+  assert.match(WORKFLOW, /label="Source value"/);
   assert.match(WORKFLOW, /Insert message field/);
   assert.match(WORKFLOW, /Trigger object/);
 });

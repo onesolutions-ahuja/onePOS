@@ -48,7 +48,7 @@ test("formula editor renders saved expression and hides physical column mapping"
 const hookReact = { ...React, useState: initial => [typeof initial === "function" ? initial() : initial, () => {}], useMemo: fn => fn(), useEffect: () => {} };
 
 test("formula values render as output and are excluded from submitted record data", async () => {
-  const Form = component("ObjectForm", { react: hookReact, "../../../../services/platformConditions.js": platformConditions });
+  const Form = component("ObjectForm", { react: hookReact, "../../../../../server/services/platformConditions.js": platformConditions });
   let saved;
   const props = { fields: [{ api_name: "price", field_type: "decimal" }, { api_name: "total", field_type: "formula" }], initialValues: { price: 2, total: 10 }, onSubmit: values => { saved = values; } };
   const html = renderToStaticMarkup(React.createElement(Form, props));
@@ -132,7 +132,7 @@ test("new rule editor defaults to validation on both create and update", () => {
 });
 
 test("record form renders server validation feedback accessibly without losing values", () => {
-  const Form = component("ObjectForm", { "../../../../services/platformConditions.js": platformConditions });
+  const Form = component("ObjectForm", { "../../../../../server/services/platformConditions.js": platformConditions });
   const html = renderToStaticMarkup(React.createElement(Form, {
     fields: [{ api_name: "amount", label: "Amount", field_type: "decimal", active: true }],
     initialValues: { amount: -5 }, error: "Amount must not be negative", onSubmit: () => {},

@@ -9,6 +9,7 @@ import {
   createWorkflowStepRun,
   executeWorkflowAction,
 } from "../services/platformWorkflow.js";
+import { drainDuePlatformJobs } from "../services/platformJobs.js";
 
 test("workflow action registry exposes the canonical advanced actions", () => {
   const keys = WORKFLOW_ACTION_REGISTRY.map((definition) => definition.key);
@@ -34,6 +35,7 @@ test("registered functions allow safe execution and prevents arbitrary code", as
   const result = await executeWorkflowAction({
     action: { type: "CALL_FUNCTION", functionKey: "safe_echo", inputs: { value: "hello" } },
   });
+
   assert.deepEqual(result, { ok: true, value: "hello" });
   assert.equal(getRegisteredFunction("eval"), null);
 });
@@ -55,6 +57,7 @@ test("workflow run and step run creation is durable and correlates job state", a
     triggerKey: "after_update",
     metadata: { source: "test" },
   });
+
   assert.equal(run.id, "run-1");
 
   const step = await createWorkflowStepRun({
@@ -185,4 +188,50 @@ test("configured communication providers are accepted and subflows execute with 
     workflowStack: ["loop-1"],
   }), /Maximum workflow depth exceeded|Workflow recursion detected/);
   assert.ok(calls.length > 0);
+});
+
+
+test("workflow actions enforce the caller role permission", async () => {
+    const deniedDb = async (sql) => /FROM role_permissions/i.test(sql) ? { rows: [] } : { rows: [] };
+    await assert.rejects(
+      executeWorkflowAction({
+        db: deniedDb,
+        req: { user: { id: "user-1", roleId: "role-1", companyId: "company-1" } },
+        action: { type: "STOP", reason: "blocked" },
+      }),
+      /permission to execute/
+    );
+
+    const allowedDb = async (sql) => /FROM role_permissions/i.test(sql) ? { rows: [{ ok: 1 }] } : { rows: [] };
+    const result = await executeWorkflowAction({
+      db: allowedDb,
+      req: { user: { id: "user-1", roleId: "role-1", companyId: "company-1" } },
+      action: { type: "STOP", reason: "allowed" },
+    });
+    assert.equal(result.status, "stopped");
+  });
+
+
+test("durable job drain completes successes and retries failures", async () => {
+    const updates = [];
+    const db = async (sql, params) => {
+      if (/WITH due/i.test(sql)) return { rows: [{ id: "job-1", kind: "TEST" }, { id: "job-2", kind: "TEST" }] };
+      updates.push({ sql, params });
+      return { rows: [{ id: params?.[0], status: /SET status='COMPLETED'/i.test(sql) ? "COMPLETED" : "PENDING" }] };
+    };
+    const result = await drainDuePlatformJobs({
+      db,
+      handler: async (job) => { if (job.id === "job-2") { const error = new Error("retry"); error.retryable = true; throw error; } },
+    });
+    assert.deepEqual(result.map((item) => item.status), ["COMPLETED", "PENDING"]);
+    assert.equal(updates.length, 2);
+  });
+
+test("CALL_FUNCTION resolves canonical dotted record-path input bindings", async () => {
+  const result = await executeWorkflowAction({
+    action: { type: "CALL_FUNCTION", functionKey: "safe_echo", inputs: { value: { path: "sale.customer.email" } } },
+    object: { object_key: "sale" },
+    record: { customer: { email: "customer@example.com" } },
+  });
+  assert.deepEqual(result, { ok: true, value: "customer@example.com" });
 });

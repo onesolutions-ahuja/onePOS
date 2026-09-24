@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { executePlatformAutomations } from "../services/platformAutomation.js";
+import { executeWorkflowAction } from "../services/platformWorkflow.js";
 import { decidePlatformApproval, submitPlatformApproval } from "../services/platformApprovals.js";
 
 test("automation executes ordered actions with tenant scope and blocks recursion", async () => {
@@ -28,6 +29,38 @@ test("automation executes ordered actions with tenant scope and blocks recursion
   req._platformAutomationDepth = 1;
   const recursive = await executePlatformAutomations({ db, object: { id: "object-1" }, fields: [], record: {}, recordId: "record-1", trigger: "after_update", req });
   assert.deepEqual(recursive.executions, []);
+});
+
+test("workflow create actions scope company and store values correctly", async () => {
+  const calls = [];
+  const db = async (sql, params) => {
+    calls.push({ sql, params });
+    if (sql.startsWith("SELECT * FROM platform_objects")) return { rows: [{ id: "child-object", object_key: "ledger_entries", source_table: "ledger_entries", company_scoped: true, store_scoped: true }] };
+    if (sql.startsWith("SELECT * FROM platform_relationships")) return { rows: [{ child_object_id: "child-object", child_field_id: "field-1" }] };
+    if (sql.startsWith("SELECT * FROM platform_fields")) return { rows: [{ id: "field-1", source_column: "sale_id", api_name: "sale_id" }] };
+    if (sql.startsWith("INSERT INTO \"ledger_entries\"")) return { rows: [{ id: "ledger-1", sale_id: "sale-1", amount: 50, company_id: "company-a", store_id: "store-a" }] };
+    return { rows: [] };
+  };
+
+  const createResult = await executeWorkflowAction({
+    db,
+    action: { type: "CREATE_RECORD", objectKey: "ledger_entries", fieldValues: { amount: 50 } },
+    object: { id: "child-object", source_table: "ledger_entries", company_scoped: true, store_scoped: true },
+    req: { user: { companyId: "company-a", storeId: "store-a" } },
+  });
+  assert.equal(createResult.created.company_id, "company-a");
+  assert.equal(createResult.created.store_id, "store-a");
+
+  const relatedResult = await executeWorkflowAction({
+    db,
+    action: { type: "CREATE_RELATED_RECORD", relationshipKey: "ledger_entries", recordId: "sale-1", fieldValues: { amount: 50 } },
+    object: { id: "sale-object", source_table: "sales", company_scoped: true, store_scoped: true },
+    req: { user: { companyId: "company-a", storeId: "store-a" } },
+    recordId: "sale-1",
+  });
+  assert.equal(relatedResult.created.sale_id, "sale-1");
+  assert.equal(relatedResult.created.company_id, "company-a");
+  assert.match(calls.find((entry) => entry.sql.startsWith("INSERT INTO \"ledger_entries\""))?.sql || "", /company_id/);
 });
 
 test("approval submission is tenant scoped and does not duplicate pending requests", async () => {

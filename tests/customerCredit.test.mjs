@@ -269,7 +269,7 @@ function makeDb() {
     if (/INSERT INTO customer_credit_ledger/.test(s)) {
       // handled above
     }
-    if (/SELECT credit_enabled, credit_limit FROM customers WHERE id = \$1 AND company_id = \$2 FOR UPDATE/.test(s)) {
+    if (/SELECT credit_enabled, credit_limit(?:, maximum_credit_age_days)? FROM customers WHERE id = \$1 AND company_id = \$2 FOR UPDATE/.test(s)) {
       const c = state.customers.get(params[0]);
       return { rows: c && c.company_id === params[1] ? [c] : [] };
     }
@@ -295,6 +295,9 @@ function makeDb() {
     if (/INSERT INTO payments \(/.test(s)) {
       state.payments.push({ sale_id: params[0], payment_method: params[1], amount: params[2], status: "completed" });
       return { rows: [] };
+    }
+    if (/SELECT id, price, vat_rate, vat_applicable, category_id FROM products/.test(s)) {
+      return { rows: params[1].map((id) => state.products.get(id)).filter((p) => p && p.company_id === params[0] && p.active) };
     }
     if (/SELECT\s+id,\s*name,\s*price,\s*vat_rate,\s*track_stock\s+FROM products/.test(s) || /SELECT\s+id,\s*name,\s*price,\s*stock_quantity,\s*track_stock,\s*age_restricted\s+FROM products/.test(s)) {
       const p = state.products.get(params[0]);
@@ -659,6 +662,7 @@ describe("credit sale in the existing sale engine", () => {
     tax: 4,
     discount: 0,
     total: 24,
+    vatRate: 0.2,
     paymentMethod,
   });
 

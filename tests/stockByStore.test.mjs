@@ -357,7 +357,7 @@ describe("stock attribution static contracts", () => {
   });
 
   test("purchases receive into the purchase's store", async () => {
-    const src = fs.readFileSync("routes/purchases.js", "utf8");
+    const src = fs.readFileSync("services/purchaseReceiving.js", "utf8");
     assert.ok(/storeId: purchase\.store_id \|\| storeId/.test(src));
     assert.ok(/movementType: "PURCHASE"/.test(src));
   });

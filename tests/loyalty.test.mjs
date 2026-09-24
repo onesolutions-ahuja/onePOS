@@ -112,7 +112,7 @@ function makeCtx() {
       // uq_loyalty_earn_per_sale: a second EARN for the same sale throws 23505
       const dup = state.loyaltyTx.some((t) => t.company_id === params[0] && t.transaction_type === "EARN" && t.reference_id === params[4]);
       if (dup) { const err = new Error("duplicate key"); err.code = "23505"; throw err; }
-      state.loyaltyTx.push({ company_id: params[0], customer_id: params[1], transaction_type: "EARN", amount: params[2], balance_after: params[3], reference_type: params[4], reference_id: params[5], created_by: params[8] });
+      state.loyaltyTx.push({ company_id: params[0], customer_id: params[1], transaction_type: "EARN", amount: params[2], balance_after: params[3], reference_type: "sale", reference_id: params[4], created_by: params[5] });
       return { rows: [] };
     }
     if (/INSERT INTO customer_loyalty_transactions\s*\(company_id, customer_id, transaction_type, amount, balance_after, reference_type, reference_id, description, created_by\)/.test(s)) {
@@ -165,7 +165,7 @@ function makeCtx() {
       const sale = state.sales.find((s) => s.id === params[0] && s.company_id === params[1]);
       return { rows: sale ? [{ status: sale.status }] : [] };
     }
-    if (/SELECT id, created_at, total, receipt_number FROM sales WHERE company_id = \$1 AND client_request_id = \$2/.test(s)) {
+    if (/SELECT id, created_at, total, receipt_number(?:, client_request_fingerprint)? FROM sales WHERE company_id = \$1 AND client_request_id = \$2/.test(s)) {
       const existing = state.sales.find((s) => s.company_id === params[0] && s.client_request_id === params[1]);
       return { rows: existing ? [{ id: existing.id, created_at: existing.created_at, total: existing.total, receipt_number: existing.receipt_number }] : [] };
     }
@@ -187,8 +187,11 @@ function makeCtx() {
       state.payments.push({ sale_id: params[0], payment_method: params[1], amount: params[2], status: "completed" });
       return { rowCount: 1 };
     }
+    if (/SELECT id, price, vat_rate, vat_applicable, category_id FROM products WHERE company_id = \$1 AND id = ANY/.test(s)) {
+      return { rows: [{ id: "p-1", price: state.salePrice ?? 5, vat_rate: null, vat_applicable: true, category_id: null }] };
+    }
     if (/FROM products WHERE id = \$1 AND company_id = \$2 AND active = true/.test(s)) {
-      return { rows: [{ id: params[0], name: "Test product", price: 5, vat_rate: null, track_stock: true, stock_quantity: 100, age_restricted: false }] };
+      return { rows: [{ id: params[0], name: "Test product", price: state.salePrice ?? 5, vat_rate: null, track_stock: true, stock_quantity: 100, age_restricted: false }] };
     }
     if (/SELECT COALESCE\(SUM\(amount \* CASE WHEN transaction_type/.test(s)) return { rows: [{ outstanding: 0 }] };
 
@@ -386,6 +389,10 @@ const saleBody = (overrides = {}) => {
     paymentMethod: "cash",
     ...overrides,
   };
+  if (state_ref && overrides.total !== undefined) {
+    const quantity = Number((overrides.items ?? body.items)[0]?.quantity) || 1;
+    state_ref.salePrice = Number(overrides.total) / quantity;
+  }
   if (overrides.items) state_ref.pendingItems = overrides.items; // captured by the fake
   return body;
 };

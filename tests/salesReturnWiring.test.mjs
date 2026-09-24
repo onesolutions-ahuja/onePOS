@@ -79,6 +79,9 @@ test("T9M-SMALL: empty items array - invalid", () => {
   const saleItems = [saleItem("si-1", "prod-a", 4, 6.0)];
   const request = { saleId: "sale-100", items: [] };
   const result = validateSalesReturn(request, saleItems);
+  assert.ok(!result.valid);
+  assert.ok(result.errors.some((e) => e.saleItemId === null && e.message.includes("Return must include at least one item")), result.errors.map((e) => e.message).join("; "));
+});
 
 test("T9M-SMALL: productId mismatch against original - invalid", () => {
   const saleItems = [saleItem("si-1", "prod-a", 4, 6.0)];
@@ -114,9 +117,4 @@ test("T9M-SMALL: fully returned item cannot be returned again - invalid", () => 
   assert.ok(!result.valid);
   assert.ok(result.errors.some((e) => e.saleItemId === "si-1" && e.message.includes("already been fully returned")), result.errors.map((e) => e.message).join("; "));
 });
-
-  assert.ok(!result.valid);
-  assert.ok(result.errors.some((e) => e.saleItemId === null && e.message.includes("Return must include at least one item")), result.errors.map((e) => e.message).join("; "));
-});
-
 

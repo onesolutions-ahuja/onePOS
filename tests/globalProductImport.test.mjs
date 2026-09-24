@@ -52,7 +52,7 @@ const SAMPLE_GLOBAL = [
     subcategory: "Cola",
     unit_description: "500ml bottle",
     image_url: "https://cdn.example.com/coca-cola-500.jpg",
-    source: "tesco",
+    source: "sample",
   },
   {
     id: "g-02",
@@ -63,7 +63,7 @@ const SAMPLE_GLOBAL = [
     subcategory: "Cola",
     unit_description: "500ml bottle",
     image_url: null,
-    source: "tesco",
+    source: "sample",
   },
   {
     id: "g-03",
@@ -74,7 +74,7 @@ const SAMPLE_GLOBAL = [
     subcategory: "Beans",
     unit_description: "415g can",
     image_url: null,
-    source: "tesco",
+    source: "sample",
   },
   {
     id: "g-04",
@@ -85,7 +85,7 @@ const SAMPLE_GLOBAL = [
     subcategory: "Soup",
     unit_description: "400g can",
     image_url: null,
-    source: "tesco",
+    source: "sample",
   },
   {
     id: "g-05",
@@ -96,7 +96,7 @@ const SAMPLE_GLOBAL = [
     subcategory: "Crisps",
     unit_description: "25g packet",
     image_url: null,
-    source: "tesco",
+    source: "sample",
   },
 ];
 

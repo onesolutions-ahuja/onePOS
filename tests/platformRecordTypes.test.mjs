@@ -23,6 +23,8 @@ test("record type APIs enforce object ownership, defaults and picklist restricti
   assert.match(routes, /default_values/);
   assert.match(routes, /associateRecordType/);
   assert.match(routes, /active configured options/);
+  assert.match(routes, /validateRecordTypeDefaults/);
+  assert.match(routes, /is_default=false WHERE object_id=\$1 AND company_id=\$2/);
 });
 
 test("record type administration and generic create form are wired to the selected object", () => {
@@ -30,6 +32,6 @@ test("record type administration and generic create form are wired to the select
   assert.match(objectEditor, /<RecordTypeEditor object=\{\{ id: objectId \}\}/);
   assert.match(recordTypeEditor, /\/record-types/);
   assert.match(recordTypeEditor, /picklistRestrictions/);
-  assert.match(objectPage, /<ObjectForm fields=\{activeFields\}/);
-  assert.match(objectPage, /recordTypeId: selectedRecordTypeId/);
+  assert.match(objectPage, /creating\?\.fields/);
+  assert.match(objectPage, /recordTypeId: creating\?\.childKey \? null : selectedRecordTypeId/);
 });

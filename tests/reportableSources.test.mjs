@@ -48,3 +48,25 @@ test("platform reports reject invalid aggregates and foreign fields", () => {
     fields: ["unknown"],
   }, object, fields), /valid report field/);
 });
+
+test("platform reports traverse only registered relationships", () => {
+  const customerFields = [
+    { api_name: "name", label: "Customer", field_type: "text", source_column: "name", active: true, readable: true },
+  ];
+  const built = buildPlatformObjectQuery({
+    fields: ["status", "customer.name"],
+    groupBy: ["customer.name"],
+    filters: [{ field: "customer.name", operator: "contains", value: "Acme" }],
+  }, object, fields, "company-a", 100, {}, [{
+    relationship_key: "customer",
+    target_source_table: "customers",
+    child_source_column: "id",
+    fields: customerFields,
+  }]);
+  assert.match(built.sql, /LEFT JOIN "customers" rel1 ON rel1\."id" = r\."id"/);
+  assert.match(built.sql, /rel1\."name"/);
+  assert.deepEqual(built.params, ["company-a", "%Acme%"]);
+  assert.throws(() => validatePlatformReportDefinition({
+    fields: ["customer.name"],
+  }, object, fields), /valid report field/);
+});

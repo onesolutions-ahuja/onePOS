@@ -32,7 +32,8 @@ describe('Render default → normal login', () => {
   });
 
   test('normal login does not require server entry', () => {
-    assert.match(login, /placeholder="Username"/);
+    assert.match(login, /type="email"/);
+    assert.match(login, /placeholder="Email"/);
     assert.match(login, /type="password"/);
     assert.match(login, /Sign in/);
     assert.ok(!login.includes('needsDeviceSetup'), 'Device Setup forcing removed from Login');
@@ -65,18 +66,17 @@ describe('Superadmin Settings → Server / API Configuration', () => {
     assert.match(serverApiSettings, /Change Server/);
   });
 
-  test('Superadmin-only gating: isSuperadmin required to render ServerApiSettings', () => {
-    assert.match(settingsAdmin, /isSuperadmin && <ServerApiSettings/);
-    assert.match(settingsAdmin, /function SettingsAdmin\(\{ initialTab = "General", isAdmin = false, isSuperadmin = false/);
+  test('Superadmin-only gating is resolved through canonical settings access', () => {
+    assert.match(settingsAdmin, /access\["Server \/ API Configuration"\] && <ServerApiSettings/);
+    assert.match(settingsAdmin, /settingSectionAccess/);
   });
 
   test('AdminLayout passes isAdmin to SettingsAdmin', () => {
     assert.match(adminLayout, /<SettingsAdmin[^>]*isAdmin=\{onlinePermissions\.isAdmin\}/);
   });
 
-  test('non-Superadmin cannot access Server / API Configuration', () => {
-    const adminLine = settingsAdmin.match(/isSuperadmin && <ServerApiSettings[\s\S]*?\//);
-    assert.ok(adminLine, 'ServerApiSettings gated on isSuperadmin');
+  test('Server / API Configuration is rendered only when canonical access grants it', () => {
+    assert.match(settingsAdmin, /access\["Server \/ API Configuration"\] && <ServerApiSettings/);
   });
 });
 

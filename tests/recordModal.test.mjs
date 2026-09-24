@@ -270,58 +270,33 @@ describe("4. Settings Create/Edit flows adopt the foundation", () => {
     assert.match(CHANGE_PW, /"New password must be at least 8 characters"/);
   });
 
-  test("UserFormModal renders through RecordModal with the same prop surface", () => {
-    assert.match(USER_FORM, /import RecordModal from "\.\.\/\.\.\/components\/RecordModal\.jsx"/);
-    assert.match(USER_FORM, /<RecordModal/);
-    assert.match(
-      USER_FORM,
-      /export default function UserFormModal\(\{ form: initial, roles, stores, onClose, onSave, canViewDivisions = false, canManageDivisions = false \}\)/,
-    );
-    assert.doesNotMatch(USER_FORM, /fixed inset-0/);
-    assert.doesNotMatch(USER_FORM, /bg-white/);
-    assert.match(USER_FORM, /formId=\{FORM_ID\}/);
-    assert.match(USER_FORM, /mode=\{form\.id \? "edit" : "create"\}/);
+  test("UserFormModal is a metadata Object form, not a second user CRUD implementation", () => {
+    assert.match(USER_FORM, /StandardObjectFormModal/);
+    assert.match(USER_FORM, /objectKey="employee"/);
+    assert.doesNotMatch(USER_FORM, /RecordModal|PlatformExtensionFields|\/api\/admin\/users|business-divisions/);
+    assert.doesNotMatch(USER_FORM, /type="password"|saveStoreAccess|saveDivisionAccess/);
   });
 
-  test("the user fields are a reusable body, separate from the dialog chrome", () => {
-    assert.match(USER_FORM, /export function UserFormFields\(/);
-    const body = USER_FORM
-      .slice(
-        USER_FORM.indexOf("export function UserFormFields("),
-        USER_FORM.indexOf("export default function UserFormModal("),
-      )
-      /* Comments may name the host; the code must not use it. */
-      .replace(/\/\*[\s\S]*?\*\//g, "")
-      .replace(/^\s*\/\/.*$/gm, "");
-    assert.ok(body.length > 0, "the body component should precede the host");
-    assert.doesNotMatch(body, /RecordModal/, "the body must not own the chrome");
-    assert.doesNotMatch(body, /onepos-modal/, "the body must not own the chrome");
-    assert.match(body, /<PlatformExtensionFields/, "the existing extension fields are reused, not duplicated");
+  test("UserFormModal exposes only the canonical metadata host contract", () => {
+    assert.match(USER_FORM, /export default function UserFormModal\(\{ form: record = \{\}, onClose, onSaved \}\)/);
+    assert.match(USER_FORM, /mode=\{record\?\.id \? "edit" : "create"\}/);
+    assert.match(USER_FORM, /onSaved=\{onSaved\}/);
   });
 
-  test("the user form keeps every endpoint, validation rule and sub-form action", () => {
-    assert.match(USER_FORM, /`\/api\/admin\/users\/\$\{form\.id\}\/stores`/);
-    assert.match(USER_FORM, /`\/api\/users\/\$\{form\.id\}\/business-divisions`/);
-    assert.match(USER_FORM, /"Full name is required"/);
-    assert.match(USER_FORM, /"Password is required for new users"/);
-    assert.match(USER_FORM, /"Password must be at least 8 characters"/);
-    assert.match(USER_FORM, /Save Access/);
-    assert.match(USER_FORM, /saveStoreAccess/);
-    assert.match(USER_FORM, /saveDivisionAccess/);
+  test("user passwords and access are not fields owned by the CRUD modal", () => {
+    assert.doesNotMatch(USER_FORM, /Password is required|Password must be at least|Save Access/);
+    assert.doesNotMatch(USER_FORM, /roles|stores|divisions/i);
   });
 
-  test("dirty state is computed against the opened record, so clean forms close", () => {
-    assert.match(USER_FORM, /JSON\.stringify\(form\) !== initialRef\.current/);
-    assert.match(USER_FORM, /dirty=\{dirty\}/);
+  test("metadata form runtime owns save state rather than page-specific dirty/save logic", () => {
+    assert.doesNotMatch(USER_FORM, /JSON\.stringify\(form\)|dirty=|onSave=/);
     assert.match(CHANGE_PW, /const dirty = Boolean\(/);
     assert.match(CHANGE_PW, /dirty=\{dirty\}/);
   });
 
-  test("SettingsAdmin's call sites are unchanged (no regression to page dialogs)", () => {
+  test("SettingsAdmin uses the canonical user metadata wrapper", () => {
     assert.match(SETTINGS_ADMIN, /import UserFormModal from "\.\/UserFormModal\.jsx"/);
-    assert.match(SETTINGS_ADMIN, /canViewDivisions=\{/);
-    assert.match(SETTINGS_ADMIN, /canManageDivisions=\{/);
-    assert.match(SETTINGS_ADMIN, /onSave=\{save\}/);
+    assert.doesNotMatch(SETTINGS_ADMIN, /canViewDivisions=|canManageDivisions=/);
   });
 
   test("no Settings file hand-rolls a record dialog any more", () => {

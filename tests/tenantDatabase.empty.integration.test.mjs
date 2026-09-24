@@ -2,11 +2,18 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import pg from "pg";
 import { initializeTenantSchema, validateTenantSchema } from "../services/tenantDatabase.js";
+import { requireTestDatabaseUrl } from "./testDatabaseEnv.mjs";
 
-const databaseUrl = process.env.TEST_EMPTY_DATABASE_URL;
+let databaseUrl;
+let databaseError;
+try {
+  databaseUrl = requireTestDatabaseUrl("TEST_EMPTY_DATABASE_URL");
+} catch (error) {
+  databaseError = error;
+}
 
 test("empty PostgreSQL database accepts the complete customer schema bootstrap", {
-  skip: !databaseUrl ? "Set TEST_EMPTY_DATABASE_URL to an explicitly empty disposable PostgreSQL database" : false,
+  skip: !databaseUrl ? (databaseError?.message || "Set TEST_EMPTY_DATABASE_URL in .env.test") : false,
 }, async () => {
   const pool = new pg.Pool({
     connectionString: databaseUrl,

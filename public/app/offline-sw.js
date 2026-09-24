@@ -1,5 +1,5 @@
 // Application shell only. No API, customer data or marketing navigation caching.
-const CACHE = "onepos-till-shell-v2";
+const CACHE = "onepos-till-shell-v3";
 self.addEventListener("install", (event) => {
   event.waitUntil((async () => {
     const cache = await caches.open(CACHE);

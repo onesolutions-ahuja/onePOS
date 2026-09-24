@@ -29,6 +29,7 @@ import jwt from "jsonwebtoken";
 import pg from "pg";
 import bcrypt from "bcryptjs";
 import createAdminRouter from "../routes/admin.js";
+import { requireTestDatabaseUrl } from "./testDatabaseEnv.mjs";
 
 const ROOT = path.resolve(new URL("..", import.meta.url).pathname.replace(/^\/([A-Z]:)/, "$1"));
 const read = (rel) => fs.readFileSync(path.join(ROOT, rel), "utf8");
@@ -41,7 +42,7 @@ let server;
 
 async function setup() {
   pool = new pg.Pool({
-    connectionString: process.env.DATABASE_URL,
+    connectionString: requireTestDatabaseUrl(),
     ssl: { rejectUnauthorized: false },
   });
   const db = (q, p) => pool.query(q, p);

@@ -1,4 +1,3 @@
-import "dotenv/config";
 import { after, before, describe, test } from "node:test";
 import assert from "node:assert/strict";
 import express from "express";
@@ -6,15 +5,20 @@ import fs from "node:fs/promises";
 import pg from "pg";
 import createLayawaysRouter from "../routes/layaways.js";
 import { createInventoryMovement } from "../services/inventory.js";
+import { requireTestDatabaseUrl } from "./testDatabaseEnv.mjs";
 
 const { Pool } = pg;
-const DATABASE_URL = process.env.DATABASE_URL;
+let DATABASE_URL;
 
-if (!DATABASE_URL) {
+try {
+  DATABASE_URL = requireTestDatabaseUrl();
+} catch (error) {
   test("PostgreSQL layaway integration requires DATABASE_URL", () => {
-    assert.fail("DATABASE_URL is not configured; start PostgreSQL and provide an isolated test database URL.");
+    assert.fail(error.message);
   });
-} else {
+}
+
+if (DATABASE_URL) {
   const ids = {
     companyA: "11000000-0000-4000-8000-000000000001",
     companyB: "11000000-0000-4000-8000-000000000002",

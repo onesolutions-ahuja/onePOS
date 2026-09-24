@@ -16,6 +16,7 @@ function layoutDatabase() {
   const visible = (row, companyId) => [null, companyId].includes(row.company_id ?? null);
   const query = async (sql, params = []) => {
     if (sql.startsWith("SELECT api_name FROM platform_fields")) return { rows: [{ api_name: "name" }] };
+    if (sql.startsWith("UPDATE platform_buttons SET active=false")) return { rows: [] };
     if (sql.startsWith("SELECT id FROM roles WHERE id=$1 AND company_id=$2")) return { rows: [{ id: params[0] }] };
     if (sql.startsWith("SELECT * FROM platform_objects WHERE id=$1")) {
       const object = objects.get(params[0]);

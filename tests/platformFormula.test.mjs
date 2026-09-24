@@ -80,8 +80,8 @@ test("dependency depth is bounded even when fields are supplied in dependency or
 
 test("schema includes formula and rollup types and an idempotent upgrade for existing check constraints", () => {
   assert.match(platformSchema, /'lookup','formula','rollup'/);
-  assert.match(platformSchema, /pg_get_constraintdef\(oid\) NOT LIKE '%formula%'/);
-  assert.match(platformSchema, /pg_get_constraintdef\(oid\) NOT LIKE '%rollup%'/);
+  assert.match(platformSchema, /DROP CONSTRAINT IF EXISTS platform_fields_field_type_check/);
+  assert.match(platformSchema, /ADD CONSTRAINT platform_fields_field_type_check/);
   assert.doesNotMatch(platformSchema, /DROP TABLE/i);
 });
 

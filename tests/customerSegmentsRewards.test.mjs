@@ -90,6 +90,7 @@ function makeCtx({ companyAdmin = true } = {}) {
     loyaltyTx: [], // { company_id, customer_id, transaction_type, amount, reference_type, reference_id }
     loyaltySettings: { loyalty_enabled: true, loyalty_earning_rate: 0.01, loyalty_min_sale_total: null, loyalty_redeem_value_per_point: null },
     sales: [],
+    cataloguePrice: 5,
     payments: [],
     imported: [],
     seq: 0,
@@ -110,10 +111,10 @@ function makeCtx({ companyAdmin = true } = {}) {
       return { rows: [{ id: "till-1", terminal_id: "term-1", terminal_number: "T01", timezone: "Europe/London" }] };
     }
     if (/FROM products\s*WHERE id = \$1 AND company_id = \$2 AND active = true\s*FOR UPDATE/.test(s)) {
-      return { rows: [{ id: params[0], name: "Test product", price: 5, stock_quantity: 100, track_stock: true, age_restricted: false }] };
+      return { rows: [{ id: params[0], name: "Test product", price: state.cataloguePrice, stock_quantity: 100, track_stock: true, age_restricted: false }] };
     }
     if (/SELECT id, name, price, vat_rate, track_stock FROM products WHERE id = \$1 AND company_id = \$2 AND active = true$/.test(s)) {
-      return { rows: [{ id: params[0], name: "Test product", price: 5, vat_rate: null, track_stock: true }] };
+      return { rows: [{ id: params[0], name: "Test product", price: state.cataloguePrice, vat_rate: null, track_stock: true }] };
     }
 
     /* ---------- segments ---------- */
@@ -270,7 +271,7 @@ function makeCtx({ companyAdmin = true } = {}) {
       card.status = params[0] ? "blocked" : "active";
       return { rows: [{ id: card.id, code: card.code, status: card.status }] };
     }
-    if (/SELECT g\.id, g\.code, g\.status,/.test(s) && /FROM gift_cards g WHERE g\.id = \$1/.test(s)) {
+    if (/SELECT g\.id, g\.code, g\.status,/.test(s) && /FROM gift_cards g .*WHERE g\.id = \$1/.test(s)) {
       const card = state.giftCards.find((card) => card.id === params[0] && card.company_id === params[1]);
       if (!card) return { rows: [] };
       return { rows: [{ id: card.id, code: card.code, status: card.status, balance: cardBalance(card.id) }] };
@@ -322,9 +323,9 @@ function makeCtx({ companyAdmin = true } = {}) {
       /* Engine-tx queries share the unified matcher. */
       const shared = await matchSql(sql, params);
       if (shared.rows.length || shared.rowCount) return shared;
-      if (/SELECT id, created_at, total, receipt_number FROM sales WHERE company_id = \$1 AND client_request_id = \$2/.test(s)) {
+      if (/SELECT id, created_at, total, receipt_number, client_request_fingerprint FROM sales WHERE company_id = \$1 AND client_request_id = \$2/.test(s)) {
         const existing = state.sales.find((sale) => sale.company_id === params[0] && sale.client_request_id === params[1]);
-        if (existing) return { rows: [{ id: existing.id, created_at: existing.created_at, total: existing.total, receipt_number: existing.receipt_number }] };
+        if (existing) return { rows: [{ id: existing.id, created_at: existing.created_at, total: existing.total, receipt_number: existing.receipt_number, client_request_fingerprint: existing.client_request_fingerprint }] };
         return { rows: [] };
       }
       if (/FROM till_sessions/.test(s)) return { rows: [{ id: "till-1", terminal_id: "term-1", terminal_number: "T01", timezone: "Europe/London" }] };
@@ -339,10 +340,14 @@ function makeCtx({ companyAdmin = true } = {}) {
       if (/SELECT id,\s*name,\s*price,\s*vat_rate,\s*track_stock\s*FROM products/.test(s)) {
         return { rows: [{ id: params[0], name: "Test product", price: 5, vat_rate: null, track_stock: true }] };
       }
+      if (/SELECT id, price, vat_rate, vat_applicable, category_id FROM products/.test(s)) {
+        return { rows: params[1].map((id) => ({ id, price: state.cataloguePrice, vat_rate: 0, vat_applicable: true, category_id: null })) };
+      }
       if (/INSERT INTO sales \(/.test(s)) {
         const sale = {
           id: `sale-${state.sales.length + 1}`,
           company_id: params[0], store_id: params[1], customer_id: params[3], client_request_id: params[10] ?? null,
+          client_request_fingerprint: params[11] ?? null,
           receipt_number: `T01-20260920-${String(state.sales.length + 1).padStart(4, "0")}`,
           total: Number(params[9]) || 0, status: "completed", offline_created: false, sync_status: "synced",
           created_at: new Date().toISOString(),
@@ -688,12 +693,14 @@ describe("PART C — points/rewards", () => {
       assert.equal(ctx.state.loyaltyBalances.get(CUST_A), 0.5);
 
       // £3 sale < £4 minimum → no earn
+      ctx.state.cataloguePrice = 3;
       await post(port, "/api/sales", saleBody({ customerId: CUST_A, total: 3, subtotal: 3 }));
       await new Promise((r) => setTimeout(r, 30));
       assert.equal(ctx.state.loyaltyBalances.get(CUST_A), 0.5);
 
       // Disabled programme → no earn
       ctx.state.loyaltySettings.loyalty_enabled = false;
+      ctx.state.cataloguePrice = 10;
       await post(port, "/api/sales", saleBody({ customerId: CUST_A, total: 10, subtotal: 10 }));
       await new Promise((r) => setTimeout(r, 30));
       assert.equal(ctx.state.loyaltyBalances.get(CUST_A), 0.5);
@@ -800,6 +807,7 @@ describe("PART D — gift cards", () => {
 
   test("sale redemption: debits balance, records ledger + sale association; over-balance refused", async () => {
     const ctx = makeCtx();
+    ctx.state.cataloguePrice = 4;
     const admin = await buildApp(ctx);
     const sales = await buildSalesApp(ctx);
     const a = await listen(admin);
@@ -820,6 +828,8 @@ describe("PART D — gift cards", () => {
       const payment = ctx.state.payments.find((p) => p.payment_method === "gift_card");
       assert.match(payment.provider_transaction_id, /^giftcard:/, "payment row links back to the card for refunds");
 
+      // The next sale is £50 at the authoritative catalogue price.
+      ctx.state.cataloguePrice = 50;
       const over = await post(s.port, "/api/sales", saleBody({
         paymentMethod: "gift_card",
         giftCardCode: "REDEEM-0001",
@@ -832,6 +842,7 @@ describe("PART D — gift cards", () => {
 
   test("retried sale POST does not double-redeem the card", async () => {
     const ctx = makeCtx();
+    ctx.state.cataloguePrice = 6;
     const admin = await buildApp(ctx);
     const sales = await buildSalesApp(ctx);
     const a = await listen(admin);

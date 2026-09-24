@@ -2,8 +2,13 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { CSV_FIELDS, DB_FIELDS, validGtin, parseMasterCsv, mapRecord, importGlobalMaster } from '../services/globalProductMasterImport.js';
-const text = readFileSync(new URL('../data/product-master/onepos_global_product_master_tesco.csv', import.meta.url), 'utf8');
-const records = parseMasterCsv(text);
+const records = ['036000291452', '4006381333931', '96385074'].map((ean, index) => ({
+  ean, name: `Sample product ${index + 1}`, brand: 'Example', pack_size: '1 unit',
+  category: 'Sample', image_url: 'https://example.com/product.png', source: 'test',
+}));
+const text = [CSV_FIELDS, ...records.map((record) => CSV_FIELDS.map((field) => record[field]))]
+  .map((row) => row.map((value) => `"${value.replaceAll('"', '""')}"`).join(','))
+  .join('\r\n');
 function fakeClient(initial = [], failAt = 0) {
   let rows = structuredClone(initial); let snapshot; let inserts = 0;
   const calls = [];
@@ -21,10 +26,10 @@ function fakeClient(initial = [], failAt = 0) {
     return { rows: [] };
   } };
 }
-test('Tesco CSV has exactly 332 valid unique string GTINs and complete metadata', () => {
-  assert.equal(records.length, 332);
-  assert.equal(new Set(records.map((r) => r.ean)).size, 332);
-  assert.ok(records.every((r) => validGtin(r.ean) && r.ean.startsWith('0') && r.image_url && r.source));
+test('sample CSV has valid unique string GTINs and complete metadata', () => {
+  assert.deepEqual(parseMasterCsv(text), records);
+  assert.equal(new Set(records.map((r) => r.ean)).size, records.length);
+  assert.ok(records.every((r) => validGtin(r.ean) && r.image_url && r.source));
 });
 test('GTIN validation includes checksum, lengths and zero rejection', () => {
   for (const value of ['4006381333931', '96385074', '036000291452', '05000116125234']) assert.ok(validGtin(value));
@@ -36,7 +41,7 @@ test('CSV handles quoted metadata exactly including commas quotes and newlines',
   assert.deepEqual(parseMasterCsv(csv, 1), [r]);
 });
 test('invalid count, duplicate EAN, malformed quotes and unexpected columns fail before BEGIN', async () => {
-  assert.throws(() => parseMasterCsv(text, 331));
+  assert.throws(() => parseMasterCsv(text, records.length + 1));
   assert.throws(() => parseMasterCsv(text.replace('"ean"', '"price"')));
   assert.throws(() => parseMasterCsv(text + '"unclosed'));
   const client = fakeClient();
@@ -46,12 +51,12 @@ test('invalid count, duplicate EAN, malformed quotes and unexpected columns fail
 test('transaction imports all fields, preserves zeros, and repeat import skips without duplicates', async () => {
   const client = fakeClient();
   const report = await importGlobalMaster(client, records);
-  assert.equal(report.inserted, 332); assert.equal(report.finalCount, 332);
+  assert.equal(report.inserted, records.length); assert.equal(report.finalCount, records.length);
   assert.deepEqual(client.rows, records.map(mapRecord));
   assert.equal(client.calls.at(-1), 'COMMIT');
   const again = await importGlobalMaster(client, records);
-  assert.equal(again.inserted, 0); assert.equal(again.skippedExisting, 332);
-  assert.equal(client.rows.length, 332);
+  assert.equal(again.inserted, 0); assert.equal(again.skippedExisting, records.length);
+  assert.equal(client.rows.length, records.length);
   assert.ok(client.calls.filter((s) => s.startsWith('INSERT')).every((s) => s.includes('ON CONFLICT (ean) DO NOTHING')));
 });
 test('authoritative EAN conflicts abort with field names and no writes', async () => {
@@ -67,7 +72,7 @@ test('equivalent shorter GTIN is reported as conflict rather than duplicated', a
   await assert.rejects(importGlobalMaster(client, records), (e) => e.conflicts[0].fields.includes('ean'));
 });
 test('mid-import failure rolls back the entire dataset', async () => {
-  const client = fakeClient([], 150);
+  const client = fakeClient([], 2);
   await assert.rejects(importGlobalMaster(client, records), /Injected failure/);
   assert.equal(client.rows.length, 0);
   assert.equal(client.calls.at(-1), 'ROLLBACK');

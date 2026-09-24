@@ -107,6 +107,7 @@ function makeSalesCtx() {
     async query(sql, params = []) {
       const s = sql.replace(/\s+/g, " ").trim();
       if (/^BEGIN$|^COMMIT$|^ROLLBACK$/i.test(s)) return { rowCount: 0 };
+      if (/FROM till_sessions/.test(s)) return { rows: [{ id: "till-1", terminal_id: "term-1", terminal_number: "T01", timezone: "Europe/London" }] };
       if (/pg_advisory_xact_lock/.test(s)) { state.advisory.push(params[0]); return { rows: [] }; }
       if (/to_char\(timezone\(\$1, NOW\(\)\), 'YYYYMMDD'\)/.test(s)) {
         return { rows: [{ date_key: "20260918" }] };
@@ -114,14 +115,17 @@ function makeSalesCtx() {
       if (/MAX\(NULLIF\(split_part\(receipt_number/.test(s)) {
         return { rows: [{ next_number: state.sales.length + 1 }] };
       }
-      if (/SELECT id, created_at, total, receipt_number FROM sales WHERE company_id = \$1 AND client_request_id = \$2/.test(s)) {
+      if (/SELECT id, created_at, total, receipt_number, client_request_fingerprint FROM sales WHERE company_id = \$1 AND client_request_id = \$2/.test(s)) {
         const existing = state.sales.find((sale) => sale.company_id === params[0] && sale.client_request_id === params[1]);
-        return { rows: existing ? [{ id: existing.id, created_at: existing.created_at, total: existing.total, receipt_number: existing.receipt_number }] : [] };
+        return { rows: existing ? [{ id: existing.id, created_at: existing.created_at, total: existing.total, receipt_number: existing.receipt_number, client_request_fingerprint: existing.client_request_fingerprint }] : [] };
       }
       if (/FROM products WHERE id = \$1 AND company_id = \$2/.test(s)) {
         // Product lookups (stock + age_restricted check). Tenant-scoped.
         const row = state.products && state.products.get(params[0]);
         return { rows: row && row.company_id === params[1] && row.active !== false ? [{ ...row }] : [] };
+      }
+      if (/SELECT id, price, vat_rate, vat_applicable, category_id FROM products/.test(s)) {
+        return { rows: params[1].map((id) => state.products?.get(id)).filter((row) => row && row.company_id === params[0] && row.active !== false) };
       }
       if (/INSERT INTO sales \(/.test(s)) {
         const sale = {
@@ -133,6 +137,7 @@ function makeSalesCtx() {
           receipt_number: `T01-x-${String(state.sales.length + 1).padStart(4, "0")}`,
           total: Number(params[9]) || 0,
           client_request_id: params[10] ?? null,
+          client_request_fingerprint: params[11] ?? null,
           created_at: new Date().toISOString(),
         };
         state.sales.push(sale);

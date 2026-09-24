@@ -194,7 +194,8 @@ function makeCtx() {
       return { rows: b ? [{ ...b }] : [] };
     }
     /* batches router: PUT read-back (joined row) */
-    if (/SELECT b.id, b.company_id, b.store_id, b.product_id, b.batch_number, b.expiry_date, b.quantity, b.created_at, b.updated_at, p.name AS product_name, p.sku, p.batch_tracking AS product_batch_tracking FROM inventory_batches b INNER JOIN products p ON p.id = b.product_id WHERE b.id = \$1$/.test(s)) {
+    if (/SELECT b.id, b.company_id, b.store_id, b.product_id, b.batch_number, b.expiry_date, b.quantity, b\.manufacturing_date, b.created_at, b.updated_at, p.name AS product_name, p.sku, p.batch_tracking AS product_batch_tracking FROM inventory_batches b INNER JOIN products p ON p.id = b.product_id WHERE b.id = \$1$/.test(s)
+      || /SELECT b.id, b.company_id, b.store_id, b.product_id, b.batch_number, b.expiry_date, b.quantity, b.created_at, b.updated_at, p.name AS product_name, p.sku, p.batch_tracking AS product_batch_tracking FROM inventory_batches b INNER JOIN products p ON p.id = b.product_id WHERE b.id = \$1$/.test(s)) {
       const b = state.batches.find((x) => x.id === params[0]);
       if (!b) return { rows: [] };
       const p = state.products.find((x) => x.id === b.product_id);
@@ -208,7 +209,8 @@ function makeCtx() {
     }
 
     /* batches list (GET /inventory/batches) */
-    if (/SELECT b.id, b.company_id, b.store_id, b.product_id, b.batch_number, b.expiry_date, b.quantity, b.created_at, b.updated_at, p.name AS product_name, p.sku, p.batch_tracking AS product_batch_tracking FROM inventory_batches b INNER JOIN products p ON p.id = b.product_id WHERE/.test(s)) {
+    if (/SELECT b.id, b.company_id, b.store_id, b.product_id, b.batch_number, b.expiry_date, b.quantity, b\.manufacturing_date, b.created_at, b.updated_at, p.name AS product_name, p.sku, p.batch_tracking AS product_batch_tracking FROM inventory_batches b INNER JOIN products p ON p.id = b.product_id WHERE/.test(s)
+      || /SELECT b.id, b.company_id, b.store_id, b.product_id, b.batch_number, b.expiry_date, b.quantity, b.created_at, b.updated_at, p.name AS product_name, p.sku, p.batch_tracking AS product_batch_tracking FROM inventory_batches b INNER JOIN products p ON p.id = b.product_id WHERE/.test(s)) {
       const rows = state.batches
         .filter((b) => b.company_id === params[0] && b.store_id === params[1])
         .filter((b) => !params[2] || b.product_id === params[2])
@@ -412,12 +414,12 @@ describe("batch HTTP API", () => {
     const app = await buildApp(ctx);
     const { port, server } = await listen(app);
 
-    const created = await post(port, "/api/inventory/batches", { productId: P1, batchNumber: "A100", expiryDate: "2026-10-01", quantity: 20 });
+    const created = await post(port, "/api/inventory/batches", { productId: P1, batchNumber: "A100", expiryDate: "2027-10-01", quantity: 20 });
     assert.equal(created.status, 201);
     assert.equal(created.body.data.batch_number, "A100");
     assert.equal(created.body.data.expiry_status, "valid");
 
-    const again = await post(port, "/api/inventory/batches", { productId: P1, batchNumber: "A100", expiryDate: "2026-10-01", quantity: 15 });
+    const again = await post(port, "/api/inventory/batches", { productId: P1, batchNumber: "A100", expiryDate: "2027-10-01", quantity: 15 });
     assert.equal(again.status, 201);
     assert.equal(Number(again.body.data.quantity), 35); // accumulated, not overwritten
 

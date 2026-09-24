@@ -17,7 +17,7 @@ test("generic record history stores tenant, object, field, values, actor and tim
 test("generic create, update and delete paths write history and the object page displays it", () => {
   assert.match(routes, /writeRecordHistory\(object, result\.rows\[0\]\.id, fields, null, result\.rows\[0\], "create"/);
   assert.match(routes, /writeRecordHistory\(object, result\.rows\[0\]\.id, fields, ruleCheck\.current, result\.rows\[0\], "update"/);
-  assert.match(routes, /writeRecordHistory\(object, req\.params\.recordId, fields, existing\.rows\[0\], null, "delete"/);
+  assert.match(routes, /writeRecordHistory\(object, req\.params\.recordId, fields, existing\.rows\[0\], archived \? result\.rows\[0\] : null, "delete"/);
   assert.match(objectPage, /ObjectHistory/);
   assert.match(objectPage, /records\/\$\{id\}\/history/);
 });

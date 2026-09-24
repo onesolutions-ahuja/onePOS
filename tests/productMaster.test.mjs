@@ -484,8 +484,8 @@ describe("POS product lookup regression", () => {
   test("product images + category filtering contract intact", () => {
     const formSrc = fs.readFileSync(new URL("../src/pages/products/ProductFormModal.jsx", import.meta.url), "utf8");
     const gridSrc = fs.readFileSync(new URL("../src/pages/pos/ProductGrid.jsx", import.meta.url), "utf8");
-    assert.match(formSrc, /handleImageFile/, "image picker untouched");
-    assert.match(formSrc, /updateField\("categoryId"/, "category selection intact");
+    assert.match(formSrc, /StandardObjectFormModal/, "product editor uses canonical metadata form");
+    assert.match(formSrc, /fieldOptions=\{\{/, "category options are supplied to metadata form");
     assert.match(gridSrc, /onCategoryChange/, "POS category filtering intact");
     assert.match(gridSrc, /product\.imageUrl/, "POS product images intact");
   });

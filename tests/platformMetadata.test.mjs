@@ -108,7 +108,7 @@ test("platform configuration API exposes complete metadata CRUD", () => {
     'router.get("/platform/modules/:moduleId"',
     'router.patch("/platform/modules/:moduleId"',
   ]) assert.match(source, new RegExp(endpoint.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
-  assert.match(source, /FIELD_TYPES = new Set/);
+  assert.match(source, /FIELD_TYPES = PLATFORM_FIELD_TYPE_SET/);
   assert.match(source, /RELATIONSHIP_POLICIES = new Set/);
   assert.match(source, /Only a Superadmin can activate or deactivate/);
 });

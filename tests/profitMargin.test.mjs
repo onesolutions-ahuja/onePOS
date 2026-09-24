@@ -21,11 +21,12 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import express from "express";
 import reportsRt from "../routes/reports.js";
+import { requireTestDatabaseUrl } from "./testDatabaseEnv.mjs";
 
 const tag = () => crypto.randomUUID().slice(0, 8);
 
 const createTestDb = async () => {
-  const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false } });
+  const pool = new pg.Pool({ connectionString: requireTestDatabaseUrl(), ssl: { rejectUnauthorized: false } });
   const db = (q, p) => pool.query(q, p);
   const t = tag();
   const company = await db(`INSERT INTO companies(name) VALUES($1) RETURNING id`, [`profit-${t}`]);
@@ -67,6 +68,11 @@ const createTestDb = async () => {
     }
     return saleId;
   };
+
+  /* A: known cost; B/C have unknown cost. */
+  const productA = await insertProduct({ name: "Costed Product A", cost: 4 });
+  const productB = await insertProduct({ name: "Zero Cost Product B", cost: 0 });
+  const productC = await insertProduct({ name: "Null Cost Product C", cost: null });
 
   /* Sale 1 (today): 2 × A @ 10.00, line tax 4.00 → VAT-excl revenue 16.00, COGS 8.00 */
   const sale1 = await insertSale({
@@ -149,6 +155,14 @@ const listen = (app) =>
   });
 
 const req = async (port, path) => {
+  const res = await fetch(`http://127.0.0.1:${port}${path}`);
+  return { status: res.status, body: await res.json().catch(() => ({})) };
+};
+
+const withDefaults = async (ctx, granted = true) => {
+  const { server, port } = await listen(buildApp(ctx, { granted }));
+  return { server, get: (path) => req(port, path) };
+};
 
 /* Expected headline numbers for the default (today, session store) window:
  *   sold today in session store: 2×A + 1×B + 1×C (Sale 3 is old, Sale 4 other store)
@@ -212,6 +226,14 @@ test("date / date-range filtering restricts the profit window", async () => {
     /* impossible range: nothing */
     const empty = await get("/api/reports/profit?dateFrom=2099-01-01&dateTo=2099-12-31");
     assert.equal(empty.body.data.grossSales, 0);
+    assert.equal(empty.body.data.cogs, 0);
+    assert.equal(empty.body.data.grossProfit, 0);
+    assert.equal(empty.body.data.grossMargin, 0);
+    server.close();
+  } finally {
+    await ctx.cleanup();
+  }
+});
 
 test("store filtering: session store by default, access-checked override, unknown store 404", async () => {
   const ctx = await createTestDb();
@@ -351,29 +373,3 @@ test("running the profit report does not change existing sales data or other rep
     await ctx.cleanup();
   }
 });
-
-    assert.equal(empty.body.data.cogs, 0);
-    assert.equal(empty.body.data.grossProfit, 0);
-    assert.equal(empty.body.data.grossMargin, 0);
-    server.close();
-  } finally {
-    await ctx.cleanup();
-  }
-});
-
-  const res = await fetch(`http://127.0.0.1:${port}${path}`);
-  return { status: res.status, body: await res.json().catch(() => ({})) };
-};
-
-/* Launch the app; returns a get(path) helper. */
-const withDefaults = async (ctx, granted = true) => {
-  const { server, port } = await listen(buildApp(ctx, { granted }));
-  return { server, get: (path) => req(port, path) };
-};
-
-      )
-    ).rows[0];
-  /* A: known cost 4.00 · B: zero cost (unknown) · C: NULL cost (unknown) */
-  const productA = await insertProduct({ name: "Costed Product A", cost: 4 });
-  const productB = await insertProduct({ name: "Zero Cost Product B", cost: 0 });
-  const productC = await insertProduct({ name: "Null Cost Product C", cost: null });

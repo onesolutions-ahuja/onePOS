@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import express from "express";
 import { initializePlatformMetadata, platformSchema } from "../services/platformMetadata.js";
 import createPlatformRouter from "../routes/platform.js";
+import { requireTestDatabaseUrl } from "./testDatabaseEnv.mjs";
 
 const CORE = ["customer", "employee", "product", "sale", "store", "supplier"];
 
@@ -102,10 +103,8 @@ test("bootstrap restores other inactive core mappings but leaves other modules a
 });
 
 test("PostgreSQL: Customer restoration and repeated bootstrap preserve IDs and custom fields", { skip: process.env.PLATFORM_BOOTSTRAP_DB_TEST !== "1" }, async t => {
-  await import("dotenv/config");
   const { default: pg } = await import("pg");
-  assert.ok(process.env.DATABASE_URL, "DATABASE_URL required for explicit PostgreSQL test");
-  const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false }, connectionTimeoutMillis: 10000, statement_timeout: 15000, max: 1 });
+  const pool = new pg.Pool({ connectionString: requireTestDatabaseUrl(), ssl: { rejectUnauthorized: false }, connectionTimeoutMillis: 10000, statement_timeout: 15000, max: 1 });
   const client = await pool.connect();
   try {
     await client.query("BEGIN");

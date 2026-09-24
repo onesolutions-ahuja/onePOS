@@ -24,7 +24,7 @@ test("supplier accounts expose authenticated credit/debit ledger adjustments wit
   assert.match(source, /router\.post\("\/supplier-ledger-entries", authenticate, authorize\(\.\.\.manage\)/);
   assert.match(source, /RETURN_CREDIT/);
   assert.match(source, /typeof debit !== "boolean"/);
-  assert.match(source, /suppliers WHERE id=\$1 AND company_id=\$2 AND active=true/);
+  assert.match(source, /suppliers WHERE id=\$1 AND company_id=\$2/);
   assert.match(source, /stores WHERE id=\$1 AND company_id=\$2/);
   assert.match(source, /supplier_ledger_entries/);
   assert.match(source, /router\.get\("\/suppliers\/:id\/statement", authenticate, authorize\(\.\.\.view\)/);

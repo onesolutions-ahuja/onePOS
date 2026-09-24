@@ -1,0 +1,255 @@
+import { useState } from "react";
+import { CreditCard, Receipt, ShoppingCart } from "lucide-react";
+import PriceOverrideModal from "./PriceOverrideModal.jsx";
+
+function CartPanel({
+  basket,
+  miscLines = [],
+  onRemoveMiscLine,
+  selectedCustomer,
+  onCustomerClick,
+  onCustomerRemove,
+  saleError,
+  saleMessage,
+  onIncrease,
+  onDecrease,
+  onUpdateQuantity,
+  onRemoveItem,
+  onPriceOverride,
+  canPriceOverride = false,
+  subtotal,
+  vat,
+  total,
+  onCheckout,
+}) {
+  const [overrideItem, setOverrideItem] = useState(null);
+  return (
+    <aside className="w-[350px] bg-white border-l border-slate-200 flex flex-col shrink-0">
+      <div className="h-[58px] border-b border-slate-200 flex items-center justify-between px-4">
+        <div>
+          <div className="font-bold">
+            Current Sale
+          </div>
+          <button onClick={onCustomerClick} className="text-xs text-slate-500 text-left hover:text-blue-600">
+            {selectedCustomer ? selectedCustomer.name : "Walk-in Customer"}
+          </button>
+          {selectedCustomer && <div className="flex gap-2 mt-1"><span className="text-[11px] text-slate-400">{selectedCustomer.phone || selectedCustomer.email || ""}</span><button onClick={onCustomerRemove} className="text-[11px] text-red-500">Remove</button></div>}
+        </div>
+
+        <Receipt
+          size={20}
+          className="text-slate-400"
+        />
+      </div>
+
+      {saleError && <div className="mx-3 mb-2 px-3 py-2 bg-red-50 text-red-700 rounded text-xs">{saleError}</div>}
+      {saleMessage && <div className="mx-3 mb-2 px-3 py-2 bg-emerald-50 text-emerald-700 rounded text-xs">{saleMessage}</div>}
+
+      <div className="flex-1 overflow-y-auto p-3">
+        {basket.length === 0 ? (
+          <div className="h-full flex flex-col items-center justify-center text-slate-400">
+            <ShoppingCart
+              size={42}
+              strokeWidth={1.5}
+            />
+
+            <div className="font-medium mt-3">
+              No items
+            </div>
+
+            <div className="text-xs mt-1">
+              Scan a barcode or select a
+              product
+            </div>
+          </div>
+        ) : (
+          <div>
+            {basket.map((item) => (
+              <div
+                key={item.id}
+                className="border-b border-slate-100 py-3"
+              >
+                <div className="flex justify-between gap-2">
+                  <div className="font-medium text-sm">
+                    {item.name}
+                  </div>
+
+                  <div className="font-semibold text-sm">
+                    £
+                    {(
+                      Number(
+                        item.price || 0
+                      ) *
+                      item.quantity
+                    ).toFixed(2)}
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-between mt-2">
+                  <div className="flex items-center border border-slate-200 rounded">
+                    <button
+                      onClick={() =>
+                        onDecrease(
+                          item.id
+                        )
+                      }
+                      className="w-8 h-8 hover:bg-slate-100"
+                    >
+                      −
+                    </button>
+
+                    <span className="w-8 text-center text-sm font-medium" data-testid="cart-qty">
+                      {item.quantity}
+                    </span>
+
+                    <button
+                      onClick={() =>
+                        onIncrease(item)
+                      }
+                      className="w-8 h-8 hover:bg-slate-100"
+                      title="Increase quantity"
+                      aria-label={`Increase quantity of ${item.name}`}
+                    >
+                      +
+                    </button>
+
+                    <button
+                      onClick={() => onRemoveItem(item.id)}
+                      className="w-8 h-8 text-red-500 hover:bg-red-50"
+                      title="Remove item"
+                      aria-label={`Remove ${item.name}`}
+                    >
+                      ×
+                    </button>
+                  </div>
+
+                   <span className="text-xs text-slate-400">
+                     £
+                     {Number(
+                       item.price || 0
+                     ).toFixed(2)}{" "}
+                     each
+                   </span>
+                   {canPriceOverride && (
+                     <button
+                       onClick={() => setOverrideItem(item)}
+                       className="w-8 h-8 hover:bg-slate-100"
+                       title="Change price"
+                       aria-label={`Change price of ${item.name}`}
+                     >
+                       £
+                     </button>
+                   )}
+                 </div>
+              </div>
+            ))}
+
+            {/* Till Misc Item lines: manual-price lines with no catalogue SKU.
+                They check out on the same sale/receipt; the backend records
+                them as item_type='MISC'. Removable like any basket line. */}
+            {miscLines.map((line, index) => (
+              <div key={`misc-${index}-${line.description}`}
+                className="border-b border-slate-100 py-3"
+                data-testid="misc-cart-line"
+              >
+                <div className="flex justify-between gap-2">
+                  <div className="font-medium text-sm">
+                    {line.description}
+                    <span className="ml-1 text-[10px] uppercase tracking-wide text-slate-400">
+                      Misc
+                    </span>
+                  </div>
+
+                  <div className="font-semibold text-sm">
+                    £
+                    {(
+                      Number(line.price || 0) *
+                      Number(line.quantity || 0)
+                    ).toFixed(2)}
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-between mt-2">
+                  <div className="flex items-center border border-slate-200 rounded">
+                    <span className="w-8 text-center text-sm font-medium">
+                      {line.quantity}
+                    </span>
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs text-slate-400">
+                      £{Number(line.price || 0).toFixed(2)} each
+                    </span>
+                    <button
+                      onClick={() => onRemoveMiscLine(index)}
+                      className="w-8 h-8 text-red-500 hover:bg-red-50"
+                      title="Remove misc item"
+                      aria-label={`Remove ${line.description}`}
+                    >
+                      ×
+                    </button>
+                  </div>
+                </div>
+              </div>
+             ))}
+           </div>
+         )}
+       </div>
+
+      {overrideItem && onPriceOverride && (
+        <PriceOverrideModal
+          item={overrideItem}
+          onClose={() => setOverrideItem(null)}
+          onApply={(newPrice, reason) => {
+            onPriceOverride(overrideItem, newPrice, reason);
+            setOverrideItem(null);
+          }}
+        />
+      )}
+
+
+      <div className="border-t border-slate-200 p-4">
+        <div className="flex justify-between text-sm mb-2">
+          <span className="text-slate-500">
+            Subtotal
+          </span>
+
+          <span>
+            £{subtotal.toFixed(2)}
+          </span>
+        </div>
+
+        <div className="flex justify-between text-sm mb-3">
+          <span className="text-slate-500">
+            VAT
+          </span>
+
+          <span>
+            £{vat.toFixed(2)}
+          </span>
+        </div>
+
+        <div className="flex justify-between text-xl font-bold mb-4">
+          <span>Total</span>
+
+          <span>
+            £{total.toFixed(2)}
+          </span>
+        </div>
+
+        <button
+          disabled={
+            basket.length === 0 && miscLines.length === 0
+          }
+          onClick={onCheckout}
+          className="w-full h-14 bg-blue-600 hover:bg-blue-700 disabled:bg-slate-300 text-white rounded-md text-lg font-bold flex items-center justify-center gap-2"
+        >
+          <CreditCard size={21} />
+          PAYMENT
+        </button>
+      </div>
+    </aside>
+  );
+}
+
+export default CartPanel;

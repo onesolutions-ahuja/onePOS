@@ -720,7 +720,7 @@ describe("Petty cash backend contract (routes/till.js)", () => {
 
   test("cash-movement endpoint records cash_out with amount, user and reason", () => {
     assert.ok(TILL_SRC.includes("/till/sessions/:id/cash-movements"), "movement endpoint exists");
-    assert.ok(/INSERT INTO cash_movements \(till_session_id, user_id, type, amount, reason\)/.test(TILL_SRC), "insert captures session, user, type, amount, reason");
+    assert.ok(/INSERT INTO cash_movements \(till_session_id, user_id, type, amount, reason(?:, store_id, terminal_id)?\)/.test(TILL_SRC), "insert captures session, user, type, amount, reason");
     assert.ok(/type === "cash_in" \? "cash\.adjustment" : "cash\.payout"/.test(TILL_SRC), "cash_out requires the cash.payout permission");
     assert.ok(/value <= 0/.test(TILL_SRC), "zero/negative amounts rejected");
   });

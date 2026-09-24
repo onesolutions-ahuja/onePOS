@@ -398,9 +398,9 @@ describe("POS VAT calculation with per-product applicability", () => {
      * Self-Checkout uses the same single calculation. */
     const totalsSrc = fs.readFileSync(new URL("../src/utils/saleTotals.js", import.meta.url), "utf8");
     assert.match(totalsSrc, /item\.vatApplicable === false\s+\? sum\s+: sum/, "basket VAT base must exclude non-applicable lines");
-    assert.match(totalsSrc, /vat = vatEnabled \? discountedVatSubtotal \* vatRate : 0/, "global master switch still gates everything");
+    assert.match(totalsSrc, /if \(!vatEnabled \|\| line\.vatApplicable === false\) return/, "global master switch still gates every tax line");
     assert.match(posSrc, /computeBasketTotals\(basket/, "POS totals must come from the shared engine");
-    assert.match(posSrc, /item\.vatApplicable === false\s*\?\s*0\s*:\s*vatRate/, "line VAT must zero-rate non-applicable items");
+    assert.match(posSrc, /lineTaxFor\(/, "POS uses the shared per-line VAT rule");
   });
 
   test("normaliseProduct carries vat_applicable through to POS/basket items", () => {

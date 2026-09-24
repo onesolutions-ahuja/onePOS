@@ -71,6 +71,10 @@ function makeSalesCtx() {
       const s = sql.replace(/\s+/g, " ").trim();
       if (/^BEGIN$|^COMMIT$|^ROLLBACK$/i.test(s)) return { rowCount: 0 };
       if (/pg_advisory_xact_lock/.test(s)) return { rows: [] };
+      if (/FROM till_sessions/.test(s)) {
+        return { rows: [{ id: "till-1", terminal_id: "term-1", terminal_number: "T01", timezone: "Europe/London" }] };
+      }
+      if (/SELECT id FROM users WHERE id = \$1/.test(s)) return { rows: [{ ok: 1 }] };
       if (/to_char\(timezone\(\$1, NOW\(\)\), 'YYYYMMDD'\)/.test(s)) return { rows: [{ date_key: "20260918" }] };
       if (/MAX\(NULLIF\(split_part\(receipt_number/.test(s)) return { rows: [{ next_number: state.sales.length + 1 }] };
       if (/SELECT id, created_at, total, receipt_number FROM sales WHERE company_id = \$1 AND client_request_id = \$2/.test(s)) {
@@ -80,6 +84,9 @@ function makeSalesCtx() {
       if (/FROM products WHERE id = \$1 AND company_id = \$2/.test(s)) {
         const row = state.products?.get(params[0]);
         return { rows: row && row.company_id === params[1] ? [{ ...row }] : [] };
+      }
+      if (/SELECT id, price, vat_rate, vat_applicable, category_id FROM products WHERE company_id = \$1 AND id = ANY/.test(s)) {
+        return { rows: [...(state.products?.values() ?? [])].map((row) => ({ id: row.id, price: row.price ?? 3, vat_rate: row.vat_rate ?? 0, vat_applicable: row.vat_applicable !== false, category_id: row.category_id ?? null })) };
       }
       if (/INSERT INTO sales \(/.test(s)) {
         const sale = {

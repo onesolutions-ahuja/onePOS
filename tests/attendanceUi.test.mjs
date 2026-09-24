@@ -29,7 +29,7 @@ const SETTINGS = read("../src/pages/settings/SettingsAdmin.jsx");
 
 test("Employees page exists and is wired into the AdminLayout", () => {
   assert.match(PAGE, /export default function AttendanceAdmin/);
-  assert.match(LAYOUT, /import AttendanceAdmin from "\.\.\/employees\/AttendanceAdmin\.jsx";/);
+  assert.match(LAYOUT, /const AttendanceAdmin = lazy\(\(\) => import\("\.\.\/employees\/AttendanceAdmin\.jsx"\)\);/);
   assert.match(LAYOUT, /page ===\s*\n?\s*"Employees" \? \(|page === "Employees" \? \(/);
   assert.match(LAYOUT, /"Employees" \? \(?\s*<AttendanceAdmin \/>\s*\)/);
   /* No second top-level module / duplicated nav entry. */

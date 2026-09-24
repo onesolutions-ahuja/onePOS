@@ -65,7 +65,7 @@ const SAMPLE_GLOBAL = [
     subcategory: "Cola",
     unit_description: "500ml bottle",
     image_url: "https://cdn.example.com/coca-cola-500.jpg",
-    source: "tesco",
+    source: "sample",
   },
   {
     id: "g-02",
@@ -76,7 +76,7 @@ const SAMPLE_GLOBAL = [
     subcategory: "Cola",
     unit_description: "500ml bottle",
     image_url: null,
-    source: "tesco",
+    source: "sample",
   },
 ];
 

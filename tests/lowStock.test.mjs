@@ -5,6 +5,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import express from "express";
 import inventoryRt from "../routes/inventory.js";
+import { requireTestDatabaseUrl } from "./testDatabaseEnv.mjs";
 
 /*
  * Live-database integration test for the inventory low-stock endpoint.
@@ -13,7 +14,7 @@ import inventoryRt from "../routes/inventory.js";
  * removed in releaseTestDb.
  */
 const createTestDb = async () => {
-  const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false } });
+  const pool = new pg.Pool({ connectionString: requireTestDatabaseUrl(), ssl: { rejectUnauthorized: false } });
   const db = (q, p) => pool.query(q, p);
   const tag = crypto.randomUUID().slice(0, 8);
   const company = await db(`INSERT INTO companies(name) VALUES($1) RETURNING id`, [`lowstock-${tag}`]);

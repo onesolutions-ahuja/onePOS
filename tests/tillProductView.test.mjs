@@ -138,17 +138,17 @@ function makeDb() {
       if (/\bdock_quick_access\b/.test(valuesPart)) {
         throw new Error('column "dock_quick_access" does not exist');
       }
-      if (params[9] == null && !/COALESCE\(\$10/.test(valuesPart)) {
+      if (params[13] == null && !/COALESCE\(\$14/.test(valuesPart)) {
         throw new Error('null value in column "customer_display_enabled" of relation "company_settings" violates not-null constraint');
       }
       /* Mirror the route's COALESCE: null keeps the stored value. */
-      const next = params[7] == null ? (state.settings.get(params[0]) || "image") : params[7];
+      const next = params[11] == null ? (state.settings.get(params[0]) || "image") : params[11];
       state.settings.set(params[0], next);
-      /* dock_quick_access is params[8]: array → JSON string, null → keep. */
-      const nextDock = params[8] == null ? (state.dock.get(params[0]) || null) : JSON.parse(params[8]);
+      /* dock_quick_access is params[12]: array → JSON string, null → keep. */
+      const nextDock = params[12] == null ? (state.dock.get(params[0]) || null) : JSON.parse(params[12]);
       state.dock.set(params[0], nextDock);
-      /* customer_display_enabled is params[9]: boolean | null (keep). */
-      if (typeof params[9] === "boolean") state.customerDisplay.set(params[0], params[9]);
+      /* customer_display_enabled is params[13]: boolean | null (keep). */
+      if (typeof params[13] === "boolean") state.customerDisplay.set(params[0], params[13]);
       return { rows: [] };
     }
     if (/INSERT INTO audit_logs/.test(s)) {
@@ -403,7 +403,7 @@ describe("T10U negative-billing reaches the till", () => {
   });
 
   test("add() and updateQuantity() only cap stock when negative billing is OFF", () => {
-    const addBlock = POS_SRC.split("const add = (product) => {")[1].split("setBasket((current) => {")[0];
+    const addBlock = POS_SRC.split("const addLine = (product, modifiers = []) => {")[1].split("setBasket((current) => {")[0];
     assert.ok(addBlock.includes("!allowNegativeBilling &&"), "add() stock cap is gated on !allowNegativeBilling");
     const updateBlock = POS_SRC.split("const stockLimit =")[2]?.split("setSaleError")[0] || "";
     assert.ok(POS_SRC.split("const updateQuantity =")[1].includes("!allowNegativeBilling &&"), "updateQuantity() cap is gated the same way");
@@ -558,11 +558,11 @@ describe("T10W dock quick-access setting (backend)", () => {
     const valuesPart = sql.split(/ON CONFLICT/)[0].replace(/^[\s\S]*?VALUES\s*\(/, "");
     assert.ok(!/\bdock_quick_access\b/.test(valuesPart),
       "VALUES clause must not reference the dock_quick_access column (only ON CONFLICT may)");
-    assert.ok(/COALESCE\(\$10, false\)/.test(valuesPart),
+    assert.ok(/COALESCE\(\$14, false\)/.test(valuesPart),
       "NOT NULL customer_display_enabled falls back to its column default in VALUES");
     assert.ok(/COALESCE\(\$6, 0\.0100\)/.test(valuesPart),
       "NOT NULL loyalty_earning_rate falls back to its column default in VALUES");
-    assert.ok(/dock_quick_access=COALESCE\(\$9::jsonb, company_settings\.dock_quick_access\)/.test(sql),
+    assert.ok(/dock_quick_access=COALESCE\(\$13::jsonb, company_settings\.dock_quick_access\)/.test(sql),
       "ON CONFLICT arm keeps the stored dock list when dockQuickAccess is omitted");
   });
 
@@ -587,10 +587,10 @@ describe("T10W dock quick-access setting (backend)", () => {
 describe("T10W dock frontend contracts", () => {
   test("dock renders configured pages; launcher stays centred; Open Till fixed", () => {
     assert.ok(DOCK_SRC.includes("quickAccess"), "dock accepts the quickAccess prop");
-    assert.ok(/configured\.slice\(0, mid\)[\s\S]*"LEFT"[\s\S]*configured\.slice\(mid\)/.test(DOCK_SRC),
-      "launcher slot sits between the two halves of the configured list");
-    assert.ok(/\.slice\(mid\),\s*\n?\s*"Open Till"/.test(DOCK_SRC), "Open Till stays fixed after the configured pages");
-    assert.ok(DOCK_SRC.includes("MAX_QUICK_ACCESS = 8"), "dock caps quick access at 8");
+    assert.ok(DOCK_SRC.includes("const leftSlots = configured.slice(0, SLOT_LIMIT)"), "left side uses the fixed slot limit");
+    assert.ok(DOCK_SRC.includes("const rightSlots = configured.slice(SLOT_LIMIT, SLOT_LIMIT * 2)"), "right side uses the fixed slot limit");
+    assert.ok(DOCK_SRC.includes("SLOT_LIMIT = 6"), "dock provides six configurable slots on each side of Jarves");
+    assert.ok(DOCK_SRC.includes('["Open Till"]'), "Open Till fills a spare trailing slot");
   });
 
   test("empty/unset configuration falls back to the default layout", () => {

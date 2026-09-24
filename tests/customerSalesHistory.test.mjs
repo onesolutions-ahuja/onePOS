@@ -77,9 +77,13 @@ function makeCtx() {
     async query(sql, params = []) {
       const s = String(sql).replace(/\s+/g, " ").trim();
       if (/^BEGIN$|^COMMIT$|^ROLLBACK$/i.test(s)) return { rowCount: 0 };
+      if (/FROM till_sessions/.test(s)) return { rows: [{ id: "till-1", terminal_id: "term-1", terminal_number: "T01", timezone: "Europe/London" }] };
       if (/pg_advisory_xact_lock/.test(s)) return { rows: [] };
       if (/to_char\(timezone/.test(s)) return { rows: [{ date_key: "20260920" }] };
       if (/MAX\(NULLIF\(split_part\(receipt_number/.test(s)) return { rows: [{ next_number: state.sales.length + 1 }] };
+      if (/SELECT id, price, vat_rate, vat_applicable, category_id FROM products/.test(s)) {
+        return { rows: params[1].map((id) => ({ id, price: 5, vat_rate: 0, vat_applicable: true, category_id: null })) };
+      }
       if (/SELECT id,\s*name,\s*price,\s*(stock_quantity,\s*track_stock,\s*age_restricted|vat_rate,\s*track_stock)\s+FROM products/.test(s)) {
         return { rows: [{ id: params[0], name: "Test product", price: 5, stock_quantity: 100, track_stock: true, age_restricted: false }] };
       }

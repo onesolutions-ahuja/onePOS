@@ -140,15 +140,19 @@ test("package metadata provisioning is idempotent and package-owned", async () =
     },
   });
 
+  assert.equal(result.objects, 1);
+  assert.ok(calls.some((sql) => sql.includes("platform_fields")));
+});
+
   test("package registry exposes uninstall metadata safety guards", async () => {
     const source = await import("node:fs").then((fs) => fs.readFileSync(new URL("../routes/packages.js", import.meta.url), "utf8"));
     assert.match(source, /PACKAGE_METADATA_REMAINS/);
     assert.match(source, /PACKAGE_ACCESS_REMAINS/);
     assert.match(source, /platform_objects/);
     assert.match(source, /platform_module_access/);
-  });
+});
 
-  test("fresh company provisioning installs only the declared default packages", async () => {
+test("fresh company provisioning installs only the declared default packages", async () => {
     const queries = [];
     const db = async (sql, params = []) => {
       queries.push({ sql, params });
@@ -161,28 +165,26 @@ test("package metadata provisioning is idempotent and package-owned", async () =
     await provisionDefaultCompanyPackages(db, { companyId: "company", installedBy: "user", packageKeys: ["retail_pos"] });
     assert.equal(queries.filter(({ sql }) => sql.includes("company_package_installations")).length, 1);
     assert.equal(queries.filter(({ sql }) => sql.includes("platform_module_access")).length, 1);
-  });
+});
 
-  test("package installation supports company-validated store scope", async () => {
+test("package installation supports company-validated store scope", async () => {
     const source = await import("node:fs").then((fs) => fs.readFileSync(new URL("../routes/packages.js", import.meta.url), "utf8"));
     assert.match(source, /Store is not available to this company/);
     assert.match(source, /store_id IS NOT DISTINCT FROM/);
     assert.match(source, /selected_features\)/);
-  });
+});
 
-  test("package routes use a dedicated package permission with settings compatibility", async () => {
+test("package routes use a dedicated package permission with settings compatibility", async () => {
     const source = await import("node:fs").then((fs) => fs.readFileSync(new URL("../routes/packages.js", import.meta.url), "utf8"));
     assert.match(source, /authorize\("package\.manage", "settings\.manage"\)/);
     const platformSource = await import("node:fs").then((fs) => fs.readFileSync(new URL("../routes/platform.js", import.meta.url), "utf8"));
     assert.match(platformSource, /module\.access\.manage/);
-  });
+});
 
-  test("package uninstall checks active cross-package metadata references", async () => {
+test("package uninstall checks active cross-package metadata references", async () => {
     const source = await import("node:fs").then((fs) => fs.readFileSync(new URL("../routes/packages.js", import.meta.url), "utf8"));
     assert.match(source, /PACKAGE_REFERENCED/);
     assert.match(source, /platform_relationships/);
     assert.match(source, /sourcePackage\.package_key/);
-  });
-  assert.equal(result.objects, 1);
-  assert.ok(calls.some((sql) => sql.includes("platform_fields")));
 });
+

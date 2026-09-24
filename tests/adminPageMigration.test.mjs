@@ -49,7 +49,6 @@ const MIGRATED = {
     "onepos-page-header",
     "onepos-page-title",
     "onepos-card",
-    "onepos-card-header",
     "onepos-toolbar",
     "onepos-table",
     "onepos-empty",

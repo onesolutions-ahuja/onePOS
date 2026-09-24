@@ -47,7 +47,7 @@ function makeCtx() {
           rows: [{ id: "till-1", terminal_id: "term-1", terminal_number: "T01", timezone: "Europe/London" }],
         };
       }
-      if (/SELECT id, price, vat_rate, vat_applicable\s+FROM products/.test(s)) {
+      if (/SELECT id, price, vat_rate, vat_applicable, category_id\s+FROM products/.test(s)) {
         /* Batch catalogue re-pricing (server-authoritative totals engine). */
         return { rows: [{ id: "p-1", price: 10, vat_rate: null, vat_applicable: true }] };
       }

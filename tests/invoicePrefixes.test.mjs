@@ -40,12 +40,12 @@ function makeSettingsDb() {
     }
     if (/INSERT INTO company_settings \(company_id, date_format/.test(s)) {
       /* Mirrors the route's COALESCE: null keeps the stored value.
-         Prefix params are 13/14/15. */
+         Prefix params are 17/18/19 (indexes 16/17/18). */
       const next = { ...state.row };
-      if (params[12] != null) next.till_invoice_prefix = params[12];
-      if (params[13] != null) next.delivery_invoice_prefix = params[13];
-      if (params[14] != null) next.self_checkout_invoice_prefix = params[14];
-      state.saved.push({ till: params[12], delivery: params[13], selfCheckout: params[14] });
+      if (params[16] != null) next.till_invoice_prefix = params[16];
+      if (params[17] != null) next.delivery_invoice_prefix = params[17];
+      if (params[18] != null) next.self_checkout_invoice_prefix = params[18];
+      state.saved.push({ till: params[16], delivery: params[17], selfCheckout: params[18] });
       state.row = next;
       return { rows: [] };
     }

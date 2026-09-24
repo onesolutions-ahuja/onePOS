@@ -103,7 +103,7 @@ function makeCtx() {
     const term = state.terminals.find((t) => t.id === sess.terminal_id);
     const company = state.companies.find((c) => c.id === sess.company_id);
     const closed = sess.status === "closed";
-    const until = closed ? sess.closed_at : new Date().toISOString();
+    const until = closed ? sess.closed_at : "2999-12-31T23:59:59.999Z";
     const cashIn = withPosition ? movementsTotal(sess.id, "cash_in") : 0;
     const cashOut = withPosition ? movementsTotal(sess.id, "cash_out") : 0;
     const cashSales = withPosition ? cashSalesFor(sess, until) : 0;

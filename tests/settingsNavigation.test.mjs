@@ -18,6 +18,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import { buildAppPath, parseAppPath, SETTINGS_TAB_SLUGS } from "../src/utils/adminRoutes.js";
 import { groupNavItems } from "../src/utils/adminApps.js";
+import { settingSectionAccess, sectionIsVisible } from "../src/utils/settingsAccess.js";
 
 const read = (rel) => fs.readFileSync(new URL(rel, import.meta.url), "utf8");
 const LAYOUT_SRC = read("../src/pages/admin/AdminLayout.jsx");
@@ -74,8 +75,9 @@ describe("1. Settings is supplied to the navigation", () => {
 /* --------------------------- 2. every navigation surface now exposes it */
 
 describe("2. both navigation surfaces receive Settings", () => {
-  test("the dock already declares Settings in its Admin group", () => {
-    assert.match(DOCK_SRC, /pages: \["Integrations", "Accounting", "Settings", "Audit Log"\]/);
+  test("Settings is intentionally excluded from the dock because the header gear owns it", () => {
+    assert.doesNotMatch(DOCK_SRC, /"Accounting", "Settings", "Audit Log"/);
+    assert.match(DOCK_SRC, /filter\(\(name\) => name !== "Settings"\)/);
   });
 
   test("the dock renders a declared page only when AdminLayout supplies it", () => {
@@ -154,24 +156,68 @@ describe("4. the authorization rule is the existing Settings model", () => {
     assert.match(SETTINGS_SRC, /visibleGroups\.splice\(0, 0, \{ label: "Your account", sections: \[APPEARANCE_TAB\] \}\)/);
   });
 
-  test("privileged sections stay gated inside the Settings surface", () => {
-    assert.match(SETTINGS_SRC, /\(section !== "Platform" \|\| isAdmin \|\| isSuperadmin\)/);
-    assert.match(SETTINGS_SRC, /\(section !== "Server \/ API Configuration" \|\| isSuperadmin\)/);
-    assert.match(SETTINGS_SRC, /\(section !== "Customer Loyalty" \|\| entitlements\.loyalty === true\)/);
+  test("the section list and the render branches read ONE access map", () => {
+    /* The bug this pins: the Platform render branch accepted
+       user.isPlatformDeveloper while the section list accepted only
+       isAdmin || isSuperadmin, so a permitted Platform Developer was allowed
+       through the gate but could never select the section. Both now derive
+       from settingSectionAccess, so they cannot disagree. */
+    assert.match(SETTINGS_SRC, /const access = settingSectionAccess\(\{/);
+    assert.match(SETTINGS_SRC, /sections: group\.sections\.filter\(/);
+    assert.match(SETTINGS_SRC, /sectionIsVisible\(access, section\)/);
+    assert.match(SETTINGS_SRC, /isPlatformDeveloper: user\?\.isPlatformDeveloper === true/);
+    /* No section may keep its own inline role expression instead. */
+    assert.doesNotMatch(SETTINGS_SRC, /\(section !== "[^"]+" \|\|/);
+    assert.doesNotMatch(SETTINGS_SRC, /const sections = group\.sections\.filter\(/);
   });
 
-  test("the gated sections are ALSO guarded at render time", () => {
-    assert.match(SETTINGS_SRC, /tab === "Server \/ API Configuration" && isSuperadmin && <ServerApiSettings/);
-    assert.match(SETTINGS_SRC, /tab === "Platform" && \(isAdmin \|\| isSuperadmin\) && <PlatformAdmin/);
-    assert.match(SETTINGS_SRC, /tab === "Message Templates" && \(isAdmin \|\| isSuperadmin\) && <MessageTemplatesAdmin/);
+  test("every gated render branch is guarded by the same access map", () => {
+    assert.match(SETTINGS_SRC, /tab === "Server \/ API Configuration" .*access\["Server \/ API Configuration"\].*<ServerApiSettings/);
+    assert.match(SETTINGS_SRC, /tab === "Platform" && access\["Platform"\] && <PlatformAdmin/);
+    assert.match(SETTINGS_SRC, /tab === "Message Templates" && access\["Message Templates"\] && <MessageTemplatesAdmin/);
+    /* A section listed in the navigation but rendered blank is the same class
+       of bug: Message Templates was offered to everyone while its content was
+       admins-only. */
+    assert.equal(sectionIsVisible(settingSectionAccess({}), "Message Templates"), false);
+  });
+
+  test("a Platform Developer permitted to configure Platform can select it", () => {
+    /* The reported inconsistency. isPlatformDeveloper is the identity the
+       Platform surface itself recognises — not a new role, and not granted to
+       ordinary users below. */
+    const developer = settingSectionAccess({ isPlatformDeveloper: true });
+    assert.equal(sectionIsVisible(developer, "Platform"), true, "the Platform section must be selectable");
+    assert.equal(sectionIsVisible(developer, "Server / API Configuration"), false, "host config stays superadmin-only");
+    assert.equal(sectionIsVisible(developer, "Message Templates"), false, "company messaging stays admins-only");
+  });
+
+  test("the existing role and entitlement rules are unchanged", () => {
+    const admin = settingSectionAccess({ isAdmin: true });
+    assert.deepEqual(
+      Object.entries(admin).filter(([, allowed]) => allowed).map(([section]) => section),
+      ["Platform", "Message Templates"],
+    );
+    const superadmin = settingSectionAccess({ isSuperadmin: true });
+    assert.deepEqual(
+      Object.entries(superadmin).filter(([, allowed]) => allowed).map(([section]) => section),
+      ["Server / API Configuration", "Platform", "Message Templates"],
+    );
+    assert.equal(sectionIsVisible(settingSectionAccess({ loyalty: true }), "Customer Loyalty"), true);
   });
 
   test("an unauthorized user gains no Settings privilege from the nav entry", () => {
-    /* A caller with no isAdmin/isSuperadmin and no entitlements still sees the
-       section list, but every privileged section is filtered out — so the nav
-       entry grants reach, never privilege. */
-    const gates = SETTINGS_SRC.match(/\(section !== "[^"]+" \|\|/g) || [];
-    assert.equal(gates.length, 3, "expected exactly the three existing section gates");
+    /* A caller with no isAdmin/isSuperadmin, no Platform Developer identity
+       and no entitlements still sees the ungated section list, but every
+       privileged section is filtered out — so the nav entry grants reach,
+       never privilege. */
+    const ordinary = settingSectionAccess({});
+    assert.deepEqual(Object.values(ordinary), [false, false, false, false]);
+    for (const section of Object.keys(ordinary)) {
+      assert.equal(sectionIsVisible(ordinary, section), false, `${section} must stay hidden`);
+    }
+    /* Every other section is ungated, so the surface is never empty. */
+    assert.equal(sectionIsVisible(ordinary, "General"), true);
+    assert.equal(sectionIsVisible(ordinary, "Tax / VAT"), true);
     assert.doesNotMatch(SETTINGS_SRC, /if \(!isAdmin && !isSuperadmin\) return null/);
   });
 });
@@ -194,15 +240,19 @@ describe("5. /app/settings still resolves to the existing implementation", () =>
 
   test("the render branch and its props are unchanged", () => {
     assert.match(LAYOUT_SRC, /"Settings" \? \(/);
+    /* Every prop the surface already required is still supplied, in order. The
+       `user` prop was added afterwards so the surface's own per-user gate
+       (Platform Developer) has the session user to read; it is additive and
+       the surface defaults it to null. */
     assert.match(
       LAYOUT_SRC,
-      /<SettingsAdmin key=\{settingsTab\} initialTab=\{settingsTab\} isAdmin=\{onlinePermissions\.isAdmin\} isSuperadmin=\{onlinePermissions\.isSuperadmin\} entitlements=\{onlinePermissions\.entitlements\} \/>/,
+      /<SettingsAdmin key=\{settingsTab\} initialTab=\{settingsTab\} user=\{user\} isAdmin=\{onlinePermissions\.isAdmin\} isSuperadmin=\{onlinePermissions\.isSuperadmin\} entitlements=\{onlinePermissions\.entitlements\} \/>/,
     );
   });
 
   test("no second Settings page or route was created", () => {
     assert.equal((LAYOUT_SRC.match(/<SettingsAdmin/g) || []).length, 1);
-    assert.equal((LAYOUT_SRC.match(/import SettingsAdmin from/g) || []).length, 1);
+    assert.equal((LAYOUT_SRC.match(/const SettingsAdmin = lazy\(\(\) => import\("\.\.\/settings\/SettingsAdmin\.jsx"\)\)/g) || []).length, 1);
     assert.doesNotMatch(LAYOUT_SRC, /SettingsAdmin2|SecondSettings/);
   });
 

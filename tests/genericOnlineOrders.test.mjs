@@ -259,13 +259,13 @@ function makeCtx() {
         return { rows: [event], rowCount: 1 };
       }
 
-      /* loadOrderItems: SELECT i.*, p.track_stock FROM online_order_items i LEFT JOIN products p */
-      if (/i\.quantity, i\.total, p\.track_stock FROM online_order_items i/.test(s)) {
+      /* loadOrderItems: current production projection, plus product stock flags */
+      if (/i\.quantity, i\.unit_price, i\.tax, i\.total, i\.mapping_status, p\.track_stock, p\.batch_tracking FROM online_order_items i/.test(s)) {
         const orderItems = state.orderItems
           .filter((i) => i.order_id === params[0])
           .map((i) => {
             const p = state.products.find((x) => x.id === i.product_id) || {};
-            return { ...i, track_stock: p.track_stock };
+            return { ...i, track_stock: p.track_stock, batch_tracking: p.batch_tracking };
           })
           .sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
         return { rows: orderItems, rowCount: orderItems.length };

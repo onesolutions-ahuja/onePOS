@@ -10,12 +10,21 @@ const layoutList = readFileSync(new URL("../src/pages/settings/Platform/LayoutLi
 const ruleList = readFileSync(new URL("../src/pages/settings/Platform/RuleList.jsx", import.meta.url), "utf8");
 
 test("Platform object configuration exposes all existing metadata tools", () => {
+  assert.match(editor, /Fields & Relationships/);
+  assert.match(editor, /Page Layouts \/ Record Pages/);
+  assert.match(editor, /Actions/);
+  assert.match(editor, /Automation/);
   assert.match(editor, /onNavigate\?\.\("records"\)/);
   assert.match(editor, /onNavigate\?\.\("relationships"\)/);
   assert.match(editor, /onNavigate\?\.\("layouts"\)/);
   assert.match(editor, /onNavigate\?\.\("rules"\)/);
   assert.match(editor, /FieldEditor/);
   assert.match(editor, /Add Field/);
+});
+
+test("Object-scoped action and automation tabs reuse object rules", () => {
+  assert.match(editor, /tab === "actions" \|\| tab === "automation"/);
+  assert.match(editor, /onNavigate\?\.\("rules"\)/);
 });
 
 test("PlatformAdmin keeps the selected object while opening and returning from tools", () => {

@@ -57,7 +57,7 @@ function makeCtx() {
         return { rows: [{ ...row }] };
       }
       /* edit */
-      if (/^UPDATE products SET/i.test(s)) {
+      if (/^UPDATE products SET category_id = \$1/i.test(s)) {
         const row = state.products.get(params[params.length - 2]);
         if (!row || row.company_id !== params[params.length - 1]) return { rows: [] };
         row.category_id = params[0]; row.name = params[1]; row.sku = params[2];
