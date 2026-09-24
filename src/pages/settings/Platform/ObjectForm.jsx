@@ -1,5 +1,5 @@
 ﻿import React, { useEffect, useMemo, useState } from "react";
-import { evaluateFieldCondition } from "../../../../../server/services/platformConditions.js";
+import { evaluateFieldCondition } from "../../../../services/platformConditions.js";
 
 function getFieldKey(field) {
   return (
