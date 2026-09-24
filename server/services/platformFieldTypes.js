@@ -12,6 +12,7 @@ export const PLATFORM_FIELD_TYPES = Object.freeze([
   "picklist",
   "multiselect",
   "lookup",
+  "json",
   "formula",
   "rollup",
 ]);
