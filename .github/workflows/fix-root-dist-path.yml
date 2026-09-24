@@ -1,0 +1,44 @@
+name: Fix root dist path
+
+on:
+  push:
+    branches:
+      - chatgpt/ui-settings-repair
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: chatgpt/ui-settings-repair
+      - name: Correct only root server dist path
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('server.js')
+          s = p.read_text()
+          old = 'const distPath = path.join(__dirname, "..", "dist");'
+          new = 'const distPath = path.join(__dirname, "dist");'
+          if old not in s:
+              raise SystemExit('Expected incorrect root distPath not found')
+          if s.count(old) != 1:
+              raise SystemExit(f'Expected exactly one root distPath, found {s.count(old)}')
+          p.write_text(s.replace(old, new, 1))
+          PY
+          grep -n 'const distPath' server.js
+          grep -n 'const distPath' server/server.js
+      - name: Commit repair
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add server.js
+          git diff --cached --check
+          git commit -m "Fix root server production dist path"
+          git push origin HEAD:chatgpt/ui-settings-repair
