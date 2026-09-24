@@ -1,0 +1,79 @@
+name: Verify onePOS
+
+on:
+  push:
+    branches:
+      - chatgpt/ui-settings-repair
+  workflow_dispatch:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: onepos
+          POSTGRES_PASSWORD: onepos
+          POSTGRES_DB: onepos_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U onepos -d onepos_test"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+
+    env:
+      NODE_ENV: test
+      DATABASE_URL: postgresql://onepos:onepos@localhost:5432/onepos_test
+      JWT_SECRET: github-actions-test-secret
+      PORT: 10000
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --include=dev
+
+      - name: Production build
+        run: npm run build
+
+      - name: Full test suite
+        run: npm test
+
+      - name: Startup smoke test
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm start > /tmp/onepos-start.log 2>&1 &
+          pid=$!
+          trap 'kill $pid 2>/dev/null || true' EXIT
+          ready=0
+          for i in {1..60}; do
+            if curl --fail --silent http://127.0.0.1:10000/api/health >/tmp/onepos-health.json; then
+              ready=1
+              break
+            fi
+            if ! kill -0 "$pid" 2>/dev/null; then
+              cat /tmp/onepos-start.log
+              exit 1
+            fi
+            sleep 1
+          done
+          cat /tmp/onepos-start.log
+          test "$ready" -eq 1
+          test -f dist/index.html
+          test -f dist/app/index.html
+          curl --fail --silent http://127.0.0.1:10000/ >/dev/null
+          curl --fail --silent http://127.0.0.1:10000/app >/dev/null
+          cat /tmp/onepos-health.json
