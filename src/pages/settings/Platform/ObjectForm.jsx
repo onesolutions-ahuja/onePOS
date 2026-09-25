@@ -1,5 +1,5 @@
 ﻿import React, { useEffect, useMemo, useState } from "react";
-import { evaluateFieldCondition } from "../../../../services/platformConditions.js";
+import { evaluateFieldCondition } from "../../../utils/platformConditions.js";
 
 function getFieldKey(field) {
   return (
@@ -177,6 +177,10 @@ export default function ObjectForm({
     () => (Array.isArray(fields) ? fields.filter((field) => field?.active !== false) : []),
     [fields]
   );
+  const initialValuesKey = useMemo(
+    () => JSON.stringify(initialValues || {}),
+    [initialValues]
+  );
 
   const [values, setValues] = useState(() =>
     buildInitialValues(
@@ -201,7 +205,7 @@ export default function ObjectForm({
     setValidationErrors({});
   }, [
     activeFields,
-    initialValues,
+    initialValuesKey,
   ]);
 
   const visibleFields = useMemo(

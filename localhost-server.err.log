@@ -1,0 +1,639 @@
+Get product error: error: invalid input syntax for type uuid: "catalogue"
+    at C:\Users\cc\Desktop\onePOS\node_modules\pg-pool\index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+    at async file:///C:/Users/cc/Desktop/onePOS/routes/products.js:659:22 {
+  length: 141,
+  severity: 'ERROR',
+  code: '22P02',
+  detail: undefined,
+  hint: undefined,
+  position: undefined,
+  internalPosition: undefined,
+  internalQuery: undefined,
+  where: "unnamed portal parameter $1 = '...'",
+  schema: undefined,
+  table: undefined,
+  column: undefined,
+  dataType: undefined,
+  constraint: undefined,
+  file: 'uuid.c',
+  line: '191',
+  routine: 'string_to_uuid'
+}
+Get product error: error: invalid input syntax for type uuid: "catalogue"
+    at C:\Users\cc\Desktop\onePOS\node_modules\pg-pool\index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+    at async file:///C:/Users/cc/Desktop/onePOS/routes/products.js:659:22 {
+  length: 141,
+  severity: 'ERROR',
+  code: '22P02',
+  detail: undefined,
+  hint: undefined,
+  position: undefined,
+  internalPosition: undefined,
+  internalQuery: undefined,
+  where: "unnamed portal parameter $1 = '...'",
+  schema: undefined,
+  table: undefined,
+  column: undefined,
+  dataType: undefined,
+  constraint: undefined,
+  file: 'uuid.c',
+  line: '191',
+  routine: 'string_to_uuid'
+}
+Get product error: error: invalid input syntax for type uuid: "catalogue"
+    at C:\Users\cc\Desktop\onePOS\node_modules\pg-pool\index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+    at async file:///C:/Users/cc/Desktop/onePOS/routes/products.js:659:22 {
+  length: 141,
+  severity: 'ERROR',
+  code: '22P02',
+  detail: undefined,
+  hint: undefined,
+  position: undefined,
+  internalPosition: undefined,
+  internalQuery: undefined,
+  where: "unnamed portal parameter $1 = '...'",
+  schema: undefined,
+  table: undefined,
+  column: undefined,
+  dataType: undefined,
+  constraint: undefined,
+  file: 'uuid.c',
+  line: '191',
+  routine: 'string_to_uuid'
+}
+Get product error: error: invalid input syntax for type uuid: "catalogue"
+    at C:\Users\cc\Desktop\onePOS\node_modules\pg-pool\index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+    at async file:///C:/Users/cc/Desktop/onePOS/routes/products.js:659:22 {
+  length: 141,
+  severity: 'ERROR',
+  code: '22P02',
+  detail: undefined,
+  hint: undefined,
+  position: undefined,
+  internalPosition: undefined,
+  internalQuery: undefined,
+  where: "unnamed portal parameter $1 = '...'",
+  schema: undefined,
+  table: undefined,
+  column: undefined,
+  dataType: undefined,
+  constraint: undefined,
+  file: 'uuid.c',
+  line: '191',
+  routine: 'string_to_uuid'
+}
+Get product error: error: invalid input syntax for type uuid: "catalogue"
+    at C:\Users\cc\Desktop\onePOS\node_modules\pg-pool\index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+    at async file:///C:/Users/cc/Desktop/onePOS/routes/products.js:659:22 {
+  length: 141,
+  severity: 'ERROR',
+  code: '22P02',
+  detail: undefined,
+  hint: undefined,
+  position: undefined,
+  internalPosition: undefined,
+  internalQuery: undefined,
+  where: "unnamed portal parameter $1 = '...'",
+  schema: undefined,
+  table: undefined,
+  column: undefined,
+  dataType: undefined,
+  constraint: undefined,
+  file: 'uuid.c',
+  line: '191',
+  routine: 'string_to_uuid'
+}
+Get product error: error: invalid input syntax for type uuid: "catalogue"
+    at C:\Users\cc\Desktop\onePOS\node_modules\pg-pool\index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+    at async file:///C:/Users/cc/Desktop/onePOS/routes/products.js:659:22 {
+  length: 141,
+  severity: 'ERROR',
+  code: '22P02',
+  detail: undefined,
+  hint: undefined,
+  position: undefined,
+  internalPosition: undefined,
+  internalQuery: undefined,
+  where: "unnamed portal parameter $1 = '...'",
+  schema: undefined,
+  table: undefined,
+  column: undefined,
+  dataType: undefined,
+  constraint: undefined,
+  file: 'uuid.c',
+  line: '191',
+  routine: 'string_to_uuid'
+}
+Authorization error: Error: Connection terminated due to connection timeout
+    at C:\Users\cc\Desktop\onePOS\node_modules\pg-pool\index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+    at async isSuperadminRequest (file:///C:/Users/cc/Desktop/onePOS/server.js:314:18)
+    at async file:///C:/Users/cc/Desktop/onePOS/server.js:359:28 {
+  [cause]: Error: Connection terminated unexpectedly
+      at Connection.<anonymous> (C:\Users\cc\Desktop\onePOS\node_modules\pg\lib\client.js:204:73)
+      at Connection.wrapper (node:events:639:12)
+      at Connection.emit (node:events:514:28)
+      at Socket.<anonymous> (C:\Users\cc\Desktop\onePOS\node_modules\pg\lib\connection.js:64:12)
+      at Socket.emit (node:events:526:24)
+      at TCP.<anonymous> (node:net:362:12)
+}
+Get product error: error: invalid input syntax for type uuid: "catalogue"
+    at C:\Users\cc\Desktop\onePOS\node_modules\pg-pool\index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+    at async file:///C:/Users/cc/Desktop/onePOS/routes/products.js:659:22 {
+  length: 141,
+  severity: 'ERROR',
+  code: '22P02',
+  detail: undefined,
+  hint: undefined,
+  position: undefined,
+  internalPosition: undefined,
+  internalQuery: undefined,
+  where: "unnamed portal parameter $1 = '...'",
+  schema: undefined,
+  table: undefined,
+  column: undefined,
+  dataType: undefined,
+  constraint: undefined,
+  file: 'uuid.c',
+  line: '191',
+  routine: 'string_to_uuid'
+}
+Get product error: error: invalid input syntax for type uuid: "catalogue"
+    at C:\Users\cc\Desktop\onePOS\node_modules\pg-pool\index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+    at async file:///C:/Users/cc/Desktop/onePOS/routes/products.js:659:22 {
+  length: 141,
+  severity: 'ERROR',
+  code: '22P02',
+  detail: undefined,
+  hint: undefined,
+  position: undefined,
+  internalPosition: undefined,
+  internalQuery: undefined,
+  where: "unnamed portal parameter $1 = '...'",
+  schema: undefined,
+  table: undefined,
+  column: undefined,
+  dataType: undefined,
+  constraint: undefined,
+  file: 'uuid.c',
+  line: '191',
+  routine: 'string_to_uuid'
+}
+Get product error: error: invalid input syntax for type uuid: "catalogue"
+    at C:\Users\cc\Desktop\onePOS\node_modules\pg-pool\index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+    at async file:///C:/Users/cc/Desktop/onePOS/routes/products.js:659:22 {
+  length: 141,
+  severity: 'ERROR',
+  code: '22P02',
+  detail: undefined,
+  hint: undefined,
+  position: undefined,
+  internalPosition: undefined,
+  internalQuery: undefined,
+  where: "unnamed portal parameter $1 = '...'",
+  schema: undefined,
+  table: undefined,
+  column: undefined,
+  dataType: undefined,
+  constraint: undefined,
+  file: 'uuid.c',
+  line: '191',
+  routine: 'string_to_uuid'
+}
+Get product error: error: invalid input syntax for type uuid: "catalogue"
+    at C:\Users\cc\Desktop\onePOS\node_modules\pg-pool\index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+    at async file:///C:/Users/cc/Desktop/onePOS/routes/products.js:659:22 {
+  length: 141,
+  severity: 'ERROR',
+  code: '22P02',
+  detail: undefined,
+  hint: undefined,
+  position: undefined,
+  internalPosition: undefined,
+  internalQuery: undefined,
+  where: "unnamed portal parameter $1 = '...'",
+  schema: undefined,
+  table: undefined,
+  column: undefined,
+  dataType: undefined,
+  constraint: undefined,
+  file: 'uuid.c',
+  line: '191',
+  routine: 'string_to_uuid'
+}
+Platform job worker error: Connection terminated due to connection timeout
+Load settings error: Error: Connection terminated due to connection timeout
+    at C:\Users\cc\Desktop\onePOS\node_modules\pg-pool\index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+    at async file:///C:/Users/cc/Desktop/onePOS/routes/settings.js:202:22 {
+  [cause]: Error: Connection terminated unexpectedly
+      at Connection.<anonymous> (C:\Users\cc\Desktop\onePOS\node_modules\pg\lib\client.js:204:73)
+      at Connection.wrapper (node:events:639:12)
+      at Connection.emit (node:events:514:28)
+      at Socket.<anonymous> (C:\Users\cc\Desktop\onePOS\node_modules\pg\lib\connection.js:64:12)
+      at Socket.emit (node:events:526:24)
+      at TCP.<anonymous> (node:net:362:12)
+}
+Current user preferences error: Error: Connection terminated due to connection timeout
+    at C:\Users\cc\Desktop\onePOS\node_modules\pg-pool\index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+    at async file:///C:/Users/cc/Desktop/onePOS/server.js:759:20 {
+  [cause]: Error: Connection terminated unexpectedly
+      at Connection.<anonymous> (C:\Users\cc\Desktop\onePOS\node_modules\pg\lib\client.js:204:73)
+      at Connection.wrapper (node:events:639:12)
+      at Connection.emit (node:events:514:28)
+      at Socket.<anonymous> (C:\Users\cc\Desktop\onePOS\node_modules\pg\lib\connection.js:64:12)
+      at Socket.emit (node:events:526:24)
+      at TCP.<anonymous> (node:net:362:12)
+}
+Error: Connection terminated due to connection timeout
+    at C:\Users\cc\Desktop\onePOS\node_modules\pg-pool\index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+    at async canViewCompanyCustomers (file:///C:/Users/cc/Desktop/onePOS/server.js:418:18)
+    at async file:///C:/Users/cc/Desktop/onePOS/routes/platform.js:583:42
+Runtime settings load error: Connection terminated due to connection timeout
+Error: Connection terminated due to connection timeout
+    at C:\Users\cc\Desktop\onePOS\node_modules\pg-pool\index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+    at async canViewCompanyCustomers (file:///C:/Users/cc/Desktop/onePOS/server.js:418:18)
+    at async file:///C:/Users/cc/Desktop/onePOS/routes/platform.js:583:42
+Authorization error: Error: Connection terminated due to connection timeout
+    at C:\Users\cc\Desktop\onePOS\node_modules\pg-pool\index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+    at async isSuperadminRequest (file:///C:/Users/cc/Desktop/onePOS/server.js:314:18)
+    at async file:///C:/Users/cc/Desktop/onePOS/server.js:359:28 {
+  [cause]: Error: Connection terminated unexpectedly
+      at Connection.<anonymous> (C:\Users\cc\Desktop\onePOS\node_modules\pg\lib\client.js:204:73)
+      at Connection.wrapper (node:events:639:12)
+      at Connection.emit (node:events:514:28)
+      at Socket.<anonymous> (C:\Users\cc\Desktop\onePOS\node_modules\pg\lib\connection.js:64:12)
+      at Socket.emit (node:events:526:24)
+      at TCP.<anonymous> (node:net:362:12)
+}
+Authorization error: Error: Connection terminated due to connection timeout
+    at C:\Users\cc\Desktop\onePOS\node_modules\pg-pool\index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+    at async isSuperadminRequest (file:///C:/Users/cc/Desktop/onePOS/server.js:314:18)
+    at async file:///C:/Users/cc/Desktop/onePOS/server.js:359:28 {
+  [cause]: Error: Connection terminated unexpectedly
+      at Connection.<anonymous> (C:\Users\cc\Desktop\onePOS\node_modules\pg\lib\client.js:204:73)
+      at Connection.wrapper (node:events:639:12)
+      at Connection.emit (node:events:514:28)
+      at Socket.<anonymous> (C:\Users\cc\Desktop\onePOS\node_modules\pg\lib\connection.js:64:12)
+      at Socket.emit (node:events:514:28)
+      at TCP.<anonymous> (node:net:362:12)
+}
+Authorization error: Error: Connection terminated due to connection timeout
+    at C:\Users\cc\Desktop\onePOS\node_modules\pg-pool\index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+    at async isSuperadminRequest (file:///C:/Users/cc/Desktop/onePOS/server.js:314:18)
+    at async file:///C:/Users/cc/Desktop/onePOS/server.js:359:28 {
+  [cause]: Error: Connection terminated unexpectedly
+      at Connection.<anonymous> (C:\Users\cc\Desktop\onePOS\node_modules\pg\lib\client.js:204:73)
+      at Connection.wrapper (node:events:639:12)
+      at Connection.emit (node:events:514:28)
+      at Socket.<anonymous> (C:\Users\cc\Desktop\onePOS\node_modules\pg\lib\connection.js:64:12)
+      at Socket.emit (node:events:514:28)
+      at TCP.<anonymous> (node:net:362:12)
+}
+Platform job worker error: Connection terminated due to connection timeout
+Platform job worker error: Connection terminated due to connection timeout
+Platform job worker error: Connection terminated due to connection timeout
+Authorization error: Error: Connection terminated due to connection timeout
+    at C:\Users\cc\Desktop\onePOS\node_modules\pg-pool\index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+    at async isSuperadminRequest (file:///C:/Users/cc/Desktop/onePOS/server.js:314:18)
+    at async file:///C:/Users/cc/Desktop/onePOS/server.js:359:28 {
+  [cause]: Error: Connection terminated unexpectedly
+      at Connection.<anonymous> (C:\Users\cc\Desktop\onePOS\node_modules\pg\lib\client.js:204:73)
+      at Connection.wrapper (node:events:639:12)
+      at Connection.emit (node:events:514:28)
+      at Socket.<anonymous> (C:\Users\cc\Desktop\onePOS\node_modules\pg\lib\connection.js:64:12)
+      at Socket.emit (node:events:526:24)
+      at TCP.<anonymous> (node:net:362:12)
+}
+Authorization error: Error: Connection terminated due to connection timeout
+    at C:\Users\cc\Desktop\onePOS\node_modules\pg-pool\index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+    at async isSuperadminRequest (file:///C:/Users/cc/Desktop/onePOS/server.js:314:18)
+    at async file:///C:/Users/cc/Desktop/onePOS/server.js:359:28 {
+  [cause]: Error: Connection terminated unexpectedly
+      at Connection.<anonymous> (C:\Users\cc\Desktop\onePOS\node_modules\pg\lib\client.js:204:73)
+      at Connection.wrapper (node:events:639:12)
+      at Connection.emit (node:events:514:28)
+      at Socket.<anonymous> (C:\Users\cc\Desktop\onePOS\node_modules\pg\lib\connection.js:64:12)
+      at Socket.emit (node:events:526:24)
+      at TCP.<anonymous> (node:net:362:12)
+}
+Current user permissions error: Error: Connection terminated due to connection timeout
+    at C:\Users\cc\Desktop\onePOS\node_modules\pg-pool\index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+    at async isSuperadminRequest (file:///C:/Users/cc/Desktop/onePOS/server.js:314:18)
+    at async file:///C:/Users/cc/Desktop/onePOS/server.js:693:26 {
+  [cause]: Error: Connection terminated unexpectedly
+      at Connection.<anonymous> (C:\Users\cc\Desktop\onePOS\node_modules\pg\lib\client.js:204:73)
+      at Connection.wrapper (node:events:639:12)
+      at Connection.emit (node:events:514:28)
+      at Socket.<anonymous> (C:\Users\cc\Desktop\onePOS\node_modules\pg\lib\connection.js:64:12)
+      at Socket.emit (node:events:526:24)
+      at TCP.<anonymous> (node:net:362:12)
+}
+Current user permissions error: Error: Connection terminated due to connection timeout
+    at C:\Users\cc\Desktop\onePOS\node_modules\pg-pool\index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+    at async isSuperadminRequest (file:///C:/Users/cc/Desktop/onePOS/server.js:314:18)
+    at async file:///C:/Users/cc/Desktop/onePOS/server.js:693:26 {
+  [cause]: Error: Connection terminated unexpectedly
+      at Connection.<anonymous> (C:\Users\cc\Desktop\onePOS\node_modules\pg\lib\client.js:204:73)
+      at Connection.wrapper (node:events:639:12)
+      at Connection.emit (node:events:514:28)
+      at Socket.<anonymous> (C:\Users\cc\Desktop\onePOS\node_modules\pg\lib\connection.js:64:12)
+      at Socket.emit (node:events:526:24)
+      at TCP.<anonymous> (node:net:362:12)
+}
+Get product error: error: invalid input syntax for type uuid: "catalogue"
+    at C:\Users\cc\Desktop\onePOS\node_modules\pg-pool\index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+    at async file:///C:/Users/cc/Desktop/onePOS/routes/products.js:659:22 {
+  length: 141,
+  severity: 'ERROR',
+  code: '22P02',
+  detail: undefined,
+  hint: undefined,
+  position: undefined,
+  internalPosition: undefined,
+  internalQuery: undefined,
+  where: "unnamed portal parameter $1 = '...'",
+  schema: undefined,
+  table: undefined,
+  column: undefined,
+  dataType: undefined,
+  constraint: undefined,
+  file: 'uuid.c',
+  line: '191',
+  routine: 'string_to_uuid'
+}
+Error: ENOENT: no such file or directory, stat 'C:\Users\cc\Desktop\onePOS\dist\app\index.html'
+Current user permissions error: Error: Connection terminated due to connection timeout
+    at C:\Users\cc\Desktop\onePOS\node_modules\pg-pool\index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+    at async isSuperadminRequest (file:///C:/Users/cc/Desktop/onePOS/server.js:314:18)
+    at async file:///C:/Users/cc/Desktop/onePOS/server.js:693:26 {
+  [cause]: Error: Connection terminated unexpectedly
+      at Connection.<anonymous> (C:\Users\cc\Desktop\onePOS\node_modules\pg\lib\client.js:204:73)
+      at Connection.wrapper (node:events:639:12)
+      at Connection.emit (node:events:514:28)
+      at Socket.<anonymous> (C:\Users\cc\Desktop\onePOS\node_modules\pg\lib\connection.js:64:12)
+      at Socket.emit (node:events:526:24)
+      at TCP.<anonymous> (node:net:362:12)
+}
+Platform job worker error: Connection terminated due to connection timeout
+Authorization error: Error: Connection terminated due to connection timeout
+    at C:\Users\cc\Desktop\onePOS\node_modules\pg-pool\index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+    at async isSuperadminRequest (file:///C:/Users/cc/Desktop/onePOS/server.js:314:18)
+    at async file:///C:/Users/cc/Desktop/onePOS/server.js:359:28 {
+  [cause]: Error: Connection terminated unexpectedly
+      at Connection.<anonymous> (C:\Users\cc\Desktop\onePOS\node_modules\pg\lib\client.js:204:73)
+      at Connection.wrapper (node:events:639:12)
+      at Connection.emit (node:events:514:28)
+      at Socket.<anonymous> (C:\Users\cc\Desktop\onePOS\node_modules\pg\lib\connection.js:64:12)
+      at Socket.emit (node:events:526:24)
+      at TCP.<anonymous> (node:net:362:12)
+}
+Current user permissions error: Error: Connection terminated due to connection timeout
+    at C:\Users\cc\Desktop\onePOS\node_modules\pg-pool\index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+    at async isSuperadminRequest (file:///C:/Users/cc/Desktop/onePOS/server.js:314:18)
+    at async file:///C:/Users/cc/Desktop/onePOS/server.js:693:26 {
+  [cause]: Error: Connection terminated unexpectedly
+      at Connection.<anonymous> (C:\Users\cc\Desktop\onePOS\node_modules\pg\lib\client.js:204:73)
+      at Connection.wrapper (node:events:639:12)
+      at Connection.emit (node:events:514:28)
+      at Socket.<anonymous> (C:\Users\cc\Desktop\onePOS\node_modules\pg\lib\connection.js:64:12)
+      at Socket.emit (node:events:526:24)
+      at TCP.<anonymous> (node:net:362:12)
+}
+Authorization error: Error: Connection terminated due to connection timeout
+    at C:\Users\cc\Desktop\onePOS\node_modules\pg-pool\index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+    at async isSuperadminRequest (file:///C:/Users/cc/Desktop/onePOS/server.js:314:18)
+    at async file:///C:/Users/cc/Desktop/onePOS/server.js:359:28 {
+  [cause]: Error: Connection terminated unexpectedly
+      at Connection.<anonymous> (C:\Users\cc\Desktop\onePOS\node_modules\pg\lib\client.js:204:73)
+      at Connection.wrapper (node:events:639:12)
+      at Connection.emit (node:events:514:28)
+      at Socket.<anonymous> (C:\Users\cc\Desktop\onePOS\node_modules\pg\lib\connection.js:64:12)
+      at Socket.emit (node:events:526:24)
+      at TCP.<anonymous> (node:net:362:12)
+}
+Get product error: error: invalid input syntax for type uuid: "catalogue"
+    at C:\Users\cc\Desktop\onePOS\node_modules\pg-pool\index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+    at async file:///C:/Users/cc/Desktop/onePOS/routes/products.js:659:22 {
+  length: 141,
+  severity: 'ERROR',
+  code: '22P02',
+  detail: undefined,
+  hint: undefined,
+  position: undefined,
+  internalPosition: undefined,
+  internalQuery: undefined,
+  where: "unnamed portal parameter $1 = '...'",
+  schema: undefined,
+  table: undefined,
+  column: undefined,
+  dataType: undefined,
+  constraint: undefined,
+  file: 'uuid.c',
+  line: '191',
+  routine: 'string_to_uuid'
+}
+Get product error: error: invalid input syntax for type uuid: "catalogue"
+    at C:\Users\cc\Desktop\onePOS\node_modules\pg-pool\index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+    at async file:///C:/Users/cc/Desktop/onePOS/routes/products.js:659:22 {
+  length: 141,
+  severity: 'ERROR',
+  code: '22P02',
+  detail: undefined,
+  hint: undefined,
+  position: undefined,
+  internalPosition: undefined,
+  internalQuery: undefined,
+  where: "unnamed portal parameter $1 = '...'",
+  schema: undefined,
+  table: undefined,
+  column: undefined,
+  dataType: undefined,
+  constraint: undefined,
+  file: 'uuid.c',
+  line: '191',
+  routine: 'string_to_uuid'
+}
+Get product error: error: invalid input syntax for type uuid: "catalogue"
+    at C:\Users\cc\Desktop\onePOS\node_modules\pg-pool\index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+    at async file:///C:/Users/cc/Desktop/onePOS/routes/products.js:659:22 {
+  length: 141,
+  severity: 'ERROR',
+  code: '22P02',
+  detail: undefined,
+  hint: undefined,
+  position: undefined,
+  internalPosition: undefined,
+  internalQuery: undefined,
+  where: "unnamed portal parameter $1 = '...'",
+  schema: undefined,
+  table: undefined,
+  column: undefined,
+  dataType: undefined,
+  constraint: undefined,
+  file: 'uuid.c',
+  line: '191',
+  routine: 'string_to_uuid'
+}
+Get product error: error: invalid input syntax for type uuid: "catalogue"
+    at C:\Users\cc\Desktop\onePOS\node_modules\pg-pool\index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+    at async file:///C:/Users/cc/Desktop/onePOS/routes/products.js:659:22 {
+  length: 141,
+  severity: 'ERROR',
+  code: '22P02',
+  detail: undefined,
+  hint: undefined,
+  position: undefined,
+  internalPosition: undefined,
+  internalQuery: undefined,
+  where: "unnamed portal parameter $1 = '...'",
+  schema: undefined,
+  table: undefined,
+  column: undefined,
+  dataType: undefined,
+  constraint: undefined,
+  file: 'uuid.c',
+  line: '191',
+  routine: 'string_to_uuid'
+}
+Get product error: error: invalid input syntax for type uuid: "catalogue"
+    at C:\Users\cc\Desktop\onePOS\node_modules\pg-pool\index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+    at async file:///C:/Users/cc/Desktop/onePOS/routes/products.js:659:22 {
+  length: 141,
+  severity: 'ERROR',
+  code: '22P02',
+  detail: undefined,
+  hint: undefined,
+  position: undefined,
+  internalPosition: undefined,
+  internalQuery: undefined,
+  where: "unnamed portal parameter $1 = '...'",
+  schema: undefined,
+  table: undefined,
+  column: undefined,
+  dataType: undefined,
+  constraint: undefined,
+  file: 'uuid.c',
+  line: '191',
+  routine: 'string_to_uuid'
+}
+Get product error: error: invalid input syntax for type uuid: "catalogue"
+    at C:\Users\cc\Desktop\onePOS\node_modules\pg-pool\index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+    at async file:///C:/Users/cc/Desktop/onePOS/routes/products.js:659:22 {
+  length: 141,
+  severity: 'ERROR',
+  code: '22P02',
+  detail: undefined,
+  hint: undefined,
+  position: undefined,
+  internalPosition: undefined,
+  internalQuery: undefined,
+  where: "unnamed portal parameter $1 = '...'",
+  schema: undefined,
+  table: undefined,
+  column: undefined,
+  dataType: undefined,
+  constraint: undefined,
+  file: 'uuid.c',
+  line: '191',
+  routine: 'string_to_uuid'
+}
+Get product error: error: invalid input syntax for type uuid: "catalogue"
+    at C:\Users\cc\Desktop\onePOS\node_modules\pg-pool\index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+    at async file:///C:/Users/cc/Desktop/onePOS/routes/products.js:659:22 {
+  length: 141,
+  severity: 'ERROR',
+  code: '22P02',
+  detail: undefined,
+  hint: undefined,
+  position: undefined,
+  internalPosition: undefined,
+  internalQuery: undefined,
+  where: "unnamed portal parameter $1 = '...'",
+  schema: undefined,
+  table: undefined,
+  column: undefined,
+  dataType: undefined,
+  constraint: undefined,
+  file: 'uuid.c',
+  line: '191',
+  routine: 'string_to_uuid'
+}
+Get product error: error: invalid input syntax for type uuid: "catalogue"
+    at C:\Users\cc\Desktop\onePOS\node_modules\pg-pool\index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+    at async file:///C:/Users/cc/Desktop/onePOS/routes/products.js:659:22 {
+  length: 141,
+  severity: 'ERROR',
+  code: '22P02',
+  detail: undefined,
+  hint: undefined,
+  position: undefined,
+  internalPosition: undefined,
+  internalQuery: undefined,
+  where: "unnamed portal parameter $1 = '...'",
+  schema: undefined,
+  table: undefined,
+  column: undefined,
+  dataType: undefined,
+  constraint: undefined,
+  file: 'uuid.c',
+  line: '191',
+  routine: 'string_to_uuid'
+}
+Platform job worker error: Connection terminated unexpectedly
+Platform job worker error: Connection terminated unexpectedly
+Get product error: error: invalid input syntax for type uuid: "catalogue"
+    at C:\Users\cc\Desktop\onePOS\node_modules\pg-pool\index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+    at async file:///C:/Users/cc/Desktop/onePOS/routes/products.js:659:22 {
+  length: 141,
+  severity: 'ERROR',
+  code: '22P02',
+  detail: undefined,
+  hint: undefined,
+  position: undefined,
+  internalPosition: undefined,
+  internalQuery: undefined,
+  where: "unnamed portal parameter $1 = '...'",
+  schema: undefined,
+  table: undefined,
+  column: undefined,
+  dataType: undefined,
+  constraint: undefined,
+  file: 'uuid.c',
+  line: '191',
+  routine: 'string_to_uuid'
+}

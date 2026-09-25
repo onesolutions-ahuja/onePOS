@@ -33,6 +33,7 @@ export const PLATFORM_GROUPS = [
     label: "Automation",
     items: [
       { key: "page-builder", label: "Page Builder", view: "page-builder" },
+      { key: "custom-page-builder", label: "Custom Pages (Visual)", view: "custom-page-builder" },
       { key: "flow-builder", label: "Flow Builder", view: "flow-builder" },
       { key: "landing-flow", label: "Login / Landing Flow", view: "landing-flow" },
       { key: "approval-builder", label: "Approval Processes", view: "approval-builder" },
@@ -69,6 +70,7 @@ export const SURFACE_KEY_BY_VIEW = {
   layouts: "all-forms",
   rules: "all-rules",
   "page-builder": "page-builder",
+  "custom-page-builder": "custom-page-builder",
   "flow-builder": "flow-builder",
   "landing-flow": "landing-flow",
   "approval-builder": "approval-builder",

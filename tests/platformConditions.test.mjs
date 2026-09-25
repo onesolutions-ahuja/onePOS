@@ -25,6 +25,14 @@ test("conditions support equality, ordering, empty checks, ALL, and ANY", () => 
   assert.equal(evaluateCondition({ match: "any", conditions: [{ field: "enabled", operator: "equals", value: true }, { field: "amount", operator: "greater_than", value: 50 }] }, fields, { enabled: false, amount: 60 }), true);
 });
 
+test("conditional rules support dotted record paths for related fields", () => {
+  const record = { customer: { status: "active", balance: 12 } };
+  const previous = { customer: { status: "guest", balance: 10 } };
+  assert.equal(evaluateCondition({ conditions: [{ field: "customer.status", operator: "equals", value: "active" }] }, fields, record), true);
+  assert.equal(evaluateCondition({ conditions: [{ field: "customer.balance", operator: "changed_from", value: 10 }] }, fields, record, previous), true);
+  assert.equal(evaluateCondition({ conditions: [{ field: "customer.balance", operator: "greater_than_or_equal", value: 12 }] }, fields, record), true);
+});
+
 test("conditional required uses formula values and rejects invalid metadata", () => {
   const conditional = { ...fields[2], label: "Note", config: { requiredCondition: { conditions: [{ field: "total", operator: "greater_than", value: 10 }] } } };
   assert.equal(validateConditionalRequired([...fields.slice(0, 2), conditional, fields[3]], { total: 11, note: "" }), "Note is required");

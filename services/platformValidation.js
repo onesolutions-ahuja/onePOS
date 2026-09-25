@@ -1,10 +1,26 @@
 // Declarative predicates only: no JavaScript, SQL, or dynamic evaluation.
 import { effectiveFieldType } from "./platformFormula.js";
+import { resolveRecordPathValue } from "./platformRecordPaths.js";
 import { isExtensionField } from "./platformSystemObjects.js";
 const OPERATORS = new Set(["equals", "not_equals", "contains", "greater_than", "less_than", "is_empty", "is_not_empty"]);
 const NUMERIC = new Set(["number", "decimal", "currency"]);
+const CONDITION_PATH = /^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$/;
 const empty = (value) => value === null || value === undefined || value === "" || (Array.isArray(value) && value.length === 0);
 const scalar = (value) => value === null || ["string", "boolean", "number"].includes(typeof value);
+
+function resolveValidationField(conditionField, fields) {
+  if (typeof conditionField !== "string") return null;
+  const trimmed = conditionField.trim();
+  if (!trimmed) return null;
+  const direct = fields.find((field) => field.active && field.api_name === trimmed);
+  if (direct) return { ...direct, field_type: effectiveFieldType(direct) };
+  if (!trimmed.includes(".")) return null;
+  if (!CONDITION_PATH.test(trimmed)) return null;
+  const pathParts = trimmed.split(".");
+  const finalField = fields.find((field) => field.active && field.api_name === pathParts[pathParts.length - 1]);
+  if (finalField) return { ...finalField, api_name: trimmed, field_type: effectiveFieldType(finalField) };
+  return { api_name: trimmed, field_type: "text", active: true };
+}
 
 function typed(value, field) {
   field = { ...field, field_type: effectiveFieldType(field) };

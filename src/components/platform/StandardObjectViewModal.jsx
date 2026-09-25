@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { X } from "lucide-react";
 import { apiRequest } from "../../services/api.js";
-import FormRenderer from "../../pages/settings/Platform/FormRenderer.jsx";
+import ObjectRecordDetail from "../../pages/settings/Platform/ObjectRecordDetail.jsx";
 
 export default function StandardObjectViewModal({ objectKey, record, onClose, title, children }) {
   const [runtime, setRuntime] = useState(null);
@@ -22,7 +22,16 @@ export default function StandardObjectViewModal({ objectKey, record, onClose, ti
         </header>
         <div className="overflow-auto p-5">
           {error && <div className="mb-4 rounded border border-red-200 bg-red-50 p-3 text-sm text-red-700">{error}</div>}
-          {runtime && <FormRenderer definition={runtime.layout?.definition || { components: [] }} fields={runtime.fields || []} initialValues={record} mode="view" />}
+          {runtime && (
+            <ObjectRecordDetail
+              record={record}
+              fields={runtime.fields || []}
+              objectLabel={title || record?.name || "Record"}
+              objectKey={objectKey}
+              definition={runtime.layout?.definition || null}
+              embedded
+            />
+          )}
           {children}
         </div>
       </div>

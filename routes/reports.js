@@ -8,10 +8,13 @@ export const CUSTOM_REPORT_FIELDS = [
   { key: "store", label: "Store", sql: "st.name", groupable: true },
   { key: "user", label: "Operator", sql: "COALESCE(u.full_name, u.username, 'Unknown')", groupable: true },
   { key: "product", label: "Product", sql: "p.name", groupable: true },
+  { key: "category", label: "Category", sql: "COALESCE(pc.name, 'Uncategorised')", groupable: true },
+  { key: "method", label: "Payment method", sql: "COALESCE(pay.payment_method, 'Unknown')", groupable: true },
   { key: "sku", label: "SKU", sql: "p.sku", groupable: true },
   { key: "quantity", label: "Quantity sold", sql: "COALESCE(SUM(si.quantity), 0)", aggregate: true },
   { key: "gross_sales", label: "Gross sales", sql: "COALESCE(SUM(si.total), 0)", aggregate: true },
   { key: "net_sales", label: "Net sales", sql: "COALESCE(SUM(si.total - si.tax), 0)", aggregate: true },
+  { key: "total", label: "Total", sql: "COALESCE(SUM(pay.amount), 0)", aggregate: true },
   { key: "vat", label: "VAT", sql: "COALESCE(SUM(si.tax), 0)", aggregate: true },
   { key: "discount", label: "Discounts", sql: "COALESCE(SUM(si.discount), 0)", aggregate: true },
   { key: "transactions", label: "Transactions", sql: "COUNT(DISTINCT s.id)", aggregate: true },
@@ -123,6 +126,8 @@ export function buildCustomSalesQuery(definition, dateRange, storeIds, userIds) 
     INNER JOIN companies c ON c.id=s.company_id
     INNER JOIN sale_items si ON si.sale_id=s.id
     INNER JOIN products p ON p.id=si.product_id
+    LEFT JOIN categories pc ON pc.id=p.category_id
+    LEFT JOIN payments pay ON pay.sale_id=s.id AND pay.status='completed'
     LEFT JOIN users u ON u.id=s.user_id
     INNER JOIN stores st ON st.id=s.store_id
     WHERE ${where.join(" AND ")}

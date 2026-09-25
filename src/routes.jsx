@@ -25,6 +25,7 @@ import HelpCentrePage from "./marketing/pages/HelpCentrePage";
 import HelpCategoryPage from "./marketing/pages/HelpCategoryPage";
 import HelpArticlePage from "./marketing/pages/HelpArticlePage";
 import TableOrderPage from "./marketing/pages/TableOrderPage.jsx";
+import NotFoundPage from "./marketing/pages/NotFoundPage.jsx";
 
 /*
  * Legacy marketing URLs kept working so old links, the sitemap and search
@@ -136,8 +137,8 @@ export function MarketingRoutes() {
         <Route path="product/:feature" element={<LegacyFeatureRedirect />} />
         <Route path="online-delivery" element={<LegacyRedirect to="/online-orders" />} />
 
-        {/* Unknown marketing paths -> home (app paths never reach here) */}
-        <Route path="*" element={<LegacyRedirect to="/" />} />
+        {/* Unknown marketing paths render a real 404 (app paths never reach here) */}
+        <Route path="*" element={<NotFoundPage />} />
       </Route>
     </Routes>
   );

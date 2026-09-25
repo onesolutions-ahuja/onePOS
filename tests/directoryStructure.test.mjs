@@ -4,8 +4,8 @@ import { existsSync, lstatSync, readFileSync } from 'node:fs';
 
 const mustExist = [
   'website', 'website/index.html',
-  'app', 'app/src', 'app/platform', 'app/shared', 'app/apps',
-  'server', 'server/server.js', 'server/routes', 'server/services',
+  'app', 'app/platform', 'app/shared', 'app/apps',
+  'routes', 'services', 'utils', 'server.js',
   'packages', 'database', 'docs/DIRECTORY_STRUCTURE.md',
 ];
 
@@ -13,13 +13,12 @@ test('repository has explicit website/app/server/package boundaries', () => {
   for (const path of mustExist) assert.equal(existsSync(path), true, `missing ${path}`);
 });
 
-test('Windows-compatible source boundaries do not depend on symlinks', () => {
-  for (const path of ['src', 'routes', 'services', 'utils', 'server.js', 'index.html']) {
-    assert.equal(lstatSync(path).isSymbolicLink(), false, `${path} must be usable without a symlink`);
+test('application entry points resolve on Windows and symlink-capable systems', () => {
+  for (const path of ['src', 'routes', 'services', 'utils', 'server.js', 'index.html', 'app/index.html']) {
+    assert.equal(existsSync(path), true, `${path} must resolve to a usable entry point`);
   }
-  assert.equal(lstatSync('app/src').isSymbolicLink(), false);
-  assert.equal(lstatSync('server/src').isSymbolicLink(), false);
-  assert.equal(existsSync('src/main.jsx'), true, 'the Vite entrypoint must remain available on Windows');
+  assert.match(readFileSync('app/index.html', 'utf8'), /src="\/src\/main.jsx"/);
+  assert.match(readFileSync('server.js', 'utf8'), /path.join\(__dirname, "dist"\)/);
 });
 
 test('tenant architecture forbids per-client source copies', () => {

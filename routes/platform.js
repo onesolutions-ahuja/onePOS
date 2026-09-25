@@ -191,11 +191,11 @@ function canManageGlobal(req) {
 }
 
 async function hasPlatformObjectPermission(db, req, objectId, action) {
-  if (req.user?.isSuperadmin === true) return true;
+  if (req.user?.isSuperadmin === true || req.user?.isPlatformDeveloper === true || req.user?.isDeveloper === true) return true;
   if (!objectId) return false;
   if (!req.user?.roleId) return Boolean(req.user?.companyId);
   const result = await db(
-    "SELECT can_view, can_create, can_edit, can_delete FROM platform_object_permissions WHERE object_id=$1 AND role_id=$2 AND company_id=$3",
+    "SELECT can_view, can_create, can_edit, can_delete, can_import, can_export FROM platform_object_permissions WHERE object_id=$1 AND role_id=$2 AND company_id=$3",
     [objectId, req.user.roleId, req.user.companyId]
   );
   if (!result.rows.length) return false;
@@ -545,7 +545,7 @@ function validRecordTypeInput(body) {
     && (body.defaultValues === undefined || (body.defaultValues && typeof body.defaultValues === "object" && !Array.isArray(body.defaultValues)));
 }
 
-export default function createPlatformRouter({ authenticate, authorize, db, pool, canViewCompanyCustomers = async () => false }) {
+export default function createPlatformRouter({ authenticate, authorize, db, pool, writeAudit = null, canViewCompanyCustomers = async () => false }) {
   const router = express.Router();
   async function resolveActingCompany(req, res, next) {
     try {
@@ -1183,6 +1183,7 @@ export default function createPlatformRouter({ authenticate, authorize, db, pool
     const storedConfig = systemObject(object) && !isCalculatedField({ field_type: fieldType }) ? { ...config, storage: "extension" } : config;
     try {
       await validatePicklistDefinition(db, { field_type: fieldType, options, config }, req);
+      await validateLookupConfiguration(object.id, fieldType, config, req);
       await checkFormulaChange(object.id, { api_name: apiName, field_type: fieldType, source_column: sourceColumn, required, writable, config: storedConfig, active: true, readable: true }, null, req);
       const names = await db("SELECT * FROM platform_fields WHERE object_id=$1 AND api_name=$2 AND (company_id IS NULL OR company_id=$3)", [object.id, apiName, req.user.companyId]);
       if (names.rows.some(field => field.api_name === apiName)) return res.status(409).json({ success: false, message: "A field with this API name already exists" });
@@ -1221,6 +1222,7 @@ export default function createPlatformRouter({ authenticate, authorize, db, pool
       }
       if (req.body.options !== undefined) candidate.options = req.body.options;
       await validatePicklistDefinition(db, candidate, req);
+      await validateLookupConfiguration(field.object_id, candidate.field_type, candidate.config, req);
       await checkFormulaChange(field.object_id, candidate, field.id, req);
       if (field.active === true && candidate.active === false) {
         if (await fieldStoredValueCount(db, field, req.user.companyId) > 0) {
@@ -1596,6 +1598,287 @@ export default function createPlatformRouter({ authenticate, authorize, db, pool
     res.json({ success: true, data: result.rows[0] });
   });
 
+  /*
+   * RECORD COLLECTION RUNTIME — the ONE generic record feed for record-bound
+   * Custom Page components (MultiContainer today; future Table/List/Cards/
+   * Kanban components reuse it unchanged).
+   *
+   *   Platform Object → Record Collection (this endpoint) → Visual Component
+   *
+   * It deliberately wraps the EXISTING generic record reader rather than adding
+   * a second query path: same platform_objects/platform_fields metadata, same
+   * field-security, same company/store scoping, same appendSystemReadScope
+   * read rules and the SAME platform_object_permissions gate — a Record
+   * Collection can never expose records the caller could not read through the
+   * object runtime. Conditions are validated with the CANONICAL condition
+   * engine (services/platformConditions.js — the same validateConditionConfig
+   * used by workflows and validation rules), then translated to parameterised
+   * SQL through object field metadata. No page-specific vocabulary, no
+   * embedded SQL in components, no second engine.
+   */
+  router.post("/platform/runtime/record-collection", authenticate, async (req, res) => {
+    try {
+      const collection = req.body || {};
+      const objectKey = typeof collection.objectKey === "string" ? collection.objectKey : null;
+      if (!objectKey || !isSafeIdentifier(objectKey)) return res.status(400).json({ success: false, message: "A valid Record Collection objectKey is required" });
+      const metadata = await db(
+        "SELECT * FROM platform_objects WHERE object_key=$1 AND active=true AND (company_id IS NULL OR company_id=$2)",
+        [objectKey, req.user.companyId]
+      );
+      const object = metadata.rows[0];
+      if (!object || !object.source_table || !isSafeIdentifier(object.source_table)) return res.status(404).json({ success: false, message: "Object records are not available" });
+      /* Runtime permission enforcement — component visibility is never a substitute. */
+      if (!(await hasPlatformObjectPermission(db, req, object.id, "view"))) return res.status(403).json({ success: false, message: "You do not have permission to view records for this object" });
+      if (object.store_scoped && !req.user.storeId) return res.status(403).json({ success: false, message: "A store session is required" });
+
+      const fieldsResult = await db(
+        "SELECT * FROM platform_fields WHERE object_id=$1 AND active=true AND (company_id IS NULL OR company_id=$2) ORDER BY display_order",
+        [object.id, req.user.companyId]
+      );
+      const fields = await applyFieldSecurity(db, fieldsResult.rows, req);
+      const readable = fields.filter((field) => field.readable !== false && field.field_type !== "formula" && field.field_type !== "rollup" && isSafeIdentifier(field.api_name) && Boolean(platformFieldSql(field, object)));
+      const fieldByApiName = new Map(readable.map((field) => [field.api_name, field]));
+
+      const clauses = [];
+      const params = [];
+      if (object.company_scoped) { params.push(req.user.companyId); clauses.push(`company_id=$${params.length}`); }
+      if (object.store_scoped) { params.push(req.user.storeId); clauses.push(`store_id=$${params.length}`); }
+
+      /*
+       * Collection conditions — canonical condition engine.
+       *
+       * validateConditionConfig (the SAME function workflows and validation
+       * rules pass through) validates every entry against this object's field
+       * metadata: operators, numeric/boolean coercion, readability. Evaluation
+       * is the engine's row-level evaluateCondition() semantics translated to
+       * parameterised SQL through platformFieldSql(); "changed*" operators are
+       * record-transition operators and are rejected here as meaningless for a
+       * standing filter.
+       */
+      const conditions = Array.isArray(collection.conditions) ? collection.conditions.slice(0, 20) : [];
+      const conditionMatch = collection.conditionMatch === "any" ? "any" : "all";
+      try {
+        if (conditions.length) validateConditionConfig({ match: conditionMatch, conditions }, fields, "Record Collection conditions");
+      } catch (error) {
+        if (error instanceof ConditionError) return res.status(400).json({ success: false, code: error.code, message: error.message });
+        throw error;
+      }
+      const transitionOperators = new Set(["changed", "changed_from", "changed_to", "changed_from_to"]);
+      const collectionConditions = conditions.filter((condition) => !transitionOperators.has(condition.operator));
+      if (collectionConditions.length !== conditions.length) return res.status(400).json({ success: false, message: "Record Collection conditions use record-transition operators, which do not apply to a standing filter" });
+      for (const condition of collectionConditions) {
+        const field = fieldByApiName.get(String(condition?.field || ""));
+        if (!field) return res.status(400).json({ success: false, message: `Collection conditions reference unavailable field "${condition?.field || "?"}"` });
+        const column = platformFieldSql(field, object);
+        if (condition.operator === "is_empty" || condition.operator === "is_not_empty") {
+          clauses.push(`(${column} IS ${condition.operator === "is_empty" ? "" : "NOT "}NULL${field.source_column ? ` OR CAST(${column} AS TEXT) = ''` : ""})`);
+          continue;
+        }
+        const value = condition.value;
+        if (value === null || value === undefined || typeof value === "object") { params.push(null); }
+        else params.push(value);
+        const placeholder = `$${params.length}`;
+        const comparable = `NULLIF(CAST(${column} AS TEXT), '')`;
+        if (condition.operator === "not_equals") clauses.push(`(${column} IS DISTINCT FROM ${placeholder})`);
+        else if (condition.operator === "greater_than") clauses.push(`${column} > ${placeholder}`);
+        else if (condition.operator === "greater_than_or_equal") clauses.push(`${column} >= ${placeholder}`);
+        else if (condition.operator === "less_than") clauses.push(`${column} < ${placeholder}`);
+        else if (condition.operator === "less_than_or_equal") clauses.push(`${column} <= ${placeholder}`);
+        else if (condition.operator === "is_empty") clauses.push(`(${comparable} IS NULL)`);
+        else if (condition.operator === "is_not_empty") clauses.push(`(${comparable} IS NOT NULL)`);
+        else clauses.push(`${column} = ${placeholder}`);
+      }
+      /* "any" wraps ONLY the condition clauses (already appended); scope
+         clauses appended after this point stay AND-ed as mandatory. */
+      const conditionClauseCount = clauses.length - (object.company_scoped ? 1 : 0) - (object.store_scoped ? 1 : 0);
+      let conditionClauses = clauses.splice(0, conditionClauseCount);
+      if (conditionClauseCount > 0 && conditionMatch === "any") conditionClauses = [`(${conditionClauses.join(" OR ")})`];
+      clauses.unshift(...conditionClauses);
+      if (["customers"].includes(object.source_table) && !req.platformCompanyCustomers) {
+        /* Mirror the appendSystemReadScope customer-store rule for record feeds. */
+        if (!req.user.storeId) return res.status(403).json({ success: false, message: "A store session is required" });
+        params.push(req.user.storeId, req.user.companyId);
+        clauses.push(`EXISTS (SELECT 1 FROM customer_stores cs WHERE cs.customer_id="customers".id AND cs.store_id=$${params.length - 1} AND cs.company_id=$${params.length} AND cs.active=true)`);
+      }
+      appendSystemReadScope(object, req, clauses, params);
+
+      /* Sort entries must name readable fields. */
+      const sortEntries = Array.isArray(collection.sort) ? collection.sort.slice(0, 3) : [];
+      const orderParts = [];
+      for (const entry of sortEntries) {
+        const field = fieldByApiName.get(String(entry?.field || ""));
+        if (!field) return res.status(400).json({ success: false, message: `Collection sort references unavailable field "${entry?.field || "?"}"` });
+        orderParts.push(`${platformFieldSql(field, object)} ${entry.direction === "asc" ? "ASC" : "DESC"}`);
+      }
+      if (!orderParts.length) orderParts.push("created_at DESC NULLS LAST");
+
+      const limit = boundedInteger(collection.maxRecords ?? collection.maxRecords ?? 10, 10, 50);
+      const requestedFields = Array.isArray(collection.fields) ? collection.fields.map(String).filter((name) => fieldByApiName.has(name)) : [];
+      const selectFields = requestedFields.length ? requestedFields : readable.slice(0, 12).map((field) => field.api_name);
+      const selectList = ["id", ...selectFields.map((name) => `${platformFieldSql(fieldByApiName.get(name), object)} AS "${name}"`)];
+      const offset = Math.max(0, Number.parseInt(collection.offset, 10) || 0);
+      const where = clauses.length ? ` WHERE ${clauses.join(" AND ")}` : "";
+      const result = await db(
+        `SELECT ${selectList.join(", ")} FROM "${object.source_table}"${where} ORDER BY ${orderParts.join(", ")} LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
+        [...params, limit, offset]
+      );
+      const count = await db(`SELECT COUNT(*)::int AS total FROM "${object.source_table}"${where}`, params);
+      const records = await populateRollups(db, object, fields, result.rows, req);
+      res.json({ success: true, data: records, records, objectKey: object.object_key, limit, offset, total: count.rows[0]?.total || 0 });
+    } catch (error) {
+      if (error.status) return res.status(error.status).json({ success: false, message: error.message });
+      console.error("Record collection runtime error:", error);
+      res.status(500).json({ success: false, message: "Unable to load record collection" });
+    }
+  });
+
+  /*
+   * PAGE INTERACTION RUNTIME — the ONE executor for Custom Page On Click
+   * bindings (MultiContainer/Table record clicks AND Button clicks).
+   *
+   * It reuses the existing execution machinery only:
+   *   - workflowUuid  → platform_rules workflow, executed via the existing
+   *     executeWorkflowActions pipeline (run + step records, permissions,
+   *     registry validation) — the canonical UI invocation path
+   *   - actionKey     → registered Action Registry handler, with its declared
+   *     requiredPermissions enforced here before execution
+   *
+   * The workflow's Current Record is the clicked record when the interaction
+   * comes from a record-bound component; for unbound Buttons the record is
+   * OPTIONAL — the workflow runs with page context (user/company/store) only.
+   * There is no second workflow engine and no second action engine here.
+   */
+  router.post("/platform/runtime/page-interactions/execute", authenticate, async (req, res, next) => {
+    try {
+      const interaction = req.body || {};
+      const type = String(interaction.type || "");
+      const recordId = interaction.recordId ? String(interaction.recordId) : null;
+      const objectKey = typeof interaction.objectKey === "string" && isSafeIdentifier(interaction.objectKey) ? interaction.objectKey : null;
+      if (recordId && !recordIdIsValid(recordId)) return res.status(400).json({ success: false, message: "Invalid record identifier" });
+
+      /* Resolve the bound object (required for actions, optional for
+         record-less workflows) and the Current Record when supplied. */
+      let object = null;
+      let record = null;
+      if (objectKey) {
+        const objectResult = await db(
+          "SELECT * FROM platform_objects WHERE object_key=$1 AND active=true AND (company_id IS NULL OR company_id=$2)",
+          [objectKey, req.user.companyId]
+        );
+        object = objectResult.rows[0] || null;
+        if (!object) return res.status(404).json({ success: false, message: "Object not found" });
+        if (recordId) {
+          const recordClauses = ["id=$1"];
+          const recordParams = [recordId];
+          if (object.company_scoped) { recordParams.push(req.user.companyId); recordClauses.push(`company_id=$${recordParams.length}`); }
+          if (object.store_scoped) {
+            if (!req.user.storeId) return res.status(403).json({ success: false, message: "A store session is required" });
+            recordParams.push(req.user.storeId); recordClauses.push(`store_id=$${recordParams.length}`);
+          }
+          appendSystemReadScope(object, req, recordClauses, recordParams);
+          const recordResult = await db(`SELECT * FROM "${object.source_table}" WHERE ${recordClauses.join(" AND ")}`, recordParams);
+          if (!recordResult.rows.length) return res.status(404).json({ success: false, message: "Record not found" });
+          record = recordResult.rows[0];
+        }
+      }
+
+      if (type === "workflow") {
+        const workflowUuid = String(interaction.workflowUuid || "");
+        if (!recordIdIsValid(workflowUuid)) return res.status(400).json({ success: false, message: "A valid workflow reference is required" });
+        const workflowResult = await db(
+          "SELECT * FROM platform_rules WHERE id=$1 AND active=true AND (company_id IS NULL OR company_id=$2) LIMIT 1",
+          [workflowUuid, req.user.companyId]
+        );
+        const workflow = workflowResult.rows[0];
+        if (!workflow) return res.status(404).json({ success: false, message: "Configured workflow not found" });
+        if (workflow.object_id && object && String(workflow.object_id) !== String(object.id)) {
+          return res.status(400).json({ success: false, message: "The configured workflow belongs to a different object" });
+        }
+        const actions = Array.isArray(workflow.action?.actions) ? workflow.action.actions : [];
+        if (!actions.length) return res.status(422).json({ success: false, message: "Configured workflow contains no executable actions" });
+        for (const workflowAction of actions) {
+          validateWorkflowAction(workflowAction);
+          const definition = getWorkflowActionDefinition(workflowAction.type || workflowAction.key);
+          for (const requiredPermission of definition?.requiredPermissions || []) {
+            if (!(await hasExecutionPermission(req, requiredPermission))) {
+              return res.status(403).json({ success: false, message: `You do not have permission to execute ${workflowAction.type || workflowAction.key}` });
+            }
+          }
+        }
+        const run = await createWorkflowRun({
+          db,
+          companyId: req.user.companyId,
+          workflowId: workflow.id,
+          workflowName: workflow.name,
+          objectId: object?.id || null,
+          recordId: record?.id || null,
+          triggerKey: "page_interaction",
+          status: "RUNNING",
+          metadata: { actorUserId: req.user.id || null, pageInteraction: true },
+        });
+        try {
+          const results = await executeWorkflowActions({
+            actions,
+            db,
+            req,
+            object,
+            record,
+            recordId: record?.id || null,
+            companyId: req.user.companyId,
+            runId: run?.id || null,
+            trigger: "page_interaction",
+          });
+          if (run?.id) {
+            await db(
+              "UPDATE platform_workflow_runs SET status=$1, completed_at=NOW(), updated_at=NOW() WHERE id=$2 AND company_id=$3",
+              ["COMPLETED", run.id, req.user.companyId]
+            );
+          }
+          return res.json({ success: true, data: { runId: run?.id || null, results } });
+        } catch (error) {
+          if (run?.id) {
+            await db(
+              "UPDATE platform_workflow_runs SET status=$1, completed_at=NOW(), updated_at=NOW(), metadata=COALESCE(metadata,'{}'::jsonb) || $2::jsonb WHERE id=$3 AND company_id=$4",
+              ["FAILED", JSON.stringify({ error: error.message || "Workflow execution failed" }), run.id, req.user.companyId]
+            );
+          }
+          throw error;
+        }
+      }
+
+      if (type === "action") {
+        const actionKey = String(interaction.actionKey || "").trim();
+        if (!actionKey) return res.status(400).json({ success: false, message: "A registered action key is required" });
+        const core = listRegisteredPlatformActions().find((item) => item.key === actionKey);
+        if (!core) return res.status(404).json({ success: false, message: "Registered action not found" });
+        if (["RECORD_SAVE", "RECORD_DELETE"].includes(core.key)) {
+          return res.status(409).json({ success: false, message: "RECORD_SAVE and RECORD_DELETE belong to the canonical record page lifecycle" });
+        }
+        if (core.key === "WORKFLOW") return res.status(422).json({ success: false, message: "Use the Workflow interaction type to run workflows" });
+        for (const requiredPermission of core.requiredPermissions || []) {
+          if (!(await hasExecutionPermission(req, requiredPermission))) {
+            return res.status(403).json({ success: false, message: `You do not have permission to execute ${core.displayName || core.key}` });
+          }
+        }
+        const definition = getWorkflowActionDefinition(core.key);
+        if (!definition) return res.status(422).json({ success: false, message: "Registered action handler is unavailable" });
+        try {
+          definition.validation?.({ type: core.key });
+        } catch { /* argument-shape validation happens inside the executor. */ }
+        const result = await executeWorkflowAction({
+          db, req, object, record, recordId: record?.id || null, companyId: req.user.companyId,
+          action: { type: core.key, ...(interaction.config || {}) },
+        });
+        return res.json({ success: true, data: result });
+      }
+
+      return res.status(400).json({ success: false, message: "Unsupported page interaction type" });
+    } catch (error) {
+      if (error.status) return res.status(error.status).json({ success: false, message: error.message });
+      next(error);
+    }
+  });
+
   router.get("/platform/runtime/apps/:appId", authenticate, async (req, res) => {
     const result = await db("SELECT * FROM platform_apps WHERE id=$1 AND company_id=$2 AND active=true", [req.params.appId, req.user.companyId]);
     if (!result.rows.length) return res.status(404).json({ success: false, message: "App not found" });
@@ -1769,7 +2052,7 @@ export default function createPlatformRouter({ authenticate, authorize, db, pool
         : await db("INSERT INTO platform_layouts (object_id,page_type,role_id,company_id,name,layout_key,definition,is_default) VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8) ON CONFLICT (object_id,page_type,role_id,company_id) DO UPDATE SET name=EXCLUDED.name, definition=EXCLUDED.definition, is_default=CASE WHEN EXCLUDED.is_default THEN true ELSE platform_layouts.is_default END, active=true, updated_at=NOW() RETURNING *", [object.id, pageType, req.body.roleId || null, companyId, req.body.name.trim(), layoutKey, JSON.stringify(req.body.definition), req.body.isDefault === true]);
       await syncLayoutButtons(db, req, result.rows[0], { deactivateExisting: false });
       if (req.body.isDefault === true) {
-        await db("UPDATE platform_layouts SET is_default=false WHERE object_id=$1 AND page_type=$2 AND id<>$3 AND role_id IS NULL AND (company_id IS NULL OR company_id=$4)", [object.id, pageType, result.rows[0].id, req.user.companyId]);
+        await db("UPDATE platform_layouts SET is_default=false WHERE object_id=$1 AND page_type=$2 AND id<>$3 AND (company_id IS NULL OR company_id=$4)", [object.id, pageType, result.rows[0].id, req.user.companyId]);
       }
       res.status(201).json({ success: true, data: result.rows[0] });
     } catch (error) {
@@ -1805,7 +2088,7 @@ export default function createPlatformRouter({ authenticate, authorize, db, pool
         : await db("UPDATE platform_layouts SET page_type=$1,role_id=$2,name=$3,definition=$4::jsonb,active=COALESCE($5,active),is_default=CASE WHEN COALESCE($5,active)=false THEN false ELSE COALESCE($6,is_default) END,updated_at=NOW() WHERE id=$7 RETURNING *", [pageType, req.body.roleId || null, req.body.name.trim(), JSON.stringify(req.body.definition), req.body.active, req.body.isDefault, req.params.layoutId]);
       await syncLayoutButtons(db, req, result.rows[0]);
       if (req.body.isDefault === true) {
-        await db("UPDATE platform_layouts SET is_default=false WHERE object_id=$1 AND page_type=$2 AND id<>$3 AND role_id IS NULL AND (company_id IS NULL OR company_id=$4)", [result.rows[0].object_id, result.rows[0].page_type, result.rows[0].id, req.user.companyId]);
+        await db("UPDATE platform_layouts SET is_default=false WHERE object_id=$1 AND page_type=$2 AND id<>$3 AND (company_id IS NULL OR company_id=$4)", [result.rows[0].object_id, result.rows[0].page_type, result.rows[0].id, req.user.companyId]);
       }
       res.json({ success: true, data: result.rows[0] });
     } catch (error) {
@@ -1821,7 +2104,7 @@ export default function createPlatformRouter({ authenticate, authorize, db, pool
     if (!existing.rows[0].active) return res.status(400).json({ success: false, message: "Only active layouts can be the default" });
     const layout = existing.rows[0];
     try {
-      await db("UPDATE platform_layouts SET is_default=false, updated_at=NOW() WHERE object_id=$1 AND page_type=$2 AND role_id IS NULL AND (company_id IS NULL OR company_id=$3)", [layout.object_id, layout.page_type, req.user.companyId]);
+      await db("UPDATE platform_layouts SET is_default=false, updated_at=NOW() WHERE object_id=$1 AND page_type=$2 AND (company_id IS NULL OR company_id=$3)", [layout.object_id, layout.page_type, req.user.companyId]);
       const result = await db("UPDATE platform_layouts SET is_default=true, updated_at=NOW() WHERE id=$1 RETURNING *", [req.params.layoutId]);
       res.json({ success: true, data: result.rows[0] });
     } catch (error) {
@@ -2580,6 +2863,24 @@ export default function createPlatformRouter({ authenticate, authorize, db, pool
     return reference.rows.length ? null : `${field.label} references a record that does not exist`;
   }
 
+  async function validateLookupConfiguration(objectId, fieldType, config, req) {
+    if (fieldType !== "lookup") return;
+    const relationshipKey = config?.relationshipKey;
+    if (!relationshipKey) throw new ConditionError("Lookup fields must select a relationship");
+    const relationship = await db(
+      "SELECT r.*, p.object_key AS parent_object_key, c.object_key AS child_object_key FROM platform_relationships r JOIN platform_objects p ON p.id=r.parent_object_id JOIN platform_objects c ON c.id=r.child_object_id WHERE r.relationship_key=$1 AND r.active=true AND ((r.parent_object_id=$2) OR (r.child_object_id=$2)) AND (p.company_id IS NULL OR p.company_id=$3) AND (c.company_id IS NULL OR c.company_id=$3)",
+      [relationshipKey, objectId, req.user.companyId]
+    );
+    if (!relationship.rows[0]) throw new ConditionError("Lookup relationship is not available for this object");
+    const current = relationship.rows[0];
+    const targetObjectKey = String(current.parent_object_id) === String(objectId)
+      ? current.child_object_key
+      : current.parent_object_key;
+    if (config.relatedObjectKey && config.relatedObjectKey !== targetObjectKey) {
+      throw new ConditionError("Lookup target does not match the selected relationship");
+    }
+  }
+
   async function resolveRecordType(object, recordTypeId, req) {
     if (!recordTypeId) return null;
     const result = await db("SELECT * FROM platform_record_types WHERE id=$1 AND object_id=$2 AND company_id=$3 AND active=true", [recordTypeId, object.id, req.user.companyId]);
@@ -3107,6 +3408,7 @@ export default function createPlatformRouter({ authenticate, authorize, db, pool
     try {
       const { object, fields: metadataFields } = await getRecordMetadata(req.params.objectKey, req);
       if (!object) return res.status(404).json({ success: false, message: "Unknown object" });
+      if (!(await hasPlatformObjectPermission(db, req, object.id, "export"))) return res.status(403).json({ success: false, message: "Export permission is required" });
       const fields = await applyFieldSecurity(db, metadataFields, req);
       const readableFields = fields.filter((field) => field.active === true && field.readable !== false && !isCalculatedField(field) && metadataColumn(field) && isSafeIdentifier(field.api_name));
       if (!readableFields.length) return res.status(400).json({ success: false, message: "This object has no readable exportable fields" });
@@ -3132,6 +3434,7 @@ export default function createPlatformRouter({ authenticate, authorize, db, pool
         csvRows.push(readableFields.map((field) => csvEscape(row[field.api_name])).join(","));
       }
       const csv = `\ufeff${csvRows.join("\r\n")}`;
+      if (typeof writeAudit === "function") await writeAudit(req.user.companyId, req.user.id, "platform.bulk_export", "platform_object", object.id, { objectKey: object.object_key, rowCount: result.rows.length, scope: req.query });
       res.setHeader("Content-Type", "text/csv; charset=utf-8");
       res.setHeader("Content-Disposition", `attachment; filename="${object.object_key}-records-export-${new Date().toISOString().slice(0, 10)}.csv"`);
       res.send(csv);
@@ -3146,6 +3449,7 @@ export default function createPlatformRouter({ authenticate, authorize, db, pool
     try {
       const { object, fields: metadataFields } = await getRecordMetadata(req.params.objectKey, req);
       if (!object) return res.status(404).json({ success: false, message: "Unknown object" });
+      if (!(await hasPlatformObjectPermission(db, req, object.id, "import"))) return res.status(403).json({ success: false, message: "Import permission is required" });
       const fields = await applyFieldSecurity(db, metadataFields, req);
       const csvText = typeof req.body?.csv === "string" ? req.body.csv : "";
       if (!csvText.trim()) return res.status(400).json({ success: false, message: "CSV content is required" });
@@ -3165,6 +3469,10 @@ export default function createPlatformRouter({ authenticate, authorize, db, pool
         const existingId = normalized.id ? String(normalized.id).trim() : null;
         const { id: _, ...input } = normalized;
         const action = existingId && recordIdIsValid(existingId) ? "update" : "create";
+        if (!(await hasPlatformObjectPermission(db, req, object.id, action === "update" ? "edit" : "create"))) {
+          errors.push({ lineNumber, message: `${action} permission is required`, action });
+          continue;
+        }
         const validation = await validateRecordInput(req, object, fields, input, { requireRequired: action === "create" });
         if (validation.error) {
           errors.push({ lineNumber, message: validation.error, action });
@@ -3183,6 +3491,7 @@ export default function createPlatformRouter({ authenticate, authorize, db, pool
     try {
       const { object, fields: metadataFields } = await getRecordMetadata(req.params.objectKey, req);
       if (!object) return res.status(404).json({ success: false, message: "Unknown object" });
+      if (!(await hasPlatformObjectPermission(db, req, object.id, "import"))) return res.status(403).json({ success: false, message: "Import permission is required" });
       const fields = await applyFieldSecurity(db, metadataFields, req);
       const csvText = typeof req.body?.csv === "string" ? req.body.csv : "";
       if (!csvText.trim()) return res.status(400).json({ success: false, message: "CSV content is required" });
@@ -3203,6 +3512,10 @@ export default function createPlatformRouter({ authenticate, authorize, db, pool
         const { id: _, ...input } = normalized;
         const action = existingId && recordIdIsValid(existingId) ? "update" : "create";
         try {
+          if (!(await hasPlatformObjectPermission(db, req, object.id, action === "update" ? "edit" : "create"))) {
+            errors.push({ lineNumber, message: `${action} permission is required`, action });
+            continue;
+          }
           if (action === "update") {
             const validation = await validateRecordInput(req, object, fields, input);
             if (validation.error) {
@@ -3212,7 +3525,24 @@ export default function createPlatformRouter({ authenticate, authorize, db, pool
             const params = validation.values.map(({ value }) => value);
             const assignments = validation.values.map(({ column }, index) => `"${column}"=$${index + 1}`);
             params.push(existingId);
-            const result = await db(`UPDATE "${object.source_table}" SET ${assignments.join(",")} WHERE id=$${params.length} AND company_id=$${params.length + 1}`, [...params, req.user.companyId]);
+            const scope = [`id=$${params.length + 1}`];
+            const scopeParams = [existingId];
+            if (object.company_scoped) {
+              scopeParams.push(req.user.companyId);
+              scope.push(`company_id=$${params.length + scopeParams.length}`);
+            }
+            if (object.store_scoped) {
+              if (!req.user.storeId) {
+                errors.push({ lineNumber, message: "A store session is required", action });
+                continue;
+              }
+              scopeParams.push(req.user.storeId);
+              scope.push(`store_id=$${params.length + scopeParams.length}`);
+            }
+            const result = await db(
+              `UPDATE "${object.source_table}" SET ${assignments.join(",")} WHERE ${scope.join(" AND ")}`,
+              [...params, ...scopeParams],
+            );
             if (!result.rows.length) {
               errors.push({ lineNumber, message: "Record not found", action });
               continue;
@@ -3237,6 +3567,7 @@ export default function createPlatformRouter({ authenticate, authorize, db, pool
         }
       }
       res.json({ success: true, data: { imported: results.length, errors, results } });
+      if (typeof writeAudit === "function") await writeAudit(req.user.companyId, req.user.id, "platform.bulk_import", "platform_object", object.id, { objectKey: object.object_key, imported: results.length, errors: errors.length });
     } catch (error) {
       console.error("Platform object import error:", error);
       res.status(500).json({ success: false, message: "Unable to import object records" });
@@ -3246,14 +3577,26 @@ export default function createPlatformRouter({ authenticate, authorize, db, pool
   router.get("/platform/objects/:objectKey/records/:recordId/history", authenticate, async (req, res) => {
     if (!recordIdIsValid(req.params.recordId)) return res.status(400).json({ success: false, message: "Invalid record identifier" });
     const metadata = await db(
-      "SELECT id,object_key FROM platform_objects WHERE object_key=$1 AND active=true AND (company_id IS NULL OR company_id=$2)",
+      "SELECT id,object_key,source_table,store_scoped FROM platform_objects WHERE object_key=$1 AND active=true AND (company_id IS NULL OR company_id=$2)",
       [req.params.objectKey, req.user.companyId]
     );
     const object = metadata.rows[0];
     if (!object) return res.status(404).json({ success: false, message: "Unknown object" });
+    if (!(await hasPlatformObjectPermission(db, req, object.id, "view"))) return res.status(403).json({ success: false, message: "View permission is required" });
+    const params = [object.id, req.params.recordId, req.user.companyId];
+    const scope = "object_id=$1 AND record_id=$2 AND company_id=$3";
+    let storeClause = "";
+    if (object.store_scoped) {
+      if (!req.user.storeId) return res.status(403).json({ success: false, message: "A store session is required" });
+      params.push(req.user.storeId);
+      if (!isSafeIdentifier(object.source_table)) {
+        return res.status(500).json({ success: false, message: "Object source is invalid" });
+      }
+      storeClause = ` AND record_id IN (SELECT id FROM "${object.source_table}" WHERE id=$2 AND store_id=$4)`;
+    }
     const result = await db(
-      "SELECT * FROM platform_record_history WHERE object_id=$1 AND record_id=$2 AND company_id=$3 ORDER BY created_at DESC",
-      [object.id, req.params.recordId, req.user.companyId]
+      `SELECT * FROM platform_record_history WHERE ${scope}${storeClause} ORDER BY created_at DESC`,
+      params
     );
     res.json({ success: true, data: result.rows });
   });

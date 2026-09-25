@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { X } from "lucide-react";
 import { apiRequest } from "../../services/api.js";
 import FormRenderer from "../../pages/settings/Platform/FormRenderer.jsx";
@@ -30,9 +30,13 @@ export default function StandardObjectFormModal({
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const recordId = record?.id || record?.record_id || "";
+  const fieldOptionsKey = useMemo(() => JSON.stringify(fieldOptions || {}), [fieldOptions]);
 
   useEffect(() => {
     let cancelled = false;
+    setLoading(true);
+    setError("");
     (async () => {
       try {
         const runtime = await apiRequest(`/api/platform/runtime-forms/${encodeURIComponent(objectKey)}?pageType=${mode === "quick_create" ? "quick_create" : mode === "view" ? "detail" : mode}`);
@@ -54,9 +58,15 @@ export default function StandardObjectFormModal({
       }
     })();
     return () => { cancelled = true; };
-  }, [objectKey, mode, record, fieldOptions]);
+  }, [objectKey, mode, recordId, fieldOptionsKey]);
 
   const heading = title || `${mode === "create" || mode === "quick_create" ? "New" : mode === "view" ? "View" : "Edit"} ${objectKey.replaceAll("_", " ")}`;
+  const presentationMode = definition?.presentation_mode || "inline";
+  const presentationClass = presentationMode === "overlay_square"
+    ? "standard-object-form-panel-compact"
+    : presentationMode === "overlay_rectangle"
+      ? "standard-object-form-panel-rectangle"
+      : "standard-object-form-panel-inline";
   async function submit(values) {
     try {
       setSaving(true);
@@ -77,8 +87,8 @@ export default function StandardObjectFormModal({
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-      <div className="flex max-h-[90vh] w-[720px] max-w-full flex-col overflow-hidden rounded-xl bg-white shadow-2xl">
+    <div className={`standard-object-form-overlay standard-object-form-overlay-${presentationMode}`} data-presentation={presentationMode}>
+      <div className={`standard-object-form-panel ${presentationClass}`}>
         <header className="flex items-center justify-between border-b px-5 py-4">
           <h2 className="text-lg font-bold capitalize">{heading}</h2>
           <button type="button" onClick={onClose} disabled={saving} className="rounded p-2 hover:bg-slate-100" aria-label="Close"><X size={18} /></button>
@@ -99,6 +109,57 @@ export default function StandardObjectFormModal({
           {children}
         </div>
       </div>
+      <style>{`
+        .standard-object-form-overlay {
+          position: fixed;
+          inset: 0;
+          z-index: 50;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          padding: 16px;
+          background: rgb(0 0 0 / 50%);
+        }
+        .standard-object-form-panel {
+          display: flex;
+          flex-direction: column;
+          width: min(100%, 720px);
+          max-height: 90vh;
+          overflow: hidden;
+          border: 1px solid var(--border-color, #e5e7eb);
+          border-radius: var(--onepos-radius, 12px);
+          background: var(--card-background, #fff);
+          box-shadow: var(--onepos-shadow-lg, 0 20px 50px rgb(0 0 0 / 20%));
+        }
+        .standard-object-form-panel-rectangle { width: min(100%, 860px); }
+        .standard-object-form-panel-compact { width: min(100%, 540px); }
+        .standard-object-form-overlay .standard-object-form-panel > header {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 12px;
+          border-bottom: 1px solid var(--border-color, #e5e7eb);
+          padding: 16px 20px;
+        }
+        .standard-object-form-overlay .standard-object-form-panel > header h2 {
+          margin: 0;
+          color: var(--text-primary, #111827);
+          font-size: 18px;
+          font-weight: 700;
+        }
+        .standard-object-form-overlay .standard-object-form-panel > div {
+          overflow: auto;
+          padding: 20px;
+        }
+        @media (max-width: 640px) {
+          .standard-object-form-overlay { align-items: stretch; padding: 0; }
+          .standard-object-form-panel {
+            width: 100%;
+            max-height: 100%;
+            border-radius: 0;
+          }
+        }
+      `}</style>
     </div>
   );
 }

@@ -3,12 +3,12 @@
 ```
 onePOS/
 ├── website/          public marketing website
-├── app/              tenant application
-│   ├── src/          current React application
-│   ├── platform/     shared platform capabilities
-│   ├── shared/       shared UI/runtime utilities
-│   └── apps/         one canonical source per installable app (e.g. HRMS)
-├── server/           backend routes/services/runtime
+├── app/              application entry HTML and platform extension placeholders
+├── src/              canonical React application source
+├── routes/            backend HTTP routes
+├── services/          backend services and metadata registries
+├── utils/              shared runtime utilities
+├── server.js          canonical backend entry point
 ├── packages/         AppExchange/package manifests and dependencies
 ├── database/         database assets
 ├── tests/            automated tests
@@ -19,10 +19,6 @@ onePOS/
 
 Never create a source tree per tenant. Tenant-specific configuration belongs in tenant-scoped metadata. A reusable feature such as HRMS is implemented once under `app/apps/hrms` and made available to selected tenants through package installation, licence/entitlement and permissions.
 
-## Windows-compatible entrypoints
+## Source boundary
 
-The root `src`, `routes`, `services`, `utils`, `server.js`, and `index.html`
-entrypoints remain regular files and directories so the repository works on
-Windows without filesystem symlinks. The app and server boundaries above remain
-the architectural ownership boundaries; do not add another feature
-implementation under a tenant or compatibility path.
+The root `src`, `routes`, `services`, `utils`, and `server.js` paths are the active application boundaries. The `app/` directory contains the Vite HTML entry point and reserved extension documentation; it is not a second frontend source tree.

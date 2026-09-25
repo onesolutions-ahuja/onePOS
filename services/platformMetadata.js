@@ -441,6 +441,12 @@ export const platformSchema = `
   DO $$ BEGIN
     IF to_regclass('platform_fields') IS NOT NULL THEN
       ALTER TABLE platform_fields DROP CONSTRAINT IF EXISTS platform_fields_field_type_check;
+      UPDATE platform_fields SET field_type = CASE lower(trim(field_type))
+        WHEN 'string' THEN 'text'
+        WHEN 'integer' THEN 'number'
+        WHEN 'float' THEN 'decimal'
+        WHEN 'timestamp' THEN 'datetime'
+        ELSE lower(trim(field_type)) END;
       ALTER TABLE platform_fields ADD CONSTRAINT platform_fields_field_type_check
         CHECK (field_type IN (${PLATFORM_FIELD_TYPE_SQL}));
     END IF;

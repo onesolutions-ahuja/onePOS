@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import express from "express";
 import inventoryRt from "../routes/inventory.js";
-import { getTestDatabaseUrl } from "./testDatabaseEnv.mjs";
+import { requireTestDatabaseUrl } from "./testDatabaseEnv.mjs";
 
 /*
  * Live-database integration test for the inventory low-stock endpoint.
@@ -13,9 +13,8 @@ import { getTestDatabaseUrl } from "./testDatabaseEnv.mjs";
  * so every insert satisfies the real foreign keys. Everything is tagged and
  * removed in releaseTestDb.
  */
-const TEST_DATABASE_URL = getTestDatabaseUrl();
 const createTestDb = async () => {
-  const pool = new pg.Pool({ connectionString: TEST_DATABASE_URL, ssl: { rejectUnauthorized: false } });
+  const pool = new pg.Pool({ connectionString: requireTestDatabaseUrl(), ssl: { rejectUnauthorized: false } });
   const db = (q, p) => pool.query(q, p);
   const tag = crypto.randomUUID().slice(0, 8);
   const company = await db(`INSERT INTO companies(name) VALUES($1) RETURNING id`, [`lowstock-${tag}`]);
@@ -91,7 +90,7 @@ const req = async (port, method, path, body) => {
   return { status: res.status, body: await res.json().catch(() => ({})) };
 };
 
-test("low stock products are identified using tracked stock and threshold", { skip: !TEST_DATABASE_URL }, async () => {
+test("low stock products are identified using tracked stock and threshold", async () => {
   const ctx = await createTestDb();
   const { db, products, cat, user, pool, storeId, company, store, role, adminRole, adminUser } = ctx;
   const { server, port } = await listen(buildApp(ctx, inventoryRt({
@@ -138,7 +137,7 @@ test("low stock products are identified using tracked stock and threshold", { sk
 });
 
 
-test("adjustment writes a movement and returns balance", { skip: !TEST_DATABASE_URL }, async () => {
+test("adjustment writes a movement and returns balance", async () => {
   const ctx = await createTestDb();
   const { db, products, cat, user, pool, storeId, company, store, role, adminRole, adminUser } = ctx;
   const { server, port } = await listen(buildApp(ctx, inventoryRt({

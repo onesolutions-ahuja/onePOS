@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+﻿import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Bell,
   Building2,
@@ -77,7 +77,7 @@ function AppSwitcher({ apps, onNavigate }) {
         <ChevronDown size={14} className="shrink-0 opacity-70" />
       </button>
       {open && (
-        <div role="menu" aria-label="Installed applications" data-testid="app-switcher-menu" className="absolute left-0 top-full z-[80] mt-2 w-72 overflow-hidden rounded-xl border py-1 shadow-xl" style={{ backgroundColor: "var(--onepos-surface-raised)", borderColor: "var(--onepos-border)", colorScheme: "inherit" }}>
+        <div role="menu" aria-label="Installed applications" data-testid="app-switcher-menu" className="absolute left-0 top-full z-[var(--onepos-layer-dropdown)] mt-2 w-72 overflow-hidden rounded-xl border py-1 shadow-xl" style={{ backgroundColor: "var(--onepos-surface-raised)", borderColor: "var(--onepos-border)", colorScheme: "inherit" }}>
           <div className="px-3 py-2 text-[10px] font-bold uppercase tracking-[0.14em]" style={{ color: "var(--onepos-text-muted)" }}>Installed applications</div>
           {apps.length === 0 && (<div className="px-3 py-3 text-xs" style={{ color: "var(--onepos-text-muted)" }}>No additional applications are available.</div>)}
           {apps.map((app) => (
@@ -117,7 +117,7 @@ function NavigationMenu({ groups, page, onNavigate }) {
         <ChevronDown size={14} className="shrink-0 opacity-70" />
       </button>
       {open && (
-        <div role="menu" aria-label="Pages" data-testid="admin-nav-menu" className="absolute left-0 top-full z-[80] mt-2 w-[320px] max-h-[60vh] overflow-y-auto rounded-xl border py-2 shadow-xl" style={{ backgroundColor: "var(--onepos-surface-raised)", borderColor: "var(--onepos-border)", colorScheme: "inherit" }}>
+        <div role="menu" aria-label="Pages" data-testid="admin-nav-menu" className="absolute left-0 top-full z-[var(--onepos-layer-dropdown)] mt-2 w-[320px] max-h-[60vh] overflow-y-auto rounded-xl border py-2 shadow-xl" style={{ backgroundColor: "var(--onepos-surface-raised)", borderColor: "var(--onepos-border)", colorScheme: "inherit" }}>
           {groups.map(({ label, items: groupItems }) => {
             const visibleItems = groupItems.filter(([name]) => typeof name === "string");
             if (!visibleItems.length) return null;
@@ -233,7 +233,7 @@ export default function AdminShell({ page, apps = [], items = [], reportItems = 
                 <ChevronDown size={14} className="shrink-0" style={{ color: "var(--onepos-text-muted)" }} />
               </button>
               {profileOpen && (
-                <div role="menu" aria-label="User menu" data-testid="header-profile-menu" className="absolute right-0 top-full z-[80] mt-2 w-56 rounded-xl border py-1 shadow-xl" style={{ backgroundColor: "var(--onepos-surface-raised)", borderColor: "var(--onepos-border)" }}>
+                <div role="menu" aria-label="User menu" data-testid="header-profile-menu" className="absolute right-0 top-full z-[var(--onepos-layer-dropdown)] mt-2 w-56 rounded-xl border py-1 shadow-xl" style={{ backgroundColor: "var(--onepos-surface-raised)", borderColor: "var(--onepos-border)" }}>
                   <div className="border-b px-3 py-2" style={{ borderColor: "var(--onepos-border)" }}>
                     <div className="truncate text-sm font-semibold" style={{ color: "var(--onepos-text-primary)" }}>{displayName}</div>
                     <div className="truncate text-xs" style={{ color: "var(--onepos-text-muted)" }}>{user?.username || ""}{user?.storeName || storeName ? ` ? ${user?.storeName || storeName}` : ""}</div>

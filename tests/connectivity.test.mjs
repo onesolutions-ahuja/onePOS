@@ -229,6 +229,29 @@ test("6. failure tiers stay distinct: 5xx, timeout and healthy each yield differ
   assert.equal(snap.lastError, null);
 });
 
+test("7. browser offline event immediately updates the till icon and dock contract", async () => {
+  await freshScenario("offline-event");
+  setNavigatorOnline(true);
+  mockFetch(() => new Promise(() => {}));
+  const listeners = new Map();
+  const previousWindow = globalThis.window;
+  globalThis.window = {
+    addEventListener: (name, listener) => listeners.set(name, listener),
+    removeEventListener: (name) => listeners.delete(name),
+  };
+  const stop = connectivity.startConnectivityMonitoring({ intervalMs: 0 });
+  try {
+    listeners.get("offline")();
+    const snap = connectivity.getConnectivity();
+    assert.equal(snap.internet, connectivity.INTERNET_STATES.DISCONNECTED);
+    assert.equal(snap.server, connectivity.SERVER_STATES.UNREACHABLE);
+    assert.equal(snap.lastError, "Internet unavailable");
+  } finally {
+    stop();
+    globalThis.window = previousWindow;
+  }
+});
+
 test("POS consumers are wired to the single source (no duplicate independent state)", () => {
   const pos = fs.readFileSync(path.join(root, "src", "pages", "pos", "POS.jsx"), "utf8");
   const header = fs.readFileSync(path.join(root, "src", "pages", "pos", "POSHeader.jsx"), "utf8");
@@ -247,7 +270,9 @@ test("POS consumers are wired to the single source (no duplicate independent sta
   assert.match(header, /describeConnectivity/);
   assert.match(header, /checkNow\(\)/, "opening diagnostics triggers an immediate check");
 
-  /* The queue engine still owns its sync loop — untouched. */
+  /* The queue engine reuses the shared connectivity result; it no longer
+   * performs a second health probe of its own. */
   const queue = fs.readFileSync(path.join(root, "src", "services", "offlineQueue.js"), "utf8");
-  assert.match(queue, /reportConnection\(response\.status < 500\)/);
+  assert.match(queue, /ensureQueueReady/);
+  assert.doesNotMatch(queue, /fetch\(["']\/api\/health/);
 });

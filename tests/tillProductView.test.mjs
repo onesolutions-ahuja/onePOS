@@ -585,27 +585,36 @@ describe("T10W dock quick-access setting (backend)", () => {
 });
 
 describe("T10W dock frontend contracts", () => {
-  test("dock renders configured pages; launcher stays centred; Open Till fixed", () => {
-    assert.ok(DOCK_SRC.includes("quickAccess"), "dock accepts the quickAccess prop");
-    assert.ok(DOCK_SRC.includes("const leftSlots = configured.slice(0, SLOT_LIMIT)"), "left side uses the fixed slot limit");
-    assert.ok(DOCK_SRC.includes("const rightSlots = configured.slice(SLOT_LIMIT, SLOT_LIMIT * 2)"), "right side uses the fixed slot limit");
-    assert.ok(DOCK_SRC.includes("SLOT_LIMIT = 6"), "dock provides six configurable slots on each side of Jarves");
-    assert.ok(DOCK_SRC.includes('["Open Till"]'), "Open Till fills a spare trailing slot");
+  test("dock renders one shared configured layout without an Open Till substitution", () => {
+    assert.ok(DOCK_SRC.includes("resolveDockQuickSlots"), "dock resolves the shared quick-access configuration");
+    assert.ok(DOCK_SRC.includes("const quickSlots = resolveDockQuickSlots"), "configured slots feed the canonical composition");
+    assert.ok(DOCK_SRC.includes("const SLOT_LIMIT = 6"), "desktop maximum is six quick-access slots");
+    assert.ok(DOCK_SRC.includes('<JarvisCorner embedded />'), "the canonical dock keeps the existing Jarvis centre anchor");
+    assert.ok(DOCK_SRC.includes('label="Apps"'), "the existing All Pages/Apps launcher remains");
+    assert.ok(DOCK_SRC.includes('label="Settings"'), "Settings remains the fixed far-right destination");
+    assert.doesNotMatch(DOCK_SRC, /Open Till/, "route state must not inject Open Till into application navigation");
   });
 
-  test("empty/unset configuration falls back to the default layout", () => {
-    assert.ok(/Array\.isArray\(quickAccess\) && quickAccess\.length\s*\?/.test(DOCK_SRC),
-      "unset/empty quickAccess falls back to DOCK_PRIMARY");
+  test("empty/unset configuration falls back to the shared default layout", () => {
+    assert.ok(DOCK_SRC.includes("DEFAULT_DOCK_QUICK_ACCESS"), "dock uses the canonical default configuration");
+    assert.ok(DOCK_SRC.includes("loadDockQuickAccess"), "saved configuration is loaded and normalized by the canonical configuration runtime");
   });
 
   test("permission filtering is unchanged: unavailable pages still skip", () => {
-    assert.ok(DOCK_SRC.includes("byName.get(slot)"), "icons resolve from the permission-filtered items list");
+    assert.ok(DOCK_SRC.includes("resolveDockQuickSlots({ quickAccess, permitted: byName.keys() })"), "saved slots are intersected with permitted navigation");
     assert.ok(DOCK_SRC.includes("if (!Icon) return null"), "unavailable pages do not render");
   });
 
-  test("AdminLayout fetches settings and passes dock.quickAccess to the dock", () => {
-    assert.ok(LAYOUT_SRC.includes('apiRequest("/api/settings")'), "layout loads settings");
-    assert.ok(LAYOUT_SRC.includes("quickAccess={dockQuickAccess}"), "dock receives the configured list");
+  test("AdminLayout and POS use the same canonical dock component", () => {
+    assert.ok(LAYOUT_SRC.includes('<AdminNavDock'), "admin shell renders the canonical dock");
+    assert.ok(POS_SRC.includes('<DockHost'), "POS uses the shared dock runtime");
+    assert.ok(POS_SRC.includes('page="Sales"'), "POS only supplies active destination, not dock items");
+    assert.doesNotMatch(POS_SRC, /items=\{\[\]|Open Till.*dock|variant="till"/);
+  });
+  test("dock configuration is loaded by the canonical dock runtime, not by each shell", () => {
+    assert.ok(DOCK_SRC.includes("loadDockQuickAccess()"), "canonical dock loads the shared saved configuration");
+    assert.ok(DOCK_SRC.includes("subscribeDockQuickAccess"), "surfaces follow the one cached configuration stream");
+    assert.ok(!LAYOUT_SRC.includes("quickAccess={dockQuickAccess}"), "AdminLayout cannot inject a route-local list");
   });
 
   test("settings UI offers the Dock Quick Access picker (add/remove/reorder)", () => {

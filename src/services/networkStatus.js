@@ -73,10 +73,31 @@ export function onNetworkChange(handler) {
 export function isNetworkError(error) {
   if (!error || typeof error !== "object") return false;
   if (error.status !== undefined) return false;
-  if (["TypeError", "AbortError", "TimeoutError"].includes(error.name)) return true;
+  /*
+   * A client timeout is transport-ambiguous: the server may have committed
+   * the request before the client stopped waiting. Treat it as retryable so
+   * callers preserve the idempotency key and can safely reconcile the result.
+   */
+  if (["TypeError"].includes(error.name)) return true;
+  if (isTimeoutError(error)) return true;
   return (
     error.status === undefined &&
     error.code === undefined &&
     /fetch|network/i.test(error.message || "")
   );
+}
+
+/*
+ * True when the request was aborted by a client-side timeout (AbortSignal →
+ * AbortError/TimeoutError, or a `.timeout()` helper rejection). A timeout is
+ * transport-ambiguous: the server may have committed before the client
+ * stopped waiting, so callers must preserve idempotency data and retry safely.
+ */
+export function isTimeoutError(error) {
+  if (!error || typeof error !== "object") return false;
+  if (error.code === "TIMEOUT" || error.timeout === true) return true;
+  if (error.status !== undefined) return false;
+  if (error.name === "TimeoutError") return true;
+  if (error.name === "AbortError") return true;
+  return /timed out|timeout|aborted/i.test(error.message || "");
 }

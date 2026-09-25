@@ -7,7 +7,7 @@ export default function createAdvancedPlatformRouter({ authenticate, authorize, 
   const manage = [authenticate, authorize("settings.manage")];
 
   router.get("/platform/message-templates", ...manage, async (req, res) => {
-    const result = await db("SELECT id,company_id,name,api_key,description,channel,object_id,subject,body,active,created_by,created_at,updated_at FROM platform_message_templates WHERE company_id=$1 ORDER BY name", [req.user.companyId]);
+    const result = await db("SELECT t.id,t.company_id,t.name,t.api_key,t.description,t.channel,t.object_id,o.object_key,t.subject,t.body,t.active,t.created_by,t.created_at,t.updated_at FROM platform_message_templates t LEFT JOIN platform_objects o ON o.id=t.object_id WHERE t.company_id=$1 ORDER BY t.name", [req.user.companyId]);
     res.json({ success: true, data: result.rows });
   });
 
@@ -18,8 +18,13 @@ export default function createAdvancedPlatformRouter({ authenticate, authorize, 
       return res.status(400).json({ success: false, message: "Name, valid channel and message content are required" });
     }
     try {
+      if (objectId) {
+        const object = await db("SELECT id FROM platform_objects WHERE id=$1 AND (company_id IS NULL OR company_id=$2) AND active=true", [objectId, req.user.companyId]);
+        if (!object.rows.length) return res.status(400).json({ success: false, message: "Selected Platform object is unavailable" });
+      }
       const result = await db("INSERT INTO platform_message_templates (company_id,name,api_key,description,channel,object_id,subject,body,active,created_by) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id,company_id,name,api_key,description,channel,object_id,subject,body,active,created_by,created_at,updated_at", [req.user.companyId, name.trim(), toSafeApiName(name, "template"), description || null, normalizedChannel, objectId || null, subject || null, body, active !== false, req.user.id || null]);
-      res.status(201).json({ success: true, data: result.rows[0], mergeFields: [...new Set([...extractMergeFields(subject), ...extractMergeFields(body)])] });
+      const data = { ...result.rows[0], object_key: objectId ? (await db("SELECT object_key FROM platform_objects WHERE id=$1", [objectId])).rows[0]?.object_key || null : null };
+      res.status(201).json({ success: true, data, mergeFields: [...new Set([...extractMergeFields(subject), ...extractMergeFields(body)])] });
     } catch (error) {
       if (error.code === "23505") return res.status(409).json({ success: false, message: "A template with this API key already exists" });
       console.error("Message template create error:", error);
@@ -34,8 +39,14 @@ export default function createAdvancedPlatformRouter({ authenticate, authorize, 
     const next = { ...current, ...req.body };
     const channel = String(next.channel || "").toUpperCase();
     if (!next.name?.trim() || !validateTemplateChannel(channel) || !String(next.body || "").trim() || (channel === "EMAIL" && !String(next.subject || "").trim())) return res.status(400).json({ success: false, message: "Invalid message template" });
-    const result = await db("UPDATE platform_message_templates SET name=$1,description=$2,channel=$3,object_id=$4,subject=$5,body=$6,active=$7,updated_at=NOW() WHERE id=$8 AND company_id=$9 RETURNING id,company_id,name,api_key,description,channel,object_id,subject,body,active,created_by,created_at,updated_at", [next.name.trim(), next.description || null, channel, next.objectId ?? next.object_id ?? null, next.subject || null, next.body, next.active !== false, req.params.id, req.user.companyId]);
-    res.json({ success: true, data: result.rows[0] });
+    if (next.objectId || next.object_id) {
+      const object = await db("SELECT id FROM platform_objects WHERE id=$1 AND (company_id IS NULL OR company_id=$2) AND active=true", [next.objectId || next.object_id, req.user.companyId]);
+      if (!object.rows.length) return res.status(400).json({ success: false, message: "Selected Platform object is unavailable" });
+    }
+    const nextObjectId = next.objectId ?? next.object_id ?? null;
+    const result = await db("UPDATE platform_message_templates SET name=$1,description=$2,channel=$3,object_id=$4,subject=$5,body=$6,active=$7,updated_at=NOW() WHERE id=$8 AND company_id=$9 RETURNING id,company_id,name,api_key,description,channel,object_id,subject,body,active,created_by,created_at,updated_at", [next.name.trim(), next.description || null, channel, nextObjectId, next.subject || null, next.body, next.active !== false, req.params.id, req.user.companyId]);
+    const data = { ...result.rows[0], object_key: nextObjectId ? (await db("SELECT object_key FROM platform_objects WHERE id=$1", [nextObjectId])).rows[0]?.object_key || null : null };
+    res.json({ success: true, data });
   });
 
   router.delete("/platform/message-templates/:id", ...manage, async (req, res) => {

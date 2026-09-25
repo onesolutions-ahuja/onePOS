@@ -10,7 +10,7 @@ test("settings uses hierarchical categories, permission-filtered search source, 
   assert.match(settings, /settings-categories/);
   assert.match(settings, /Search settings/);
   assert.match(settings, /const searchResults = settingsQuery\.trim\(\) \? tabs\.filter/);
-  assert.match(css, /grid-template-columns: minmax\(190px, 220px\) minmax\(170px, 205px\) minmax\(0, 820px\)/);
+  assert.match(css, /grid-template-columns: minmax\(220px, 260px\) minmax\(0, 1fr\)/);
 });
 
 test("settings is excluded from the operational dock launcher", () => {

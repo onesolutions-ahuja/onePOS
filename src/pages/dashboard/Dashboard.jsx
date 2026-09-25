@@ -1,43 +1,103 @@
-import { useEffect, useState } from "react";
-import { Package, Users, BarChart3, RefreshCw } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
+import { Package, Users, RefreshCw } from "lucide-react";
 import { apiRequest } from "../../services/api.js";
+import DashboardGrid from "../../components/dashboard/DashboardGrid.jsx";
 
+/*
+ * The Dashboard is a RUNTIME, not a composition.
+ *
+ * It asks the platform for a dashboard definition (the saved one for this user
+ * when one exists, otherwise the shipped default definition) and renders every
+ * component through the shared generic component runtime. No KPI, chart or
+ * metric is named in this file: which components appear, their order, their
+ * size, their datasource, metric, grouping and date range all come from
+ * dashboard metadata written by Dashboard Builder.
+ */
 export default function Dashboard({ onNavigate, onAddProduct, canViewReports = true }) {
-  const [summary, setSummary] = useState(null);
+  const [definition, setDefinition] = useState(null);
+  const [components, setComponents] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
-  const loadSummary = async () => {
+  const loadDashboard = useCallback(async () => {
     try {
       setLoading(true);
       setError("");
-      const [dashboardData, settingsData] = await Promise.all([
-        apiRequest("/api/dashboard/summary"),
-        apiRequest("/api/settings"),
-      ]);
-      if (!dashboardData.success) throw new Error(dashboardData.message || "Unable to load dashboard");
-      let logo = null;
-      if (settingsData?.success && settingsData.data?.company?.logoUrl) {
-        logo = settingsData.data.company.logoUrl;
-      } else if (dashboardData.data?.companyLogo) {
-        logo = dashboardData.data.companyLogo;
-      }
-      setSummary({ ...dashboardData.data, companyLogo: logo });
+      const definitionResponse = await apiRequest("/api/dashboards/default");
+      if (!definitionResponse.success) throw new Error(definitionResponse.message || "Unable to load dashboard");
+      const value = definitionResponse.data;
+      setDefinition(value);
+      /* One call runs every component through the one reporting engine. */
+      const run = await apiRequest("/api/dashboards/run", { method: "POST", body: JSON.stringify(value) });
+      setComponents(run.success ? run.data?.components || [] : []);
     } catch (err) {
       setError(err.message || "Unable to load dashboard");
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
-  useEffect(() => { loadSummary(); }, []);
+  useEffect(() => { loadDashboard(); }, [loadDashboard]);
 
-  if (loading) return <div><div className="mb-6"><h1 className="text-2xl font-bold">Dashboard</h1><p className="text-sm text-slate-500 mt-1">Loading business summary...</p></div><div className="grid grid-cols-4 gap-4">{[1, 2, 3, 4].map((item) => <div key={item} className="h-28 bg-white border rounded-xl animate-pulse" />)}</div><div className="h-72 bg-white border rounded-xl mt-5 animate-pulse" /></div>;
-  if (error) return <div className="bg-white border border-slate-200 rounded-xl p-8 max-w-2xl"><h1 className="text-xl font-bold text-red-700">Unable to load dashboard</h1><p className="text-sm text-slate-600 mt-2">{error}</p><button onClick={loadSummary} className="mt-5 h-10 px-4 bg-blue-600 text-white rounded-lg text-sm font-medium flex items-center gap-2"><RefreshCw size={16} /> Refresh</button></div>;
+  if (loading) {
+    return <div data-testid="dashboard-loading">
+      <div className="mb-6">
+        <h1 className="onepos-page-title">Dashboard</h1>
+        <p className="onepos-page-subtitle">Loading your dashboard…</p>
+      </div>
+      <DashboardGrid components={[1, 2, 3, 4].map((n) => ({ id: `skeleton-${n}`, type: "kpi", title: "", layout: { w: 3, h: 1 } }))} results={[]} loading />
+    </div>;
+  }
 
-  const chart = summary.salesOverview || [];
-  const maxSales = Math.max(...chart.map((day) => Number(day.sales)), 0);
-  const stats = [["Today's Sales", `£${Number(summary.todaySales).toFixed(2)}`], ["Transactions", summary.todayTransactions], ["Average Sale", `£${Number(summary.averageSale).toFixed(2)}`], ["Low Stock", summary.lowStockCount]];
+  if (error) {
+    return <div className="rounded-xl border p-8 max-w-2xl" style={{ background: "var(--onepos-surface-raised)", borderColor: "var(--onepos-border)" }}>
+      <h1 className="text-xl font-bold" style={{ color: "var(--onepos-text-heading)" }}>Unable to load dashboard</h1>
+      <p className="text-sm mt-2" style={{ color: "var(--onepos-text-secondary)" }}>{error}</p>
+      <button onClick={loadDashboard} className="mt-5 h-10 px-4 rounded-lg text-sm font-medium" style={{ background: "var(--onepos-accent-600)", color: "#fff" }}>
+        <RefreshCw size={16} className="inline mr-2" />Refresh
+      </button>
+    </div>;
+  }
 
-  return <><div className="mb-6 flex items-center justify-between"><div><h1 className="text-2xl font-bold">Dashboard</h1><p className="text-sm text-slate-500 mt-1">Today's activity for the current store.</p></div>{summary.companyLogo && <div className="h-10"><img src={summary.companyLogo} alt="Company logo" className="h-full object-contain" /></div>}</div><div className="grid grid-cols-4 gap-4">{stats.map(([label, value]) => <div key={label} className="bg-white border rounded-xl p-5"><div className="text-sm text-slate-500">{label}</div><div className="text-2xl font-bold mt-2">{value}</div></div>)}</div><div className="grid grid-cols-3 gap-5 mt-5"><div className="col-span-2 bg-white border rounded-xl p-5"><div className="font-semibold">Sales Overview · Last 7 days</div>{maxSales === 0 ? <div className="h-64 flex items-center justify-center text-sm text-slate-400">No sales in the last 7 days.</div> : <div className="h-64 flex items-end gap-3 mt-8 px-4 border-b border-l">{chart.map((day) => <div key={day.date} className="flex-1 h-full flex flex-col justify-end items-center gap-2"><div className="w-full bg-blue-500 rounded-t" style={{ height: `${Math.max((Number(day.sales) / maxSales) * 100, 2)}%` }} title={`£${Number(day.sales).toFixed(2)}`} /><span className="text-[10px] text-slate-400">{day.date.slice(5)}</span></div>)}</div>}</div><div className="bg-white border rounded-xl p-5"><div className="font-semibold mb-5">Quick Actions</div><button onClick={onAddProduct} className="w-full p-4 border rounded-lg text-left mb-3 hover:bg-slate-50"><Package size={19} className="text-blue-600" /><div className="font-medium mt-2">Add Product</div></button><button onClick={() => onNavigate("Customers")} className="w-full p-4 border rounded-lg text-left mb-3 hover:bg-slate-50"><Users size={19} className="text-blue-600" /><div className="font-medium mt-2">Add Customer</div></button>{canViewReports && <button onClick={() => onNavigate("Reports")} className="w-full p-4 border rounded-lg text-left hover:bg-slate-50"><BarChart3 size={19} className="text-blue-600" /><div className="font-medium mt-2">View Reports</div></button>}</div></div></>;
+  const quickAction = "text-left rounded-xl p-4 transition-colors";
+  const quickStyle = { background: "var(--onepos-card-bg, var(--onepos-surface-raised))", border: "1px solid var(--onepos-border)" };
+
+  return <div>
+    <div className="mb-5 flex items-start justify-between gap-4 flex-wrap">
+      <div>
+        <h1 className="onepos-page-title">{definition?.name || "Dashboard"}</h1>
+        {definition?.description ? <p className="onepos-page-subtitle">{definition.description}</p> : null}
+      </div>
+      {canViewReports ? (
+        <button onClick={() => onNavigate("Dashboards")} className="onepos-btn onepos-btn-sm" data-testid="dashboard-edit">
+          Customise dashboard
+        </button>
+      ) : null}
+    </div>
+
+    <DashboardGrid
+      components={definition?.components || []}
+      results={components}
+      className="onepos-page-enter"
+    />
+
+    <div className="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+      <button onClick={onAddProduct} className={quickAction} style={quickStyle}>
+        <Package size={19} style={{ color: "var(--onepos-accent-600)" }} />
+        <div className="font-semibold mt-2 text-sm" style={{ color: "var(--onepos-text-primary)" }}>Add Product</div>
+      </button>
+      <button onClick={() => onNavigate("Customers")} className={quickAction} style={quickStyle}>
+        <Users size={19} style={{ color: "var(--onepos-accent-600)" }} />
+        <div className="font-semibold mt-2 text-sm" style={{ color: "var(--onepos-text-primary)" }}>Add Customer</div>
+      </button>
+      {canViewReports ? (
+        <button onClick={() => onNavigate("Dashboards")} className={quickAction} style={quickStyle}>
+          <div className="font-semibold text-sm" style={{ color: "var(--onepos-text-primary)" }}>Customise this dashboard</div>
+          <div className="text-xs mt-1" style={{ color: "var(--onepos-text-muted)" }}>
+            Open Dashboard Builder to add, resize, reorder or reconfigure components.
+          </div>
+        </button>
+      ) : null}
+    </div>
+  </div>;
 }

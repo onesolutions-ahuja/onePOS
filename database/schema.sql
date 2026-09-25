@@ -2339,7 +2339,7 @@ CREATE TABLE IF NOT EXISTS platform_fields (
     object_id UUID NOT NULL REFERENCES platform_objects(id) ON DELETE CASCADE,
     api_name VARCHAR(100) NOT NULL,
     label VARCHAR(200) NOT NULL,
-    field_type VARCHAR(30) NOT NULL CHECK (field_type IN ('text','number','decimal','currency','boolean','date','datetime','email','phone','select','picklist','multiselect','lookup','formula','rollup')),
+    field_type VARCHAR(30) NOT NULL CHECK (field_type IN ('text','number','decimal','currency','boolean','date','datetime','email','phone','select','picklist','multiselect','lookup','formula','rollup','json')),
     source_column VARCHAR(100),
     required BOOLEAN NOT NULL DEFAULT FALSE,
     readable BOOLEAN NOT NULL DEFAULT TRUE,
@@ -2515,9 +2515,29 @@ ALTER TABLE platform_layouts ADD COLUMN IF NOT EXISTS is_default BOOLEAN NOT NUL
 
 CREATE UNIQUE INDEX IF NOT EXISTS uq_platform_layouts_object_page_key
     ON platform_layouts(object_id, page_type, layout_key) WHERE layout_key <> '';
+
+/* A record page scope has exactly one active default. Older versions only
+   indexed role-independent rows, allowing several role-scoped defaults to
+   accumulate for the same object and page type. Keep the newest default in
+   each scope before replacing that incomplete index. */
+WITH ranked_defaults AS (
+    SELECT id,
+           ROW_NUMBER() OVER (
+               PARTITION BY object_id, page_type,
+                            COALESCE(company_id, '00000000-0000-0000-0000-000000000000'::uuid)
+               ORDER BY updated_at DESC NULLS LAST, id
+           ) AS rank
+    FROM platform_layouts
+    WHERE is_default=true AND active=true
+)
+UPDATE platform_layouts
+SET is_default=false
+WHERE id IN (SELECT id FROM ranked_defaults WHERE rank > 1);
+
+DROP INDEX IF EXISTS uq_platform_layouts_default_scope;
 CREATE UNIQUE INDEX IF NOT EXISTS uq_platform_layouts_default_scope
     ON platform_layouts(object_id, page_type, COALESCE(company_id, '00000000-0000-0000-0000-000000000000'::uuid))
-    WHERE is_default=true AND role_id IS NULL AND active=true;
+    WHERE is_default=true AND active=true;
 
 /* platform_record_types.company_id is nullable and PostgreSQL treats NULLs as
    distinct in UNIQUE(object_id, company_id, record_type_key), so global record

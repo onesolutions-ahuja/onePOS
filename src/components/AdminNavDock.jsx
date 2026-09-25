@@ -1,32 +1,49 @@
+import "./AdminNavDock.css";
 import { useEffect, useRef, useState } from "react";
-import { BarChart3, LayoutGrid, Search, Store, X } from "lucide-react";
+import { BarChart3, Home, LayoutGrid, Search, Settings, X } from "lucide-react";
 import JarvisCorner from "./jarvis/JarvisCorner.jsx";
+import {
+  INTERNET_STATES,
+  SERVER_STATES,
+  getConnectivity,
+  startConnectivityMonitoring,
+  subscribeConnectivity,
+} from "../services/connectivity.js";
+import {
+  DEFAULT_DOCK_QUICK_ACCESS,
+  dockQuickAccessSnapshot,
+  loadDockQuickAccess,
+  resolveDockQuickSlots,
+  subscribeDockQuickAccess,
+} from "../utils/dockConfiguration.js";
 
 function BarChartIcon() {
   return <BarChart3 size={19} className="shrink-0 text-emerald-100/80" />;
 }
 
-const DOCK_PRIMARY = [
-  "Dashboard",
-  "Sales",
-  "Products",
-  "Inventory",
-  "Customers",
-  "Reports",
-  "Payments",
-  "Returns",
-  "Suppliers",
-  "Employees",
-  "Order Prep",
-];
+// Display label shown under an icon, when it differs from the page/nav key
+// used for routing (e.g. the "Dashboard" page reads as "Home" in the dock).
+const DOCK_LABELS = {
+  Dashboard: "Home",
+};
 
+/*
+ * THE canonical desktop/tablet dock structure — identical on every surface:
+ *
+ *   [1–6 customizable quick-access slots]  JARVIS  [ALL PAGES]  [SETTINGS]
+ *
+ * The six quick slots come from the ONE saved configuration
+ * (utils/dockConfiguration.js); the two trailing destinations are fixed and
+ * permission-gated. Nothing here is route-dependent: the till, the dashboard,
+ * Settings and a custom page render this same bar.
+ */
 const SLOT_LIMIT = 6;
-const MAX_QUICK_ACCESS = SLOT_LIMIT * 2;
 
 const GROUPS = [
+  { title: "Workspace", pages: ["Dashboard"] },
   {
     title: "Operations",
-    pages: ["Sales", "Returns", "Supplier Returns", "Order Prep", "Payments", "Open Till"],
+    pages: ["Sales", "Returns", "Supplier Returns", "Order Prep", "Payments"],
   },
   {
     title: "Catalogue & Supply",
@@ -59,11 +76,11 @@ function LauncherPopup({ items, objectItems = [], reportItems = [], page, onNavi
 
   return (
     <>
-      <div className="fixed inset-0 z-[1050]" onClick={onClose} aria-hidden="true" />
+      <div className="dock-menu-backdrop fixed inset-0 z-[1050]" onClick={onClose} aria-hidden="true" />
       <div
         role="menu"
         aria-label="All pages"
-        className="fixed left-1/2 -translate-x-1/2 bottom-[62px] z-[1060] w-[560px] max-w-[94vw] rounded-2xl border border-white/10 shadow-2xl overflow-hidden"
+        className="fixed left-1/2 -translate-x-1/2 bottom-[calc(var(--dock-height)+16px)] z-[1060] w-[560px] max-w-[94vw] rounded-2xl border border-white/10 shadow-2xl overflow-hidden"
         style={{ background: "rgba(13,52,49,0.92)", backdropFilter: "blur(20px) saturate(160%)", WebkitBackdropFilter: "blur(20px) saturate(160%)" }}
       >
         <div className="flex items-center gap-2 px-4 py-3 border-b border-white/10">
@@ -175,16 +192,108 @@ function LauncherPopup({ items, objectItems = [], reportItems = [], page, onNavi
   );
 }
 
-export default function AdminNavDock({ items, objectItems = [], reportItems = [], page, onNavigate, onOpenTill, quickAccess }) {
+// A single dock slot: icon stacked over a label, with a soft rounded-pill
+// highlight behind the whole stack when it's the active page.
+function DockSlot({ label, Icon, active, onClick, title }) {
+  if (!Icon) return null;
+  return (
+    <button
+      onClick={onClick}
+      aria-current={active ? "page" : undefined}
+      title={title || label}
+      className={`admin-nav-dock-slot group flex shrink-0 flex-col items-center justify-center gap-1 rounded-2xl py-1 transition-all duration-200 hover:-translate-y-0.5 active:translate-y-0 active:scale-95 ${
+        active
+          ? "bg-white/20 shadow-[inset_0_1px_0_rgba(255,255,255,0.16)]"
+          : "hover:bg-white/10 active:bg-white/15"
+      }`}
+    >
+      <Icon
+        size={22}
+        strokeWidth={2}
+        className={active ? "text-white" : "text-emerald-100/80 group-hover:text-emerald-50"}
+      />
+      <span
+        className={`max-w-[74px] truncate text-[10.5px] font-semibold leading-none tracking-wide ${
+          active ? "text-white" : "text-emerald-100/70 group-hover:text-emerald-50/90"
+        }`}
+      >
+        {label}
+      </span>
+    </button>
+  );
+}
+
+/**
+ * The dock owns its configuration: it paints from the shared snapshot and then
+ * follows the ONE cached loader, so the same six slots appear on every surface
+ * and a shell can never inject a route-specific list.
+ */
+function useDockQuickAccess() {
+  const [quickAccess, setQuickAccess] = useState(() => dockQuickAccessSnapshot() || DEFAULT_DOCK_QUICK_ACCESS);
+  useEffect(() => {
+    let alive = true;
+    const unsubscribe = subscribeDockQuickAccess((next) => { if (alive) setQuickAccess(next); });
+    loadDockQuickAccess()
+      .then((next) => { if (alive && next) setQuickAccess(next); })
+      .catch(() => { /* canonical default layout stays in place */ });
+    return () => {
+      alive = false;
+      unsubscribe?.();
+    };
+  }, []);
+  return quickAccess;
+}
+
+/*
+ * ONE dock for the whole product: every shell — the admin pages, the Till/POS,
+ * Settings and custom pages — renders THIS component with the same JSX and the
+ * same stylesheet (AdminNavDock.css). Callers supply only the permitted pages,
+ * the active destination and a navigation callback; the slot configuration and
+ * the geometry are owned here, so no route can present a different dock.
+ */
+export default function AdminNavDock({ items, objectItems = [], reportItems = [], page, onNavigate, canOpenSettings = true }) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef(null);
+  const byName = new Map(items.map(([name, icon]) => [name, icon]));
+  const quickAccess = useDockQuickAccess();
+  /*
+   * The canonical quick slots: the ONE saved configuration, reduced to the
+   * pages this caller may open (permission + licence filtered — an unavailable
+   * shortcut is dropped, never rendered) and capped at the desktop limit.
+   * "Settings" is reserved for its own fixed destination at the end of the bar,
+   * so a saved list can never duplicate it.
+   */
+  const quickSlots = resolveDockQuickSlots({ quickAccess, permitted: byName.keys() })
+    .filter((name) => name !== "Settings")
+    .slice(0, SLOT_LIMIT);
 
-  const configured = (Array.isArray(quickAccess) && quickAccess.length
-    ? quickAccess
-    : DOCK_PRIMARY).filter((name) => name !== "Settings").slice(0, MAX_QUICK_ACCESS);
-  const leftSlots = configured.slice(0, SLOT_LIMIT);
-  const rightSlots = configured.slice(SLOT_LIMIT, SLOT_LIMIT * 2);
-  const trailing = rightSlots.length < SLOT_LIMIT ? ["Open Till"] : [];
+  /*
+   * Offline visual state. The dock keeps NO connectivity opinion of its own:
+   * it renders whatever the ONE authoritative source (services/connectivity.js
+   * — the same module POSHeader, POS and App already subscribe to) last
+   * verified, so the red edge can never disagree with the rest of onePOS.
+   *
+   *   offline = the probe proved the server unreachable, or the transport is
+   *             down while no probe has confirmed the server.
+   *   online  = server connected, or still UNKNOWN (startup / first probe in
+   *             flight). An unmeasured state never flashes an alarm.
+   *
+   * The dock is also the only component mounted on BOTH surfaces (/app pages
+   * and the Till), so it makes sure the shared probe is running there. The
+   * module owns a singleton poller (starting twice re-rates it, it never
+   * doubles), and it is deliberately NOT stopped on unmount: switching between
+   * the till and the admin pages must not leave the next surface — or App's
+   * offline-session recovery — without a probe.
+   */
+  const [connectivity, setConnectivity] = useState(getConnectivity);
+  const offline =
+    connectivity.server === SERVER_STATES.UNREACHABLE ||
+    (connectivity.internet === INTERNET_STATES.DISCONNECTED && connectivity.server !== SERVER_STATES.CONNECTED);
+
+  useEffect(() => {
+    startConnectivityMonitoring({ intervalMs: 30000 });
+    return subscribeConnectivity(setConnectivity);
+  }, []);
 
   useEffect(() => {
     if (!open) return undefined;
@@ -195,87 +304,69 @@ export default function AdminNavDock({ items, objectItems = [], reportItems = []
     return () => document.removeEventListener("keydown", onKey);
   }, [open]);
 
-  const byName = new Map(items.map(([name, icon]) => [name, icon]));
+  /* The single navigation entry point for every slot: the shell decides what
+     the destination means (the till hands it back to App, the admin shell
+     resolves it locally). No slot is special-cased here any more. */
   const navigate = (name) => {
     setOpen(false);
-    if (name === "Open Till") {
-      onOpenTill?.();
-      return;
-    }
-    onNavigate(name);
+    onNavigate?.(name);
+  };
+
+  const renderSlot = (label, index, iconOverride = null) => {
+    const slot = label;
+    const slotIcon = byName.get(slot);
+    const Icon = iconOverride || slotIcon || (slot === "Dashboard" ? Home : null);
+    if (!Icon) return null;
+    const active = page === slot || (slot === "Dashboard" && page === "Home");
+    return (
+      <DockSlot
+        key={`${slot}-${index}`}
+        label={DOCK_LABELS[slot] || slot}
+        Icon={Icon}
+        active={active}
+        onClick={() => navigate(slot)}
+        title={slot}
+      />
+    );
   };
 
   return (
-    <div ref={rootRef} className="fixed bottom-[5px] inset-x-0 flex justify-center z-[900]">
+    <div ref={rootRef} className="admin-nav-dock-root inset-x-0 flex justify-center bottom-[12px]">
+      {/* data-connectivity drives ONLY the shadow ring in AdminNavDock.css:
+          the same dock, with a subtle red edge while onePOS is offline. */}
       <nav
         aria-label="Main navigation"
-        className="relative flex max-w-[calc(100vw-8px)] items-center gap-1 overflow-x-auto px-2.5 py-1.5 rounded-2xl border border-white/15 shadow-2xl"
-        style={{
-          background: "var(--onepos-dock-bg)",
-          backdropFilter: "blur(18px) saturate(160%)",
-          WebkitBackdropFilter: "blur(18px) saturate(160%)",
-          boxShadow: "0 14px 40px rgba(4,26,24,0.45), 0 3px 10px rgba(4,26,24,0.30), inset 0 1px 0 rgba(255,255,255,0.10)",
-        }}
+        className="admin-nav-dock rounded-[32px]"
+        data-connectivity={offline ? "offline" : "online"}
       >
-        <div className="flex items-center gap-1">
-          {leftSlots.map((slot) => {
-            const Icon = byName.get(slot) || (slot === "Open Till" ? Store : null);
-            if (!Icon) return null;
-            const active = page === slot;
-            return (
-              <button
-                key={slot}
-                onClick={() => navigate(slot)}
-                aria-current={active ? "page" : undefined}
-                title={slot === "Open Till" ? "Open Till (POS)" : slot}
-                className={`relative w-[52px] h-[46px] rounded-xl grid place-items-center transition-all duration-200 hover:-translate-y-0.5 active:translate-y-0 active:scale-95 ${
-                  active ? "bg-white/20 text-white" : "text-emerald-50/85 hover:bg-white/10 active:bg-white/15"
-                }`}
-              >
-                <Icon size={22} />
-                {active && (
-                  <span className="absolute bottom-1 left-1/2 -translate-x-1/2 w-4 h-[3px] rounded-full bg-emerald-300" />
-                )}
-                {slot === "Open Till" && (
-                  <span className="absolute -bottom-[1px] inset-x-2 h-[2px] rounded-full bg-emerald-400/60" />
-                )}
-              </button>
-            );
-          })}
-          <button
-            onClick={() => setOpen((v) => !v)}
-            aria-haspopup="menu"
-            aria-expanded={open}
-            aria-label={open ? "Close all pages menu" : "Open all pages menu"}
-            title="All pages"
-            className="mx-1.5 w-[54px] h-[46px] shrink-0 rounded-xl grid place-items-center text-emerald-50/85 transition-all duration-200 hover:-translate-y-0.5 hover:bg-white/10 active:translate-y-0 active:scale-95 active:bg-white/15"
-          >
-            <LayoutGrid size={22} />
-          </button>
+        {/* 1–6 CUSTOMIZABLE QUICK-ACCESS SLOTS — the SAME saved configuration
+            on every surface (dashboard, till, settings, custom pages). */}
+        <div className="admin-nav-dock-wing">
+          {quickSlots.map((label, index) => renderSlot(label, index))}
         </div>
-        <div className="w-[66px] shrink-0" aria-hidden="true" />
-        <JarvisCorner embedded />
-        <div className="flex items-center gap-1">
-          {[...rightSlots, ...trailing].map((slot) => {
-            const Icon = byName.get(slot) || (slot === "Open Till" ? Store : null);
-            if (!Icon) return null;
-            const active = page === slot;
-            return (
-              <button
-                key={slot}
-                onClick={() => navigate(slot)}
-                aria-current={active ? "page" : undefined}
-                title={slot === "Open Till" ? "Open Till (POS)" : slot}
-                className={`relative w-[52px] h-[46px] rounded-xl grid place-items-center transition-all duration-200 hover:-translate-y-0.5 active:translate-y-0 active:scale-95 ${
-                  active ? "bg-white/20 text-white" : "text-emerald-50/85 hover:bg-white/10 active:bg-white/15"
-                }`}
-              >
-                <Icon size={22} />
-                {active && <span className="absolute bottom-1 left-1/2 -translate-x-1/2 w-4 h-[3px] rounded-full bg-emerald-300" />}
-                {slot === "Open Till" && <span className="absolute -bottom-[1px] inset-x-2 h-[2px] rounded-full bg-emerald-400/60" />}
-              </button>
-            );
-          })}
+
+        <div className="admin-nav-dock-center relative z-10 w-[var(--dock-center-zone)] shrink-0">
+          <JarvisCorner embedded />
+        </div>
+
+        {/* FIXED DESTINATIONS — ALL PAGES, then SETTINGS. */}
+        <div className="admin-nav-dock-wing">
+          <DockSlot
+            label="Apps"
+            Icon={LayoutGrid}
+            active={open}
+            onClick={() => setOpen((v) => !v)}
+            title={open ? "Close all pages menu" : "All pages"}
+          />
+          {canOpenSettings ? (
+            <DockSlot
+              label="Settings"
+              Icon={byName.get("Settings") || Settings}
+              active={page === "Settings"}
+              onClick={() => navigate("Settings")}
+              title="Settings"
+            />
+          ) : null}
         </div>
       </nav>
 
@@ -284,7 +375,7 @@ export default function AdminNavDock({ items, objectItems = [], reportItems = []
           items={items}
           objectItems={objectItems}
           reportItems={reportItems}
-          page={page === "Open Till" ? "Open Till" : page}
+          page={page}
           onNavigate={navigate}
           onClose={() => setOpen(false)}
         />
@@ -292,4 +383,3 @@ export default function AdminNavDock({ items, objectItems = [], reportItems = []
     </div>
   );
 }
-

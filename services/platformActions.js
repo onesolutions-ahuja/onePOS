@@ -13,8 +13,8 @@ const SECRET = /(token|secret|password|api[_-]?key|credential|authorization)/i;
 const safeError = (error) => ({ message: String(error?.message || error).slice(0, 500), retryable: error?.retryable === true });
 
 async function provider(db, companyId, kind) {
-  const aliases = { EMAIL: ["email", "smtp", "mail"], SMS: ["sms", "twilio"], WHATSAPP: ["whatsapp", "whatsapp_business"] }[kind] || [kind.toLowerCase()];
-  const result = await db("SELECT provider,configuration,active FROM integrations WHERE company_id=$1 AND lower(provider)=ANY($2::text[]) LIMIT 1", [companyId, aliases]);
+  const aliases = { EMAIL: ["email_invoice", "email", "smtp", "mail"], SMS: ["sms_invoice", "sms", "twilio"], WHATSAPP: ["whatsapp", "whatsapp_business"] }[kind] || [kind.toLowerCase()];
+  const result = await db("SELECT provider,configuration,active FROM integrations WHERE company_id=$1 AND lower(provider)=ANY($2::text[]) ORDER BY array_position($2::text[], lower(provider)) LIMIT 1", [companyId, aliases]);
   const row = result.rows[0];
   const config = row?.configuration && typeof row.configuration === "object" ? row.configuration : {};
   if (!row || row.active !== true || !Object.keys(config).length) return null;
@@ -32,6 +32,13 @@ async function loadMessageTemplate(db, companyId, templateId) {
   );
   const template = result.rows[0];
   return template?.active === true ? template : null;
+}
+
+function templateMatchesAction(template, type) {
+  if (!template) return true;
+  const channel = String(template.channel || "").toUpperCase();
+  const expected = type === "SEND_EMAIL" ? "EMAIL" : type === "SEND_SMS" ? "SMS" : "WHATSAPP";
+  return channel === expected;
 }
 
 async function resolveMessageTemplate(db, companyId, action) {
@@ -64,6 +71,7 @@ export async function executeRegisteredAction({ db, action, req, companyId, user
   const runtime = await provider(db, companyId, definition.provider);
   if (!runtime) return { status: "UNAVAILABLE", code: "PROVIDER_UNAVAILABLE", retryable: false };
   const template = await loadMessageTemplate(db, companyId, action.templateId);
+  if (template && !templateMatchesAction(template, type)) return { status: "FAILED", code: "TEMPLATE_CHANNEL_MISMATCH", retryable: false };
   const recipient = action.recipient || action.to;
   const body = action.body || action.message || action.templateBody || template?.body;
   if (!recipient || !body) return { status: "FAILED", code: "INVALID_ACTION_PAYLOAD", retryable: false };
@@ -81,7 +89,7 @@ export async function executeRegisteredAction({ db, action, req, companyId, user
         endpoint: runtime.endpoint,
         apiKey: runtime.apiKey,
         authScheme: runtime.authScheme,
-        senderId: runtime.config.sender || runtime.config.from,
+        senderId: runtime.config.sender || runtime.config.sender_id || runtime.config.from,
         to: recipient,
         body,
       });

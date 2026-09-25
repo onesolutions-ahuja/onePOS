@@ -1,0 +1,88 @@
+
+> onepos@1.0.0 build
+> vite build
+
+vite v6.4.3 building for production...
+transforming...
+✓ 2031 modules transformed.
+rendering chunks...
+computing gzip size...
+dist/app/index.html                                0.78 kB │ gzip:   0.41 kB
+dist/index.html                                    4.45 kB │ gzip:   1.35 kB
+dist/assets/marketing-DKBs0Xxq.css                51.68 kB │ gzip:   9.77 kB
+dist/assets/index-yGJMhR_V.css                    83.32 kB │ gzip:  15.90 kB
+dist/assets/message-circle-B3vZYdcf.js             0.32 kB │ gzip:   0.26 kB
+dist/assets/plus-b7D74Oj8.js                       0.32 kB │ gzip:   0.26 kB
+dist/assets/x-nY65KIkn.js                          0.33 kB │ gzip:   0.25 kB
+dist/assets/app-D7ZWa-E7.js                        0.33 kB │ gzip:   0.26 kB
+dist/assets/arrow-right-B8l6kuR6.js                0.34 kB │ gzip:   0.27 kB
+dist/assets/rotate-ccw-DhU8CVoA.js                 0.37 kB │ gzip:   0.29 kB
+dist/assets/lock-HwqRwH7r.js                       0.38 kB │ gzip:   0.30 kB
+dist/assets/history-UzseSBK5.js                    0.41 kB │ gzip:   0.30 kB
+dist/assets/cloud-upload-B4sWdrp_.js               0.42 kB │ gzip:   0.31 kB
+dist/assets/upload-C04CGVFq.js                     0.43 kB │ gzip:   0.32 kB
+dist/assets/triangle-alert-BEiwr6WS.js             0.44 kB │ gzip:   0.31 kB
+dist/assets/shopping-cart-ClpmL0xW.js              0.46 kB │ gzip:   0.33 kB
+dist/assets/send-PxQHkp6L.js                       0.46 kB │ gzip:   0.33 kB
+dist/assets/flask-conical-WTVXmDQO.js              0.47 kB │ gzip:   0.33 kB
+dist/assets/users-DQb77lmb.js                      0.48 kB │ gzip:   0.33 kB
+dist/assets/printer-Dx7Dp76a.js                    0.49 kB │ gzip:   0.34 kB
+dist/assets/square-pen-10l2DBuy.js                 0.49 kB │ gzip:   0.34 kB
+dist/assets/refresh-cw-6QABZ5Ko.js                 0.49 kB │ gzip:   0.33 kB
+dist/assets/save-C3N52cqw.js                       0.50 kB │ gzip:   0.33 kB
+dist/assets/scan-line-BiLInll4.js                  0.50 kB │ gzip:   0.32 kB
+dist/assets/trash-2-EYswMY95.js                    0.53 kB │ gzip:   0.35 kB
+dist/assets/search-CJx2cNbO.js                     0.67 kB │ gzip:   0.36 kB
+dist/assets/eye-DcKKedHc.js                        0.83 kB │ gzip:   0.40 kB
+dist/assets/file-spreadsheet-B2jpJGEM.js           0.93 kB │ gzip:   0.44 kB
+dist/assets/customReports-DnSBwcgp.js              1.04 kB │ gzip:   0.34 kB
+dist/assets/formatters-DuFHf4u6.js                 1.40 kB │ gzip:   0.62 kB
+dist/assets/ProductFormModal-CgHzeG9E.js           1.43 kB │ gzip:   0.56 kB
+dist/assets/saleTotals-BMKTvxLq.js                 1.46 kB │ gzip:   0.64 kB
+dist/assets/StandardObjectViewModal-CgqKroxN.js    1.67 kB │ gzip:   0.96 kB
+dist/assets/user-round-DJJjrXfg.js                 1.78 kB │ gzip:   0.64 kB
+dist/assets/shopping-bag-BG_5WvcN.js               2.29 kB │ gzip:   0.74 kB
+dist/assets/ReportsAdmin-CP2KKwEH.js               2.40 kB │ gzip:   1.10 kB
+dist/assets/StandardObjectFormModal-DfYHR3iS.js    2.73 kB │ gzip:   1.41 kB
+dist/assets/BottomStatusBar-B3nzagSV.js            2.85 kB │ gzip:   1.11 kB
+dist/assets/Dashboard-DhldCfU7.js                  4.43 kB │ gzip:   1.54 kB
+dist/assets/DashboardBuilder-CTTSlO2X.js           4.56 kB │ gzip:   1.55 kB
+dist/assets/OnlineOrdersPrep-DqpjB6jv.js           4.58 kB │ gzip:   1.87 kB
+dist/assets/truck-BPjUfURV.js                      7.33 kB │ gzip:   1.76 kB
+dist/assets/AuditLogAdmin-RTschPqD.js              7.68 kB │ gzip:   2.50 kB
+dist/assets/CategoriesAdmin-DPcy6sJd.js            7.81 kB │ gzip:   2.14 kB
+dist/assets/LayoutList-D2rJ96ZH.js                 7.91 kB │ gzip:   2.42 kB
+dist/assets/ReplenishmentAdmin-ywjrLYq2.js         8.36 kB │ gzip:   3.08 kB
+dist/assets/StoresAdmin-bMdgiStQ.js                8.47 kB │ gzip:   3.31 kB
+dist/assets/AttendanceAdmin--0LfJSWG.js            9.04 kB │ gzip:   2.94 kB
+dist/assets/SalesAdmin-BDORhvAI.js                 9.08 kB │ gzip:   2.57 kB
+dist/assets/GlobalProductsAdmin-CP7kquO8.js        9.67 kB │ gzip:   3.18 kB
+dist/assets/IntegrationsAdmin-aH3nIWac.js         10.88 kB │ gzip:   3.42 kB
+dist/assets/LicensingAdmin-BeAzW0L6.js            11.01 kB │ gzip:   3.10 kB
+dist/assets/offlineQueue-DTci8QHp.js              11.20 kB │ gzip:   3.91 kB
+dist/assets/AccountingAdmin-BVYNBi0H.js           12.73 kB │ gzip:   3.63 kB
+dist/assets/onlineOrderPrint-BVEJ65WP.js          13.75 kB │ gzip:   4.98 kB
+dist/assets/ObjectForm-Ckwxazq-.js                14.30 kB │ gzip:   4.28 kB
+dist/assets/SelfCheckout-M6-JK13h.js              14.90 kB │ gzip:   4.88 kB
+dist/assets/FormRenderer-ClMId47h.js              15.11 kB │ gzip:   4.22 kB
+dist/assets/CustomPageRuntime-D6Gc1iTa.js         16.05 kB │ gzip:   4.82 kB
+dist/assets/CustomReportsAdmin-pxvZd7He.js        16.28 kB │ gzip:   4.65 kB
+dist/assets/OnlineOrdersAdmin-Zb3zNaQC.js         19.68 kB │ gzip:   5.93 kB
+dist/assets/ProductsAdmin-pqWW3g4n.js             20.56 kB │ gzip:   5.40 kB
+dist/assets/ReturnsAdmin-Cx8f_ffb.js              22.54 kB │ gzip:   5.74 kB
+dist/assets/App-1rnG2zZ0.js                       22.63 kB │ gzip:   7.78 kB
+dist/assets/SuppliersAdmin--q9UVLQr.js            26.34 kB │ gzip:   6.63 kB
+dist/assets/ObjectPage-ClVqMqV2.js                28.77 kB │ gzip:   7.45 kB
+dist/assets/InventoryAdmin-DeaSJFDC.js            29.72 kB │ gzip:   7.19 kB
+dist/assets/JarvisCorner-dhvQgY-3.js              32.48 kB │ gzip:  10.04 kB
+dist/assets/CustomersAdmin-CfZZjo0i.js            33.91 kB │ gzip:   8.68 kB
+dist/assets/PurchasesAdmin-Cb2XMg86.js            35.32 kB │ gzip:   9.29 kB
+dist/assets/IntegrationDetail-CCbRlp0B.js         43.67 kB │ gzip:   9.86 kB
+dist/assets/LayoutEditor-DuJhfmoh.js              55.90 kB │ gzip:  12.13 kB
+dist/assets/POS-DEtftY1Q.js                       98.03 kB │ gzip:  25.11 kB
+dist/assets/AdminLayout-DGFWM6Fo.js              109.90 kB │ gzip:  28.90 kB
+dist/assets/monitor-DW-IKzlV.js                  152.18 kB │ gzip:  49.34 kB
+dist/assets/marketing-B3H54TBA.js                260.71 kB │ gzip:  70.00 kB
+dist/assets/SettingsAdmin-xjTjBKuu.js            338.96 kB │ gzip:  77.07 kB
+dist/assets/zxing-Bco10w8o.js                    459.11 kB │ gzip: 120.13 kB
+✓ built in 40.85s

@@ -475,44 +475,52 @@ export default function ObjectEditor({
         </div>
       ) : null}
 
-      <nav className="pobj-tabs" aria-label="Object configuration">
-        {INTERNAL_TABS.map((tab) => (
-          <button
-            key={tab.key}
-            type="button"
-            role="tab"
-            aria-selected={activeTab === tab.key}
-            className={
-              "onepos-tab"
-              + (activeTab === tab.key ? " onepos-tab-active" : "")
-            }
-            onClick={() => openTab(tab.key)}
-          >
-            {tab.label}
+      <div className="pobj-config-layout">
+        <nav className="pobj-tabs" aria-label="Object configuration">
+          <div className="pobj-tabs-group">
+            <span className="pobj-tabs-heading">Configuration</span>
+            {INTERNAL_TABS.map((tab) => (
+              <button
+                key={tab.key}
+                type="button"
+                role="tab"
+                aria-selected={activeTab === tab.key}
+                className={
+                  "onepos-tab"
+                  + (activeTab === tab.key ? " onepos-tab-active" : "")
+                }
+                onClick={() => openTab(tab.key)}
+              >
+                <span>{tab.label}</span>
+                {tab.key === "fields" && !isNew ? (
+                  <span className="pobj-tab-count">{fields.length}</span>
+                ) : null}
+              </button>
+            ))}
+          </div>
 
-            {tab.key === "fields" && !isNew ? (
-              <span className="pobj-tab-count">{fields.length}</span>
-            ) : null}
-          </button>
-        ))}
+          <div className="pobj-tabs-group">
+            <span className="pobj-tabs-heading">Tools</span>
+            {TOOL_TABS.map((tab) => (
+              <button
+                key={tab.key}
+                type="button"
+                className="onepos-tab pobj-tab-tool"
+                onClick={() => openTab(tab.key)}
+                disabled={isNew}
+                title={
+                  isNew
+                    ? "Save the object before opening this tool."
+                    : `Open ${tab.label} for this object`
+                }
+              >
+                {tab.label}
+              </button>
+            ))}
+          </div>
+        </nav>
 
-        {TOOL_TABS.map((tab) => (
-          <button
-            key={tab.key}
-            type="button"
-            className="onepos-tab pobj-tab-tool"
-            onClick={() => openTab(tab.key)}
-            disabled={isNew}
-            title={
-              isNew
-                ? "Save the object before opening this tool."
-                : `Open ${tab.label} for this object`
-            }
-          >
-            {tab.label}
-          </button>
-        ))}
-      </nav>
+        <main className="pobj-config-content">
 
       {activeTab === "details" ? (
         <form
@@ -762,6 +770,8 @@ export default function ObjectEditor({
           <RecordTypeEditor object={{ id: objectId }} fields={fields} />
         </section>
       ) : null}
+        </main>
+      </div>
 
       {editingField && (
         <FieldEditor
@@ -870,16 +880,48 @@ export default function ObjectEditor({
 
         .pobj-detail-actions { gap: 8px; }
 
+        .pobj-config-layout {
+          display: grid;
+          grid-template-columns: minmax(190px, 230px) minmax(0, 1fr);
+          align-items: start;
+          gap: 18px;
+          min-width: 0;
+        }
+
         .pobj-tabs {
           display: flex;
-          align-items: flex-end;
-          gap: 2px;
-          overflow-x: auto;
-          border-bottom: 1px solid var(--border-color);
+          flex-direction: column;
+          gap: 16px;
+          position: sticky;
+          top: 12px;
+          min-width: 0;
+          padding: 12px 10px;
+          border: 1px solid var(--border-color);
+          border-radius: var(--onepos-radius, 12px);
+          background: var(--onepos-surface-raised);
+        }
+
+        .pobj-tabs-group {
+          display: flex;
+          flex-direction: column;
+          gap: 3px;
+        }
+
+        .pobj-tabs-heading {
+          padding: 0 9px 4px;
+          color: var(--text-secondary);
+          font-size: 10px;
+          font-weight: 700;
+          letter-spacing: 0.08em;
+          text-transform: uppercase;
+        }
+
+        .pobj-config-content {
+          min-width: 0;
         }
 
         .pobj-tab-count {
-          margin-left: 6px;
+          margin-left: auto;
           padding: 0 6px;
           border-radius: 999px;
           background-color: var(--muted-background);
@@ -889,6 +931,37 @@ export default function ObjectEditor({
         .pobj-tab-tool:disabled {
           opacity: 0.45;
           cursor: default;
+        }
+
+        .pobj-tabs .onepos-tab {
+          display: flex;
+          align-items: center;
+          justify-content: flex-start;
+          width: 100%;
+          min-height: 36px;
+          padding: 7px 9px;
+          border: 0;
+          border-left: 3px solid transparent;
+          border-radius: var(--onepos-radius-sm, 8px);
+          background: transparent;
+          color: var(--text-secondary);
+          font: inherit;
+          font-size: 12px;
+          font-weight: 500;
+          text-align: left;
+          cursor: pointer;
+        }
+
+        .pobj-tabs .onepos-tab:hover:not(:disabled) {
+          color: var(--primary-color);
+          background: var(--muted-background);
+        }
+
+        .pobj-tabs .onepos-tab-active {
+          border-left-color: var(--primary-color);
+          color: var(--primary-color);
+          background: var(--muted-background);
+          font-weight: 600;
         }
 
         .pobj-panel { margin: 0; }
@@ -977,6 +1050,13 @@ export default function ObjectEditor({
         .pobj-empty-hint { margin-top: 4px; font-size: 12.5px; }
 
         @media (max-width: 900px) {
+          .pobj-config-layout { grid-template-columns: 1fr; }
+          .pobj-tabs {
+            position: static;
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+          }
+          .pobj-tabs-group { min-width: 0; }
           .pobj-col-status { display: none; }
         }
 
@@ -986,6 +1066,7 @@ export default function ObjectEditor({
             align-items: stretch;
           }
 
+          .pobj-tabs { grid-template-columns: 1fr; }
           .pobj-form-grid { grid-template-columns: 1fr; }
           .pobj-field-wide { grid-column: auto; }
           .pobj-toggle { padding-top: 0; }

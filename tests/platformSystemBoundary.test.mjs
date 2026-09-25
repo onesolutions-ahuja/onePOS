@@ -4,7 +4,7 @@ import fs from "node:fs";
 import { executePlatformAutomations } from "../services/platformAutomation.js";
 
 test("Platform CRUD is the canonical record command boundary for system and custom objects", () => {
-  const platform = fs.readFileSync(new URL("../server/routes/platform.js", import.meta.url), "utf8");
+  const platform = fs.readFileSync(new URL("../routes/platform.js", import.meta.url), "utf8");
   assert.doesNotMatch(platform, /SYSTEM_OBJECT_OPERATION_REQUIRED|systemWriteError/);
   assert.match(platform, /router\.post\("\/platform\/objects\/:objectKey\/records"/);
   assert.match(platform, /router\.put\("\/platform\/objects\/:objectKey\/records\/:recordId"/);

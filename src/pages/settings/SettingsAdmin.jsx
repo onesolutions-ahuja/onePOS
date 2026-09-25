@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { SETTINGS_TAB_SLUGS } from "../../utils/adminRoutes.js";
-import { ArrowDown, ArrowUp, Building2, Cable, CreditCard, Edit, HardDrive, LayoutGrid, MonitorCog, Plus, ReceiptText, RefreshCw, Search, ShieldCheck, Store, UserRound, Save, X } from "lucide-react";
+import { ArrowDown, ArrowUp, Building2, Cable, CreditCard, Edit, HardDrive, LayoutGrid, MonitorCog, Plus, ReceiptText, RefreshCw, Search, ShieldCheck, Store, Save, X } from "lucide-react";
 import { apiRequest } from "../../services/api.js";
 import ServerApiSettings from "./ServerApiSettings.jsx";
 import WhatsAppSettings from "./whatsapp/WhatsAppSettings.jsx";
@@ -10,12 +10,7 @@ import UserFormModal from "./UserFormModal.jsx";
 import CompanyUsers from "../superadmin/CompanyUsers.jsx";
 import PlatformAdmin from "./PlatformAdmin.jsx";
 import MessageTemplatesAdmin from "./MessageTemplatesAdmin.jsx";
-import AppearancePreferences from "./AppearancePreferences.jsx";
 import AccountPolicySettings from "./AccountPolicySettings.jsx";
-import {
-  fetchPreferences,
-  savePreferences,
-} from "../../services/adminPreferencesService.js";
 import { settingSectionAccess, sectionIsVisible } from "../../utils/settingsAccess.js";
 import { SettingsDetails, SettingsEditDialog, SettingsField, useSettingsEditDialog } from "../../components/settings/SettingsDetails.jsx";
 /*
@@ -37,15 +32,7 @@ const SETTING_GROUPS = [
   { label: "Platform", sections: ["Platform", "Message Templates"] },
 ];
 
-/*
- * T-UI-SHELL: Settings → Appearance. The user's own admin presentation
- * (layout preset / appearance / accent) — a USER preference, not a company
- * setting, so it lives outside the company settings PUT entirely.
- */
-const APPEARANCE_TAB = "Appearance";
-
 const SETTINGS_GROUP_TONES = {
-  "Your account": "blue",
   General: "orange",
   "Sales & Tax": "green",
   Hardware: "gray",
@@ -57,7 +44,6 @@ const SETTINGS_GROUP_TONES = {
 };
 
 const SETTINGS_GROUP_ICONS = {
-  "Your account": UserRound,
   General: Building2,
   "Sales & Tax": ReceiptText,
   Hardware: HardDrive,
@@ -92,10 +78,6 @@ function SettingsAdmin({ initialTab = "General", user = null, isAdmin = false, i
     ...group,
     sections: group.sections.filter((section) => sectionIsVisible(access, section)),
   }));
-  /* Appearance is available to EVERY signed-in user: it changes only their
-     own presentation. Inserted into the visible list, not the group data,
-     so the existing company section gating above is untouched. */
-  visibleGroups.splice(0, 0, { label: "Your account", sections: [APPEARANCE_TAB] });
   const gatedGroups = visibleGroups.filter((group) => group.sections.length > 0);
   const tabs = gatedGroups.flatMap((group) => group.sections);
   /* Legacy deep links/profile-menu tabs redirect to their new sections. */
@@ -137,11 +119,16 @@ function SettingsAdmin({ initialTab = "General", user = null, isAdmin = false, i
     try {
       setLoading(true);
       setError("");
+      /* Isolation: the core /api/settings request is the only one required to
+         render the page. Hardware, payment-terminal and integration-health
+         are optional sections — if an endpoint is unavailable or forbidden
+         for this caller it fails on its own (→ null) and its section just
+         stays empty, instead of failing the whole Users Settings load. */
       const [settingsResponse, terminalsResponse, hardwareResponse, healthResponse] = await Promise.all([
         apiRequest("/api/settings"),
-        apiRequest("/api/payment-terminals"),
-        apiRequest("/api/hardware"),
-        apiRequest("/api/health/integrations"),
+        apiRequest("/api/payment-terminals").catch(() => null),
+        apiRequest("/api/hardware").catch(() => null),
+        apiRequest("/api/health/integrations").catch(() => null),
       ]);
       if (settingsResponse.success) {
         setSettings(settingsResponse.data);
@@ -162,9 +149,9 @@ setForm({
           exchangeMode: settingsResponse.data.exchange?.mode || "both",
         });
       }
-      if (terminalsResponse.success) setTerminals(terminalsResponse.data || []);
-      if (hardwareResponse.success) setHardware(hardwareResponse.data || []);
-      if (healthResponse.success) setHealth(healthResponse.data);
+      if (terminalsResponse?.success) setTerminals(terminalsResponse.data || []);
+      if (hardwareResponse?.success) setHardware(hardwareResponse.data || []);
+      if (healthResponse?.success) setHealth(healthResponse.data);
     } catch (err) {
       setError(err.message || "Unable to load settings");
     } finally {
@@ -225,35 +212,34 @@ setForm({
         ) : gatedGroups.map((group) => {
           const Icon = SETTINGS_GROUP_ICONS[group.label] || LayoutGrid;
           const selected = activeGroup?.label === group.label;
-          return (
-            <button key={group.label} type="button" onClick={() => setTab(group.sections[0])} className={`settings-category ${selected ? "settings-category-active" : ""}`}>
+          return <div key={group.label} className="settings-category-group">
+            <button type="button" onClick={() => setTab(group.sections[0])} className={`settings-category ${selected ? "settings-category-active" : ""}`}>
               <span className="settings-category-icon" data-icon-tone={SETTINGS_GROUP_TONES[group.label] || "teal"}><Icon size={18} /></span>
               <span>{group.label}</span>
               <span className="settings-category-chevron">›</span>
             </button>
-          );
+            {selected && (
+              <div className="settings-category-sections">
+                {group.sections.map((item) => (
+                  <button key={item} type="button" onClick={() => { setTab(item); setMessage(""); setError(""); }} className={`onepos-settings-tab w-full text-left ${tab === item ? "onepos-settings-tab-active" : ""}`} aria-current={tab === item ? "true" : undefined}>
+                    {item}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>;
         })}
       </aside>
 
-      <aside className="settings-sidebar onepos-card onepos-card-body" aria-label={`${activeGroup?.label || "Settings"} settings`}>
-        <p className="px-2 mb-2 text-[11px] font-semibold uppercase tracking-wide text-slate-400">{activeGroup?.label}</p>
-        <div className="space-y-0.5">
-          {(activeGroup?.sections || []).map((item) => (
-            <button key={item} onClick={() => { setTab(item); setMessage(""); setError(""); }} className={`onepos-settings-tab w-full text-left ${tab === item ? "onepos-settings-tab-active" : ""}`} aria-current={tab === item ? "true" : undefined}>
-              {item}
-            </button>
-          ))}
-        </div>
-      </aside>
-
       <div className="settings-content">
-        <div className="mb-4">
-          <h1 className="onepos-page-title">Settings</h1>
-          <p className="text-sm text-slate-500 mt-1">{tab}</p>
+        <div className="settings-detail-heading mb-4">
+          <div>
+            <h1 className="onepos-page-title">{activeGroup?.label || "Settings"}</h1>
+            <p className="text-sm text-slate-500 mt-1">{tab}</p>
+          </div>
         </div>
         {message && <div className="mb-4 px-4 py-3 bg-emerald-50 border border-emerald-200 text-emerald-700 rounded-lg text-sm">{message}</div>}
         {error && <div className="mb-4 px-4 py-3 bg-red-50 border border-red-200 text-red-700 rounded-lg text-sm">{error}</div>}
-        {tab === APPEARANCE_TAB && <AppearanceSection />}
         {["General", "Company", "Tax / VAT"].includes(tab) && <SettingsForm tab={tab} form={form} setForm={setForm} onSave={saveSettings} />}
         {tab === "Store & Till" && <StoreTillSettings settings={settings} onMessage={setMessage} onError={setError} />}
         {tab === "Store & Till" && <InvoicePrefixesSetting form={form} onMessage={setMessage} onError={setError} />}
@@ -289,47 +275,6 @@ setForm({
   );
 }
 
-/*
- * Settings → Appearance: the user's own admin presentation preferences.
- * Loads the persisted choice (server row + local mirror) and saves each
- * change immediately through the user-preference service — nothing here
- * touches the company settings PUT or any business data.
- */
-function AppearanceSection() {
-  const dialog = useSettingsEditDialog();
-  const [prefs, setPrefs] = useState(null);
-  useEffect(() => {
-    let alive = true;
-    fetchPreferences().then((loaded) => {
-      if (alive) setPrefs(loaded);
-    });
-    return () => { alive = false; };
-  }, []);
-  if (!prefs) return <div className="p-6 text-sm text-slate-400">Loading appearance settings...</div>;
-  return <>
-    <SettingsDetails
-      title="Appearance"
-      description="Personal layout, theme, and accent preferences."
-      onEdit={dialog.openEdit}
-      fields={[
-        { label: "Layout", value: prefs.preset },
-        { label: "Theme", value: prefs.appearance },
-        { label: "Accent", value: prefs.accent },
-      ]}
-    />
-    <SettingsEditDialog open={dialog.open} title="Edit Appearance" onClose={dialog.closeEdit}>
-      <AppearancePreferences
-        preferences={prefs}
-        onChange={(next) => {
-          setPrefs(next);
-          savePreferences(next);
-        }}
-      />
-      <div className="flex justify-end mt-4"><button type="button" className="onepos-btn onepos-btn-secondary" onClick={dialog.closeEdit}>Close</button></div>
-    </SettingsEditDialog>
-  </>;
-}
-
 function BatchInventoryPolicySetting({ settings, onMessage, onError, onSaved }) {
   const inventory = settings.inventory || {};
   const [form, setForm] = useState({
@@ -359,7 +304,7 @@ function BatchInventoryPolicySetting({ settings, onMessage, onError, onSaved }) 
       <option value="optional_dates">Batch Inventory — Dates Optional</option>
       <option value="required_dates">Proper Batch Inventory</option>
     </select>
-    {form.batchInventoryMode === "optional_dates" && <div className="grid grid-cols-3 gap-3 mt-4">
+    {form.batchInventoryMode === "optional_dates" && <div className="grid grid-cols-1 gap-3 mt-4 sm:grid-cols-2 lg:grid-cols-3">
       <select value={form.batchDefaultMfgRule} onChange={(e) => setForm({ ...form, batchDefaultMfgRule: e.target.value })} className="h-10 border rounded-lg px-2"><option value="none">MFG: no default</option><option value="today">MFG: today</option></select>
       <select value={form.batchDefaultExpiryRule} onChange={(e) => setForm({ ...form, batchDefaultExpiryRule: e.target.value })} className="h-10 border rounded-lg px-2"><option value="none">Expiry: no default</option><option value="today_plus_days">Expiry: today + days</option></select>
       <input type="number" min="0" max="3650" value={form.batchDefaultExpiryDays} onChange={(e) => setForm({ ...form, batchDefaultExpiryDays: e.target.value })} className="h-10 border rounded-lg px-2" placeholder="Days" />
@@ -715,7 +660,7 @@ function RoleObjectPermissions({ roleId, onMessage, onError }) {
     try {
       await apiRequest(`/api/admin/roles/${roleId}/object-permissions`, {
         method: "PUT",
-        body: JSON.stringify({ permissions: rows.map((row) => ({ objectId: row.object_id, canView: row.can_view, canCreate: row.can_create, canEdit: row.can_edit, canDelete: row.can_delete })) }),
+        body: JSON.stringify({ permissions: rows.map((row) => ({ objectId: row.object_id, canView: row.can_view, canCreate: row.can_create, canEdit: row.can_edit, canDelete: row.can_delete, canImport: row.can_import, canExport: row.can_export })) }),
       });
       onMessage("Object permissions saved.");
     } catch (error) {
@@ -732,11 +677,11 @@ function RoleObjectPermissions({ roleId, onMessage, onError }) {
         <div className="flex gap-2"><button type="button" onClick={async () => { try { const response = await apiRequest(`/api/platform/objects/${rows[0]?.object_id}/effective-permissions`); setEffective(response.data); } catch (error) { onError(error.message || "Unable to inspect effective permissions"); } }} disabled={!rows.length} className="onepos-btn">Inspect effective</button><button type="button" onClick={save} disabled={saving || loading} className="onepos-btn onepos-btn-primary">{saving ? "Saving…" : "Save objects"}</button></div>
       </div>
       {loading ? <div className="p-4 text-sm text-slate-500">Loading object permissions…</div> : (
-        <div className="overflow-x-auto"><table className="w-full text-sm"><thead><tr className="border-b text-left"><th className="p-3">Object</th><th>View</th><th>Create</th><th>Edit</th><th>Delete</th></tr></thead><tbody>
-          {rows.map((row, index) => <tr key={row.object_id} className="border-b last:border-0"><td className="p-3"><strong>{row.label}</strong><code className="ml-2 text-xs text-slate-500">{row.object_key}</code></td>{[["can_view", "View"], ["can_create", "Create"], ["can_edit", "Edit"], ["can_delete", "Delete"]].map(([key, label]) => <td key={key}><label className="inline-flex items-center gap-1"><Toggle checked={row[key] === true} onChange={() => update(index, key)} aria-label={`${label} ${row.label}`} /></label></td>)}</tr>)}
+        <div className="overflow-x-auto"><table className="w-full text-sm"><thead><tr className="border-b text-left"><th className="p-3">Object</th><th>View</th><th>Create</th><th>Edit</th><th>Delete</th><th>Import</th><th>Export</th></tr></thead><tbody>
+          {rows.map((row, index) => <tr key={row.object_id} className="border-b last:border-0"><td className="p-3"><strong>{row.label}</strong><code className="ml-2 text-xs text-slate-500">{row.object_key}</code></td>{[["can_view", "View"], ["can_create", "Create"], ["can_edit", "Edit"], ["can_delete", "Delete"], ["can_import", "Import"], ["can_export", "Export"]].map(([key, label]) => <td key={key}><label className="inline-flex items-center gap-1"><Toggle checked={row[key] === true} onChange={() => update(index, key)} aria-label={`${label} ${row.label}`} /></label></td>)}</tr>)}
         </tbody></table></div>
       )}
-      {effective && <div className="border-t bg-blue-50 px-4 py-2 text-xs text-blue-900">Effective object access: {["can_view", "can_create", "can_edit", "can_delete"].filter((key) => effective[key]).join(", ") || "none"}.</div>}
+      {effective && <div className="border-t bg-blue-50 px-4 py-2 text-xs text-blue-900">Effective object access: {["can_view", "can_create", "can_edit", "can_delete", "can_import", "can_export"].filter((key) => effective[key]).join(", ") || "none"}.</div>}
 
     </div>
   );
@@ -1386,7 +1331,7 @@ function InvoicePrefixesSetting({ form, onMessage, onError }) {
       <div className="text-xs text-slate-500 mb-3">
         Receipt number prefixes per sale source. Existing sale numbers keep their original prefix and sequence.
       </div>
-      <div className="grid grid-cols-3 gap-3">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
         {fields.map((field) => (
           <div key={field.key}>
             <label className="text-sm text-slate-600" htmlFor={`invoice-prefix-${field.key}`}>{field.label}</label>
@@ -2247,7 +2192,7 @@ function OnlinePlatformSettings({ onMessage, onError, onlyPlatform = null }) {
         </div>
       )}
       <SettingsEditDialog open={dialog.open} title={`Edit ${platform.name}`} onClose={dialog.closeEdit}>
-      <div className="grid grid-cols-2 gap-3">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <label className="flex items-center gap-2 text-sm text-slate-600 col-span-2">
           <Toggle checked={Boolean(form.enabled)} onChange={(event) => update(platform.platform, "enabled", event.target.checked)} />
           Enabled

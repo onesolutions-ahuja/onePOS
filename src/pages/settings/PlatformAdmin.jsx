@@ -23,6 +23,7 @@ import WorkflowAdmin from "./Platform/WorkflowAdmin.jsx";
 import WorkflowRunsAdmin from "./Platform/WorkflowRunsAdmin.jsx";
 import InternalAppCatalog from "./Platform/InternalAppCatalog.jsx";
 import PageBuilder from "./Platform/PageBuilder.jsx";
+import CustomPageBuilder from "./Platform/CustomPageBuilder.jsx";
 import VisualFlowBuilder from "./Platform/VisualFlowBuilder.jsx";
 import LandingFlowBuilder from "./Platform/LandingFlowBuilder.jsx";
 import ApprovalProcessBuilder from "./Platform/ApprovalProcessBuilder.jsx";
@@ -55,9 +56,11 @@ const PLATFORM_CHROME_CSS = `
     gap: 18px;
     color: var(--text-primary);
     min-width: 0;
+    width: 100%;
   }
 
   .platform-surface-body { min-width: 0; }
+  .platform-surface > .psnav-banner { grid-column: 1 / -1; }
 
   .psnav {
     display: flex;
@@ -180,7 +183,7 @@ const PLATFORM_CHROME_CSS = `
     gap: 8px;
   }
 
-  .platform-company-gate { display: flex; flex-direction: column; gap: 12px; max-width: 520px; }
+  .platform-company-gate { display: flex; flex-direction: column; gap: 12px; width: min(100%, 720px); }
   .platform-company-gate-select { width: 100%; }
 
   .psnav-banner select {
@@ -365,6 +368,7 @@ export default function PlatformAdmin({ user, onMessage, onError }) {
   const [selectedObject, setSelectedObject] = useState(null);
   const [selectedRelationship, setSelectedRelationship] = useState(null);
   const [selectedLayout, setSelectedLayout] = useState(null);
+  const [layoutPageTypes, setLayoutPageTypes] = useState(["create", "edit", "quick_create"]);
   const [selectedRule, setSelectedRule] = useState(null);
   // Field editing from inside the Form Builder. Holding the field + the field
   // list here (rather than navigating away) keeps LayoutEditor MOUNTED, so any
@@ -510,8 +514,15 @@ export default function PlatformAdmin({ user, onMessage, onError }) {
     } else if (target === "new-layout" || target === "edit-layout") {
       setSelectedLayout(target === "edit-layout" ? object : null);
       setEditingField(null);
+      if (target === "new-layout" && object?.page_type) {
+        setLayoutPageTypes([object.page_type]);
+      }
       setView("layouts-editor");
     } else if (target === "layouts") {
+      setLayoutPageTypes(["create", "edit", "quick_create"]);
+      setView("layouts");
+    } else if (target === "page-layouts") {
+      setLayoutPageTypes(["list", "detail", "view"]);
       setView("layouts");
     } else if (target === "new-rule" || target === "edit-rule") {
       setSelectedRule(target === "edit-rule" ? object : null);
@@ -633,6 +644,7 @@ export default function PlatformAdmin({ user, onMessage, onError }) {
             <LayoutEditor
               layout={selectedLayout}
               initialObjectId={selectedObject?.id || selectedObject?.object_id || ""}
+              initialPageType={layoutPageTypes[0]}
               onCancel={() => setView("layouts")}
               onSave={() => { onMessage(selectedLayout ? "Form updated." : "Form created."); setView("layouts"); }}
               fieldRefreshKey={fieldRefreshKey}
@@ -671,6 +683,8 @@ export default function PlatformAdmin({ user, onMessage, onError }) {
       <Suspense fallback={<div className="onepos-empty"><span>Loading forms…</span></div>}>
         <LayoutList
           objectId={selectedObject?.id || selectedObject?.object_id}
+          pageTypes={layoutPageTypes}
+          title={layoutPageTypes.includes("detail") ? "Record Pages" : "Forms"}
           onNew={() => navigate("new-layout")}
           onEdit={(layout) => navigate("edit-layout", layout)}
           onMessage={onMessage}
@@ -716,6 +730,25 @@ export default function PlatformAdmin({ user, onMessage, onError }) {
 
   if (view === "page-builder") {
     return platformFrame("page-builder", <PageBuilder onMessage={onMessage} onError={onError} />);
+  }
+
+  /*
+   * VISUAL CUSTOM PAGE BUILDER — a full-workspace surface.
+   * The grouped rail is deliberately NOT rendered here: the builder is a
+   * three-pane WYSIWYG tool (palette / live canvas / properties) and the rail
+   * would steal workspace from the canvas. One custom header gives the only
+   * way out (back to Platform), keeping the shell single-surface.
+   */
+  if (view === "custom-page-builder") {
+    return (
+      <div className="platform-surface-body min-w-0 flex-1">
+        <div className="mb-3 flex items-center gap-2">
+          <button type="button" className="platform-back" onClick={() => setView("objects")}>← Platform</button>
+          <h2 className="text-xl font-semibold">Custom Page Builder</h2>
+        </div>
+        <CustomPageBuilder onMessage={onMessage} onError={onError} />
+      </div>
+    );
   }
 
   if (view === "flow-builder") {

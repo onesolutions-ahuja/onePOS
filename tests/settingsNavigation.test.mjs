@@ -150,10 +150,10 @@ describe("3. the runtime catalogue does not gate Settings", () => {
 /* ------------------------------- 4. the permission rule behind Settings */
 
 describe("4. the authorization rule is the existing Settings model", () => {
-  test("Appearance is available to every signed-in user (why the entry is unconditional)", () => {
-    assert.match(SETTINGS_SRC, /const APPEARANCE_TAB = "Appearance"/);
-    assert.match(SETTINGS_SRC, /available to EVERY signed-in user/);
-    assert.match(SETTINGS_SRC, /visibleGroups\.splice\(0, 0, \{ label: "Your account", sections: \[APPEARANCE_TAB\] \}\)/);
+  test("Appearance is not duplicated inside company Settings navigation", () => {
+    assert.doesNotMatch(SETTINGS_SRC, /const APPEARANCE_TAB = "Appearance"/);
+    assert.doesNotMatch(SETTINGS_SRC, /visibleGroups\.splice\(0, 0/);
+    assert.doesNotMatch(SETTINGS_SRC, /tab === APPEARANCE_TAB/);
   });
 
   test("the section list and the render branches read ONE access map", () => {

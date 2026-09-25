@@ -1,3 +1,5 @@
+import { resolveRecordPathValue } from "./platformRecordPaths.js";
+
 const OPERATORS = new Set([
   "equals",
   "not_equals",
@@ -31,15 +33,34 @@ function fail(message) {
   throw new ConditionError(message);
 }
 
+const CONDITION_PATH = /^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$/;
+
 function fieldType(field) {
   return field?.field_type === "formula" || field?.field_type === "rollup"
     ? field?.config?.resultType || field?.config?.result_type || "text"
     : field?.field_type;
 }
 
+function resolveConditionField(conditionField, fields = []) {
+  if (typeof conditionField !== "string") return null;
+  const trimmed = conditionField.trim();
+  if (!trimmed) return null;
+  const direct = fields.find((candidate) => candidate.active !== false && candidate.api_name === trimmed);
+  if (direct) return direct;
+  if (!trimmed.includes(".")) return null;
+  if (!CONDITION_PATH.test(trimmed)) return null;
+  const pathParts = trimmed.split(".");
+  const lastPart = pathParts[pathParts.length - 1];
+  const inferred = fields.find((candidate) => candidate.active !== false && candidate.api_name === lastPart);
+  if (inferred) return { ...inferred, api_name: trimmed };
+  return { api_name: trimmed, field_type: "text", active: true };
+}
+
 function normalize(value, field) {
   if (empty(value)) return null;
   const type = fieldType(field);
+  if (!type && typeof value === "number" && Number.isFinite(value)) return value;
+  if (!type && typeof value === "string" && value.trim() !== "" && /^-?(?:\d+\.?\d*|\.\d+)$/.test(value.trim())) return Number(value);
   if (NUMERIC_TYPES.has(type)) {
     if (!Number.isFinite(Number(value))) fail(`Condition value for ${field.api_name} must be numeric`);
     return Number(value);
@@ -57,10 +78,10 @@ function validateCondition(condition, fields, context) {
   if (!condition || typeof condition !== "object" || Array.isArray(condition)) {
     fail(`${context} must be an object`);
   }
-  if (typeof condition.field !== "string" || !condition.field) {
+  if (typeof condition.field !== "string" || !condition.field.trim()) {
     fail(`${context} must specify a field`);
   }
-  const field = fields.find((candidate) => candidate.active !== false && candidate.api_name === condition.field);
+  const field = resolveConditionField(condition.field, fields);
   if (!field) fail(`${context} references an unavailable field: ${condition.field}`);
   if ((field.field_type === "formula" || field.field_type === "rollup") && field.readable === false) {
     fail(`${context} references an unreadable field: ${condition.field}`);
@@ -100,9 +121,9 @@ export function validateConditionConfig(config, fields, name) {
 }
 
 function matches(condition, fields, record, previousRecord) {
-  const field = fields.find((candidate) => candidate.api_name === condition.field);
-  const actual = record?.[condition.field];
-  const previous = previousRecord?.[condition.field];
+  const field = resolveConditionField(condition.field, fields);
+  const actual = resolveRecordPathValue(record, condition.field);
+  const previous = resolveRecordPathValue(previousRecord, condition.field);
   if (condition.operator === "changed") return actual !== previous;
   if (condition.operator === "changed_from") return actual !== previous && normalize(previous, field) === normalize(condition.value, field);
   if (condition.operator === "changed_to") return actual !== previous && normalize(actual, field) === normalize(condition.value, field);

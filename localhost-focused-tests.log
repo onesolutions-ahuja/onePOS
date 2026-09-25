@@ -1,0 +1,32 @@
+✔ canonical Platform metadata registers transaction, line, payment, and ledger model (22.1419ms)
+✔ canonical transaction creates multiple Sale Lines under one Sale and links Payment/Ledger (5.7699ms)
+✔ canonical RETURN and EXCHANGE require an in-scope original transaction (4.3125ms)
+✔ repository has explicit website/app/server/package boundaries (10.3408ms)
+✔ legacy entry points are usable on Windows and symlink-capable systems (81.168ms)
+✔ tenant architecture forbids per-client source copies (2.3393ms)
+✔ rule editor round-trips stored validation action, trigger, conditions and message (276.9614ms)
+✔ formula editor renders saved expression and hides physical column mapping (34.198ms)
+✔ formula values render as output and are excluded from submitted record data (21.1626ms)
+✔ formula editor submits expression config and forces derived fields read-only (15.9071ms)
+✔ new formula fields keep the generated API name read-only (1.0162ms)
+✔ new picklist option values regenerate across label keystrokes (20.1271ms)
+✔ ObjectForm renders metadata-driven conditions without object-specific logic (0.7877ms)
+✔ new rule editor defaults to validation on both create and update (17.6009ms)
+✔ record form renders server validation feedback accessibly without losing values (27.752ms)
+✔ POS root uses dynamic viewport height (100dvh) for Android WebView (3.0198ms)
+✔ wide tier: the 350px cart column exists only inside a md+ wrapper (1.8278ms)
+✔ phone tier: MobileCartSheet is rendered and is phone-only (3.1823ms)
+✔ category rail: fixed 150px column only at md+; phones get scroll chips (0.6281ms)
+✔ product grid adapts between 2 and 5 columns across tiers (0.3959ms)
+✔ till action bar wraps instead of clipping on narrow viewports (0.6511ms)
+✔ POS header right-side controls can never overflow the viewport (0.791ms)
+✔ Categories rail lays out vertically and scrolls only inside itself (1.0022ms)
+✔ legacy dead stylesheet with the body min-width:1100px trap stays deleted (0.7146ms)
+ℹ tests 24
+ℹ suites 0
+ℹ pass 24
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 1004.6355

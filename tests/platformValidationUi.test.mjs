@@ -14,7 +14,7 @@ function component(file, dependencies = {}) {
   const source = readFileSync(new URL(`../src/pages/settings/Platform/${file}.jsx`, import.meta.url), "utf8");
   const { code } = transformSync(source, { loader: "jsx", format: "cjs" });
   const module = { exports: {} };
-  runInNewContext(code, { module, exports: module.exports, require: name => dependencies[name] || (name === "react" ? require(name) : { apiRequest: () => { throw new Error("Unexpected API call during render"); } }) });
+  runInNewContext(code, { module, exports: module.exports, require: name => dependencies[name] || (name.endsWith("/platformConditions.js") ? platformConditions : name === "react" ? require(name) : { apiRequest: () => { throw new Error("Unexpected API call during render"); } }) });
   return module.exports.default;
 }
 

@@ -5,7 +5,7 @@ import fs from "node:fs";
 const read = (p) => fs.readFileSync(new URL(`../${p}`, import.meta.url), "utf8");
 
 test("workflow builder is a drag/drop canvas backed by registered actions and shared metadata resources", () => {
-  const source = read("app/src/pages/settings/Platform/WorkflowAdmin.jsx");
+  const source = read("src/pages/settings/Platform/WorkflowAdmin.jsx");
   assert.match(source, /function WorkflowCanvas/);
   assert.match(source, /application\/x-onepos-flow-element/);
   assert.match(source, /workflow-actions/);
@@ -13,7 +13,7 @@ test("workflow builder is a drag/drop canvas backed by registered actions and sh
 });
 
 test("approval builder uses visual metadata criteria and registered outcome actions", () => {
-  const source = read("app/src/pages/settings/Platform/ApprovalProcessBuilder.jsx");
+  const source = read("src/pages/settings/Platform/ApprovalProcessBuilder.jsx");
   assert.match(source, /MetadataResourcePicker/);
   assert.match(source, /workflow-actions/);
   assert.match(source, /draggable/);
@@ -21,7 +21,7 @@ test("approval builder uses visual metadata criteria and registered outcome acti
 });
 
 test("form and page builder share component registry and metadata resource picker", () => {
-  const source = read("app/src/pages/settings/Platform/PageBuilder.jsx");
+  const source = read("src/pages/settings/Platform/PageBuilder.jsx");
   assert.match(source, /FALLBACK_COMPONENT_REGISTRY/);
   assert.match(source, /MetadataResourcePicker/);
   assert.match(source, /presentation_mode/);
@@ -29,7 +29,7 @@ test("form and page builder share component registry and metadata resource picke
 });
 
 test("custom button builder maps inputs and visibility with metadata picker rather than raw JSON", () => {
-  const source = read("app/src/pages/settings/Platform/LayoutEditor.jsx");
+  const source = read("src/pages/settings/Platform/LayoutEditor.jsx");
   assert.match(source, /MetadataResourcePicker/);
   assert.match(source, /Add input mapping/);
   assert.doesNotMatch(source, /JSON\.stringify\(component\.input_mappings/);

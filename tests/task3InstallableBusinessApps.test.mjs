@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { internalAppCatalog } from '../server/services/internalAppCatalog.js';
-import { packageDefinitions, resolvePackagePlan } from '../server/services/packageRegistry.js';
+import { internalAppCatalog } from '../services/internalAppCatalog.js';
+import { packageDefinitions, resolvePackagePlan } from '../services/packageRegistry.js';
 
 const defs = packageDefinitions();
 const byKey = new Map(defs.map(x => [x.packageKey, x]));

@@ -2,10 +2,10 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 
-const audit = fs.readFileSync(new URL("../server/routes/audit.js", import.meta.url), "utf8");
-const reports = fs.readFileSync(new URL("../server/routes/reports.js", import.meta.url), "utf8");
-const auditUi = fs.readFileSync(new URL("../app/src/pages/audit/AuditLogAdmin.jsx", import.meta.url), "utf8");
-const customUi = fs.readFileSync(new URL("../app/src/pages/reports/CustomReportsAdmin.jsx", import.meta.url), "utf8");
+const audit = fs.readFileSync(new URL("../routes/audit.js", import.meta.url), "utf8");
+const reports = fs.readFileSync(new URL("../routes/reports.js", import.meta.url), "utf8");
+const auditUi = fs.readFileSync(new URL("../src/pages/audit/AuditLogAdmin.jsx", import.meta.url), "utf8");
+const customUi = fs.readFileSync(new URL("../src/pages/reports/CustomReportsAdmin.jsx", import.meta.url), "utf8");
 
 test("Batch 11 audit store placeholders advance after all assigned stores", () => {
   assert.match(audit, /userStoreIds\.forEach\(\(s\) => params\.push\(s\)\);[\s\S]*?idx = params\.length;/);

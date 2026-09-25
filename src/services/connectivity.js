@@ -79,9 +79,15 @@ function handleOnlineEvent() {
   void checkNow();
 }
 function handleOfflineEvent() {
-  /* The browser says the transport dropped. The server verdict stays until a
-   * probe proves otherwise — no premature generic "offline" collapse. */
+  /* The browser has verified a transport drop. Keep the server tier separate,
+   * but mark the remote server unavailable immediately as well: the till
+   * connection icon is server-tier driven and must not stay green while the
+   * transport is down waiting for the next health probe. */
   state.internet = INTERNET_STATES.DISCONNECTED;
+  state.server = SERVER_STATES.UNREACHABLE;
+  state.database = DB_STATES.UNKNOWN;
+  state.lastError = "Internet unavailable";
+  reportConnection(false);
   notify();
 }
 

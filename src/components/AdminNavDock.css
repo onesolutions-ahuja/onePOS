@@ -1,0 +1,278 @@
+/* ==========================================================================
+   onePOS SHARED NAVIGATION DOCK
+   Used by BOTH:
+   - Admin /app pages
+   - Till / POS screen
+
+   AdminNavDock is the single shared dock component.
+   ========================================================================== */
+
+:root {
+  --dock-height: 60px;
+  --dock-center-zone: 120px;
+  --dock-width: 1200px;
+  --dock-slot-width: 80px;
+  --dock-bottom: 12px;
+  --dock-radius: 32px;
+
+  --onepos-dock-bg: rgba(24, 31, 38, 0.92);
+
+  --dock-shadow:
+    0 14px 40px rgba(4, 26, 24, 0.45),
+    0 3px 10px rgba(4, 26, 24, 0.30),
+    inset 0 1px 0 rgba(255, 255, 255, 0.10);
+
+  /*
+   * Offline state:
+   * Keep the exact same dock but add a subtle red outer glow.
+   */
+  --dock-offline-shadow:
+    0 0 0 1px rgba(248, 113, 113, 0.34),
+    0 0 20px 3px rgba(248, 113, 113, 0.26),
+    0 14px 40px rgba(4, 26, 24, 0.45),
+    0 3px 10px rgba(4, 26, 24, 0.30),
+    inset 0 1px 0 rgba(255, 255, 255, 0.10);
+
+  --dock-blur: 18px;
+  --dock-border: rgba(255, 255, 255, 0.15);
+}
+
+
+/* ==========================================================================
+   DOCK ROOT
+   ========================================================================== */
+
+.admin-nav-dock-root {
+  position: fixed;
+
+  inset-inline: 0;
+
+  bottom: max(
+    var(--dock-bottom),
+    env(safe-area-inset-bottom)
+  );
+
+  display: flex;
+  justify-content: center;
+
+  z-index: 900;
+
+  /*
+   * Root itself should never block the page.
+   * Interactive dock children restore pointer events below.
+   */
+  pointer-events: none;
+}
+
+
+/* ==========================================================================
+   MAIN DOCK SURFACE
+   ========================================================================== */
+
+.admin-nav-dock {
+  position: relative;
+
+  display: flex;
+  align-items: center;
+
+  gap: 2px;
+
+  width: fit-content;
+
+  max-width: min(
+    var(--dock-width),
+    calc(100vw - 16px)
+  );
+
+  height: var(--dock-height);
+
+  padding: 4px 12px;
+
+  border: 1px solid var(--dock-border);
+  border-radius: var(--dock-radius);
+
+  background: var(--onepos-dock-bg);
+
+  box-shadow: var(--dock-shadow);
+
+  pointer-events: auto;
+
+  backdrop-filter:
+    blur(var(--dock-blur))
+    saturate(160%);
+
+  -webkit-backdrop-filter:
+    blur(var(--dock-blur))
+    saturate(160%);
+
+  transition:
+    box-shadow 240ms ease,
+    border-color 240ms ease;
+}
+
+
+/* ==========================================================================
+   OFFLINE STATE
+   ========================================================================== */
+
+/*
+ * Connectivity state comes from the authoritative connectivity service and
+ * is mirrored to data-connectivity by AdminNavDock.jsx.
+ *
+ * Offline changes ONLY the dock edge/glow.
+ * Navigation, icons, labels and layout remain identical.
+ */
+
+.admin-nav-dock[data-connectivity="offline"] {
+  box-shadow: var(--dock-offline-shadow);
+  border-color: rgba(248, 113, 113, 0.34);
+}
+
+
+/* ==========================================================================
+   LEFT / RIGHT NAVIGATION WINGS
+   ========================================================================== */
+
+.admin-nav-dock-wing {
+  display: flex;
+  align-items: center;
+
+  gap: 4px;
+
+  min-width: 0;
+
+  flex: 0 1 auto;
+
+  overflow-x: auto;
+
+  scrollbar-width: none;
+}
+
+.admin-nav-dock-wing::-webkit-scrollbar {
+  display: none;
+}
+
+
+/* ==========================================================================
+   NAVIGATION SLOT
+   ========================================================================== */
+
+.admin-nav-dock-slot {
+  width: var(--dock-slot-width);
+}
+
+
+/* ==========================================================================
+   JARVIS CENTRE ZONE
+   ========================================================================== */
+
+/*
+ * IMPORTANT:
+ *
+ * The centre zone is part of the SAME 60px dock.
+ *
+ * It must NOT grow to the height of the Jarvis orb.
+ * Jarvis itself may visually overflow/floating above this container.
+ *
+ * There is deliberately:
+ * - no pedestal
+ * - no circular background
+ * - no notch
+ * - no pseudo-element
+ * - no contact-shadow ellipse
+ * - no raised container behind Jarvis
+ */
+
+.admin-nav-dock-center {
+  position: relative;
+
+  z-index: 10;
+
+  display: flex;
+
+  flex: 0 0 var(--dock-center-zone);
+
+  width: var(--dock-center-zone);
+  height: var(--dock-height);
+
+  align-self: center;
+
+  align-items: center;
+  justify-content: center;
+
+  overflow: visible;
+
+  background: transparent;
+
+  border: 0;
+  border-radius: 0;
+
+  box-shadow: none;
+}
+
+
+/*
+ * Explicitly disable any old centre pseudo-elements.
+ *
+ * This protects against an older Jarvis pedestal/notch rule surviving
+ * elsewhere in the cascade.
+ */
+
+.admin-nav-dock-center::before,
+.admin-nav-dock-center::after {
+  content: none !important;
+  display: none !important;
+}
+
+
+/* ==========================================================================
+   MENUS
+   ========================================================================== */
+
+.admin-nav-dock-root [role="menu"],
+.admin-nav-dock-root .dock-menu-backdrop {
+  pointer-events: auto;
+}
+
+
+/* ==========================================================================
+   MOBILE
+   ========================================================================== */
+
+@media (max-width: 640px) {
+
+  .admin-nav-dock {
+    padding-inline: 6px;
+  }
+
+  .admin-nav-dock-slot {
+    --dock-slot-width: 58px;
+  }
+
+  .admin-nav-dock-center {
+    flex-basis: 82px;
+    width: 82px;
+
+    /*
+     * Still exactly the same height as the dock.
+     */
+    height: var(--dock-height);
+  }
+}
+
+
+/* ==========================================================================
+   REDUCED MOTION
+   ========================================================================== */
+
+@media (prefers-reduced-motion: reduce) {
+
+  .admin-nav-dock {
+    transition: none;
+  }
+
+  .admin-nav-dock-slot {
+    transition: none;
+    transform: none;
+  }
+}

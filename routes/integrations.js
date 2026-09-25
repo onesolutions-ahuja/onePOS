@@ -231,6 +231,12 @@ export default function createIntegrationsRouter({ authenticate, authorize, db, 
         if (url && !isAllowedTarget(url)) {
           return res.status(400).json({ success: false, message: "baseUrl host is not allowed" });
         }
+        if (credentials !== undefined && credentials !== null && (typeof credentials !== "object" || Array.isArray(credentials))) {
+          return res.status(400).json({ success: false, message: "credentials must be an object" });
+        }
+        if (auth !== "none" && (!credentials || !Object.keys(credentials).length)) {
+          return res.status(400).json({ success: false, message: "Credentials are required for the selected authentication type" });
+        }
         const storeIdValue = storeId ?? store_id ?? null;
         if (storeIdValue && !isUuid(storeIdValue)) {
           return res.status(400).json({ success: false, message: "storeId must be a UUID" });
@@ -296,8 +302,28 @@ export default function createIntegrationsRouter({ authenticate, authorize, db, 
           authType,
           auth_type,
           credentials,
+          storeId,
+          store_id,
           enabled,
         } = req.body || {};
+
+        const nextAuthType = authType ?? auth_type ?? existing.auth_type;
+        const hasReplacementCredentials =
+          credentials !== undefined &&
+          credentials !== null &&
+          typeof credentials === "object" &&
+          !Array.isArray(credentials) &&
+          Object.keys(credentials).length > 0;
+        if (
+          nextAuthType !== "none" &&
+          !hasReplacementCredentials &&
+          !toPublicIntegration(existing).hasCredentials
+        ) {
+          return res.status(400).json({
+            success: false,
+            message: "Credentials are required for the selected authentication type",
+          });
+        }
 
         const updates = [];
         const params = [];
@@ -336,7 +362,20 @@ export default function createIntegrationsRouter({ authenticate, authorize, db, 
           set("auth_type", auth);
         }
         if (credentials !== undefined) {
+          if (credentials !== null && (typeof credentials !== "object" || Array.isArray(credentials))) {
+            return res.status(400).json({ success: false, message: "credentials must be an object" });
+          }
           set("credentials_encrypted", encryptCredentials(credentials ?? null));
+        }
+        if (storeId !== undefined || store_id !== undefined) {
+          const nextStoreId = storeId ?? store_id ?? null;
+          if (nextStoreId && !isUuid(nextStoreId)) {
+            return res.status(400).json({ success: false, message: "storeId must be a UUID" });
+          }
+          if (nextStoreId && nextStoreId !== req.user.storeId) {
+            return res.status(403).json({ success: false, message: "You can only assign integrations to your own store" });
+          }
+          set("store_id", nextStoreId);
         }
         if (enabled !== undefined) set("enabled", Boolean(enabled));
 

@@ -1,7 +1,7 @@
 import express from "express";
-import { buildCustomSalesQuery } from "./reports.js";
+import { buildCustomSalesQuery, validateCustomReportDefinition } from "./reports.js";
 import { buildPlatformObjectQuery } from "../services/reportableSources.js";
-import { mergeDashboardFilters, validateDashboardDefinition } from "../services/dashboardBuilder.js";
+import { DATE_RANGES, DEFAULT_DASHBOARD_DEFINITION, mergeDashboardFilters, validateDashboardDefinition } from "../services/dashboardBuilder.js";
 
 function customDateRange(filters = []) {
   const dateFilter = filters.find((filter) => filter && (filter.field === "date" || filter.operator));
@@ -46,6 +46,68 @@ export default function createDashboardBuilderRouter({ authenticate, authorize, 
     AND (d.created_by=$2 OR EXISTS (SELECT 1 FROM dashboard_users du WHERE du.dashboard_id=d.id AND du.user_id=$2)
          OR $3) ORDER BY d.updated_at DESC`, [req.user.companyId, req.user.id, canViewCompanyCustomers ? await canViewCompanyCustomers(req.user) : false]);
 
+  /* Resolve one component's query. A component is either bound to a SAVED
+     report (reportId, the original contract) or carries an INLINE report
+     definition that Dashboard Builder configures. Both go through the same
+     validateCustomReportDefinition + buildCustomSalesQuery /
+     buildPlatformObjectQuery pipeline, so there is exactly one query engine. */
+  async function resolveComponentReport(req, component, dashboardFilters) {
+    const config = component?.config || {};
+    if (config.reportId) {
+      const report = await db("SELECT id, created_by, definition FROM custom_reports WHERE id=$1 AND company_id=$2 AND archived_at IS NULL", [config.reportId, req.user.companyId]);
+      if (!report.rows[0]) throw new Error("Saved report unavailable");
+      const savedReport = report.rows[0];
+      const companyAdmin = canViewCompanyCustomers ? await canViewCompanyCustomers(req.user) : false;
+      if (!companyAdmin && String(savedReport.created_by) !== String(req.user.id)) {
+        const accessResult = await db("SELECT 1 FROM custom_report_users WHERE report_id=$1 AND user_id=$2", [savedReport.id, req.user.id]);
+        if (!accessResult.rows.length) throw new Error("Saved report unavailable");
+      }
+      return mergeDashboardFilters(savedReport.definition, dashboardFilters);
+    }
+    if (!config.report) throw new Error("No report configured");
+    const definition = validateCustomReportDefinition(config.report);
+    /* The component's own date range wins unless the dashboard supplies a date
+       filter at dashboard level. */
+    const merged = mergeDashboardFilters(definition, dashboardFilters);
+    if (config.dateRange && DATE_RANGES.includes(config.dateRange) && !dashboardFilters.some((f) => f && f.field === "date")) {
+      merged.filters = [{ field: "date", operator: config.dateRange }, ...merged.filters.filter((f) => f && f.field !== "date")];
+    }
+    return merged;
+  }
+
+  async function runComponent(req, component, dashboardFilters) {
+    if (component.type === "text") return { id: component.id, type: component.type, data: { content: component.config.content } };
+    try {
+      const definition = await resolveComponentReport(req, component, dashboardFilters);
+      let built;
+      if (definition.dataSource === "platform_object") {
+        const context = await platformReportContext(req, definition.objectId);
+        if (!context.object) throw new Error("Data source unavailable");
+        built = buildPlatformObjectQuery(definition, context.object, context.fields, req.user.companyId, 1000, { storeId: req.user.storeId });
+      } else {
+        const stores = definition.storeIds?.length ? definition.storeIds : (req.user.storeId ? [req.user.storeId] : []);
+        built = buildCustomSalesQuery(definition, customDateRange(definition.filters), stores, definition.userIds || []);
+        built.params[2] = req.user.companyId;
+      }
+      const result = await db(built.sql, built.params);
+      return { id: component.id, type: component.type, data: { columns: definition.fields, rows: result.rows } };
+    } catch (error) { return { id: component.id, type: component.type, error: "Unable to load this component" }; }
+  }
+
+  router.get("/dashboards/default", authenticate, async (req, res) => {
+    try { res.json({ success: true, data: validateDashboardDefinition(structuredClone(DEFAULT_DASHBOARD_DEFINITION)) }); }
+    catch (error) { res.status(500).json({ success: false, message: "Unable to load the default dashboard" }); }
+  });
+  /* Run a definition that is not (yet) saved — the Dashboard page uses this to
+     render the default definition through the identical engine the saved
+     dashboards use. */
+  router.post("/dashboards/run", authenticate, access, async (req, res) => {
+    try {
+      const definition = validateDashboardDefinition(req.body || {});
+      const results = await Promise.all((definition.components || []).map((component) => runComponent(req, component, definition.filters || [])));
+      res.json({ success: true, data: { definition, components: results } });
+    } catch (error) { res.status(400).json({ success: false, message: error.message || "Unable to run this dashboard" }); }
+  });
   router.get("/dashboards", authenticate, access, async (req, res) => {
     try { res.json({ success: true, data: (await visible(req)).rows }); }
     catch (error) { res.status(500).json({ success: false, message: "Unable to load dashboards" }); }
@@ -109,32 +171,10 @@ export default function createDashboardBuilderRouter({ authenticate, authorize, 
   router.post("/dashboards/:id/run", authenticate, access, async (req, res) => {
     const row = await dashboard(req, req.params.id);
     if (!row) return res.status(404).json({ success: false, message: "Dashboard not found" });
-    const results = await Promise.all((row.components || []).map(async (component) => {
-      if (component.type === "text") return { id: component.id, type: "text", data: { content: component.config.content } };
-      try {
-        const report = await db("SELECT id, created_by, definition FROM custom_reports WHERE id=$1 AND company_id=$2 AND archived_at IS NULL", [component.config.reportId, req.user.companyId]);
-        if (!report.rows[0]) throw new Error("Saved report unavailable");
-        const savedReport = report.rows[0];
-        const companyAdmin = canViewCompanyCustomers ? await canViewCompanyCustomers(req.user) : false;
-        if (!companyAdmin && String(savedReport.created_by) !== String(req.user.id)) {
-          const accessResult = await db("SELECT 1 FROM custom_report_users WHERE report_id=$1 AND user_id=$2", [savedReport.id, req.user.id]);
-          if (!accessResult.rows.length) throw new Error("Saved report unavailable");
-        }
-        const definition = mergeDashboardFilters(savedReport.definition, row.filters);
-        let built;
-        if (definition.dataSource === "platform_object") {
-          const context = await platformReportContext(req, definition.objectId);
-          built = buildPlatformObjectQuery(definition, context.object, context.fields, req.user.companyId, 1000, { storeId: req.user.storeId });
-        } else {
-          const stores = definition.storeIds?.length ? definition.storeIds : (req.user.storeId ? [req.user.storeId] : []);
-          built = buildCustomSalesQuery(definition, customDateRange(definition.filters), stores, definition.userIds || []);
-          built.params[2] = req.user.companyId;
-        }
-        const result = await db(built.sql, built.params);
-        return { id: component.id, type: component.type, data: { columns: definition.fields, rows: result.rows } };
-      } catch (error) { return { id: component.id, type: component.type, error: "Unable to load this component" }; }
-    }));
-    res.json({ success: true, data: { components: results } });
+    const definition = validateDashboardDefinition({ name: row.name, description: row.description, components: row.components, filters: row.filters });
+    /* Identical execution path to the unsaved-definition runner above. */
+    const results = await Promise.all((definition.components || []).map((component) => runComponent(req, component, definition.filters || [])));
+    res.json({ success: true, data: { definition, components: results } });
   });
   return router;
 }

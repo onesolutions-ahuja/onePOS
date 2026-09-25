@@ -6,6 +6,7 @@ import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import pg from "pg";
 import path from "path";
+import fs from "fs";
 import { fileURLToPath } from "url";
 import { initializeDatabase } from "./database/init.js";
 import { createAuditWriter } from "./services/auditLog.js";
@@ -1565,7 +1566,15 @@ app.get("/api/setup/database", async (req, res) => {
 |--------------------------------------------------------------------------
 */
 
-const distPath = path.join(__dirname, "..", "dist");
+const distPath = path.join(__dirname, "dist");
+const appShellPath = path.join(distPath, "app", "index.html");
+const sendAppShell = (req, res) => {
+  if (!fs.existsSync(appShellPath)) {
+    console.error(`Production frontend is not built: ${appShellPath}`);
+    return res.status(503).type("text").send("Frontend build is missing. Run npm run build before starting the production server.");
+  }
+  return res.sendFile(appShellPath);
+};
 
 /*
  * Keep the operational React application separate from the public marketing
@@ -1580,6 +1589,12 @@ const distPath = path.join(__dirname, "..", "dist");
  * itself first, uncached, so a rebuilt shell can always replace an older
  * worker and purge that worker's stale shell cache.
  */
+app.get("/app/manifest.webmanifest", (req, res) => {
+  res.set("Cache-Control", "no-cache");
+  res.type("application/manifest+json");
+  res.sendFile(path.join(distPath, "app", "manifest.webmanifest"));
+});
+
 app.get("/app/offline-sw.js", (req, res) => {
   res.set("Cache-Control", "no-store");
   res.type("application/javascript");
@@ -1598,7 +1613,7 @@ app.get(["/login", "/app", "/app/*", "/customer-display"], (req, res) => {
      that a rebuild replaces. A cached shell is what produced the blank page
      (stale HTML requesting a no-longer-existing asset). */
   res.set("Cache-Control", "no-store");
-  res.sendFile(path.join(distPath, "app", "index.html"));
+  return sendAppShell(req, res);
 });
 
 app.use(express.static(distPath));
@@ -1615,7 +1630,15 @@ app.use((req, res) => {
       message: "Not found",
     });
   }
-  
+
+  /* Never satisfy a missing static asset with HTML. A stale cached page can
+     reference a hashed bundle that a rebuild replaced; serving HTML for the
+     .js request turns the page blank ("Unexpected token '<'"). Return 404
+     instead so the browser fails fast and a reload picks up the fresh index. */
+  if (path.extname(req.path) && !req.path.endsWith(".html")) {
+    return res.status(404).type("text").send("Not found");
+  }
+
   // Serve marketing site for all other routes
   res.sendFile(path.join(distPath, "index.html"));
 });
@@ -1632,6 +1655,11 @@ app.use((req, res, next) => {
       success: false,
       message: "API endpoint not found",
     });
+  }
+
+  /* Same asset guard as above: only extensionless paths are marketing routes. */
+  if (path.extname(req.path) && !req.path.endsWith(".html")) {
+    return res.status(404).type("text").send("Not found");
   }
 
   res.sendFile(path.join(distPath, "index.html"));

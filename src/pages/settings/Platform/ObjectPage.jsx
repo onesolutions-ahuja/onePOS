@@ -4,6 +4,7 @@ import ObjectSearch from "./ObjectSearch.jsx";
 import FormRenderer from "./FormRenderer.jsx";
 import RecordModal from "../../../components/RecordModal.jsx";
 import ObjectHistory from "./ObjectHistory.jsx";
+import ObjectRecordDetail from "./ObjectRecordDetail.jsx";
 
 function getObjectKey(object) {
   return (
@@ -113,6 +114,15 @@ function getFieldValue(record, field) {
 function formatValue(value, field) {
   if (value === null || value === undefined || value === "") {
     return "—";
+  }
+
+  function layoutPresentationClass(layout) {
+    const mode = layout?.definition?.presentation_mode || "inline";
+    return mode === "overlay_square"
+      ? "platform-record-modal-compact"
+      : mode === "overlay_rectangle"
+        ? "platform-record-modal-rectangle"
+        : "platform-record-modal-inline";
   }
 
   const type = getFieldType(field);
@@ -258,6 +268,7 @@ export default function ObjectPage({
 
   useEffect(() => {
     const components = detailLayout?.definition?.components || [];
+    setRelatedLists({});
     if (!selectedRecord || !components.length) return;
     components
       .filter((component) => component.type === "related_list" && component.visible !== false)
@@ -370,14 +381,23 @@ export default function ObjectPage({
     const relationshipKey = component?.relationship_key;
     const parentId = selectedRecord?.id || selectedRecord?.record_id;
     if (!relationshipKey || !parentId || !objectMetadata?.object_key) return;
-    const response = await apiRequest(
-      `/api/platform/objects/${encodeURIComponent(getObjectKey(objectMetadata))}/records/${parentId}/related/${encodeURIComponent(relationshipKey)}?limit=${Math.min(Number(component.limit) || 25, 100)}${component.sort_field ? `&sortField=${encodeURIComponent(component.sort_field)}&sortDirection=${encodeURIComponent(component.sort_direction || "asc")}` : ""}`
-    );
-    const records = response?.records || response?.data || [];
-    const relationship = response?.relationship || {};
-    const childFieldsResponse = await apiRequest(`/api/platform/objects/${relationship.child_object_id}/fields`);
-    const childFields = childFieldsResponse?.data || [];
-    setRelatedLists((current) => ({ ...current, [relationshipKey]: { records: Array.isArray(records) ? records : [], fields: childFields, relationship } }));
+    setRelatedLists((current) => ({
+      ...current,
+      [relationshipKey]: { ...(current[relationshipKey] || {}), loading: true, error: "" },
+    }));
+    try {
+      const response = await apiRequest(
+        `/api/platform/objects/${encodeURIComponent(getObjectKey(objectMetadata))}/records/${parentId}/related/${encodeURIComponent(relationshipKey)}?limit=${Math.min(Number(component.limit) || 25, 100)}${component.sort_field ? `&sortField=${encodeURIComponent(component.sort_field)}&sortDirection=${encodeURIComponent(component.sort_direction || "asc")}` : ""}`
+      );
+      const records = response?.records || response?.data || [];
+      const relationship = response?.relationship || {};
+      const childFieldsResponse = await apiRequest(`/api/platform/objects/${relationship.child_object_id}/fields`);
+      const childFields = childFieldsResponse?.data || [];
+      setRelatedLists((current) => ({ ...current, [relationshipKey]: { records: Array.isArray(records) ? records : [], fields: childFields, relationship, loading: false, error: "" } }));
+    } catch (error) {
+      setRelatedLists((current) => ({ ...current, [relationshipKey]: { ...(current[relationshipKey] || {}), loading: false, error: error?.message || "Unable to load related records." } }));
+      throw error;
+    }
   }
 
   async function saveEditedRecord(values) {
@@ -665,7 +685,7 @@ export default function ObjectPage({
             ) : null}
           </div>
           {creating ? (
-            <RecordModal open={Boolean(creating)} mode="create" title="Create record" size="lg" onClose={() => setCreating(false)} formId="platform-create-record-form">
+            <RecordModal open={Boolean(creating)} mode="create" title="Create record" size="lg" className={layoutPresentationClass(createLayout || detailLayout)} onClose={() => setCreating(false)} formId="platform-create-record-form">
             <div className="platform-create-record">
               {recordTypes.length ? <label className="platform-form-field"><span>Record Type</span><select value={selectedRecordTypeId} onChange={(event) => setSelectedRecordTypeId(event.target.value)}><option value="">No record type</option>{recordTypes.map((type) => <option key={type.id} value={type.id}>{type.label}{type.is_default ? " (default)" : ""}</option>)}</select></label> : null}
               <FormRenderer
@@ -680,7 +700,7 @@ export default function ObjectPage({
             </RecordModal>
           ) : null}
           {quickCreating ? (
-            <RecordModal open mode="create" title="Quick Create" subtitle="Uses the active Quick Create form for this object." size="md" onClose={() => setQuickCreating(false)} formId="platform-quick-create-form">
+            <RecordModal open mode="create" title="Quick Create" subtitle="Uses the active Quick Create form for this object." size="md" className={layoutPresentationClass(quickCreateLayout || createLayout || detailLayout)} onClose={() => setQuickCreating(false)} formId="platform-quick-create-form">
               <FormRenderer
                 formId="platform-quick-create-form"
                 definition={quickCreateLayout?.definition || createLayout?.definition || detailLayout?.definition}
@@ -821,41 +841,17 @@ export default function ObjectPage({
                 </button>
               ))}
               {editingRecord ? (
-                <RecordModal open mode="edit" title="Edit record" size="lg" onClose={() => setEditingRecord(false)} formId="platform-edit-record-form">
+                <RecordModal open mode="edit" title="Edit record" size="lg" className={layoutPresentationClass(editLayout || createLayout || detailLayout)} onClose={() => setEditingRecord(false)} formId="platform-edit-record-form">
                   <FormRenderer formId="platform-edit-record-form" definition={editLayout?.definition || createLayout?.definition || detailLayout?.definition} fields={activeFields} initialValues={selectedRecord} mode="edit" onSubmit={saveEditedRecord} />
                 </RecordModal>
               ) : null}
-              {detailLayout ? <FormRenderer definition={detailLayout.definition} fields={activeFields} initialValues={selectedRecord} mode="view" /> : activeFields.map((field) => {
-                const value = getFieldValue(
-                  selectedRecord,
-                  field
-                );
-
-                return (
-                  <div
-                    className="platform-field-row"
-                    key={
-                      field?.id ||
-                      getFieldKey(field)
-                    }
-                  >
-                    <div className="platform-field-label">
-                      {getFieldLabel(field)}
-
-                      {field?.required ? (
-                        <span className="text-red-600">*</span>
-                      ) : null}
-                    </div>
-
-                    <div className="platform-field-value">
-                      {formatValue(
-                        value,
-                        field
-                      )}
-                    </div>
-                  </div>
-                );
-              })}
+              <ObjectRecordDetail
+                record={selectedRecord}
+                fields={activeFields}
+                objectLabel={getObjectLabel(objectMetadata)}
+                objectKey={getObjectKey(objectMetadata)}
+                definition={detailLayout?.definition || null}
+              />
               {detailLayout?.definition?.components?.filter((component) => component.type === "related_list" && component.visible !== false).map((component) => {
                 const related = relatedLists[component.relationship_key];
                 const columns = (component.columns || []).length
@@ -867,12 +863,14 @@ export default function ObjectPage({
                       <h4>{component.label || component.relationship_key} ({related?.records?.length || 0})</h4>
                       <button type="button" className="platform-secondary-button" onClick={() => createRelatedRecord(component)}>+ New</button>
                     </div>
-                    {(related?.records || []).map((record, index) => (
+                    {related?.loading ? <span>Loading related records...</span> : null}
+                    {related?.error ? <span className="platform-field-error">{related.error}</span> : null}
+                    {!related?.loading && !related?.error && (related?.records || []).map((record, index) => (
                       <button type="button" className="platform-related-record-row" key={record.id || index} onClick={() => onSelectRecord?.(record, related.relationship?.child_object_key)}>
                         {(columns || []).map((field) => `${getFieldLabel(field)}: ${formatValue(getFieldValue(record, field), field)}`).join(" · ")}
                       </button>
                     ))}
-                    {related && !related.records.length ? <span>No related records.</span> : null}
+                    {!related?.loading && !related?.error && related && !related.records.length ? <span>No related records.</span> : null}
                   </section>
                 );
               })}
@@ -893,6 +891,9 @@ export default function ObjectPage({
       </div>
 
       <style>{`
+        .platform-record-modal-rectangle { width: min(860px, calc(100vw - 32px)); }
+        .platform-record-modal-compact { width: min(540px, calc(100vw - 32px)); }
+
         /* Every host of this screen (the admin shell content frame, the
            Platform shell, the Platform Studio overlay) already provides the
            outer inset and the page frame, so this screen adds none of its own

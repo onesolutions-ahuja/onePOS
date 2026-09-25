@@ -14,22 +14,63 @@ export default function BottomStatusBar({ storeName, till, children }) {
   const isTillOpen = till?.status === "open";
 
   return (
-    <div className="fixed bottom-0 left-0 right-0 h-10 bg-slate-900 text-xs text-slate-300 flex items-center px-3 gap-4 z-40" style={{ background: "#104744" }}>
-      <span className="text-slate-400">{day}</span>
-      <span className="text-slate-400">{time}</span>
+    <div
+      className="fixed z-40 flex items-center gap-4 px-4 py-2 text-xs"
+      style={{
+        left: 0,
+        right: 0,
+        bottom: "1px",
+        width: "100vw",
+        minHeight: "42px",
+        borderRadius: 0,
+        borderTop: "1px solid rgba(255,255,255,0.12)",
+        borderBottom: "0",
+        borderLeft: "0",
+        borderRight: "0",
+        background: "linear-gradient(180deg, rgba(22,31,37,0.85) 0%, rgba(8,15,20,0.98) 100%)",
+        boxShadow: "0 -1px 0 rgba(255,255,255,0.04), inset 0 1px 0 rgba(255,255,255,0.10)",
+        backdropFilter: "blur(18px) saturate(170%)",
+        WebkitBackdropFilter: "blur(18px) saturate(170%)",
+        color: "rgba(220, 252, 231, 0.92)",
+      }}
+    >
+      <span
+        className="font-medium tracking-[0.14em] uppercase"
+        style={{
+          background: "linear-gradient(90deg, #ecfdf5 0%, #a7f3d0 34%, #d1fae5 100%)",
+          WebkitBackgroundClip: "text",
+          backgroundClip: "text",
+          color: "transparent",
+          textShadow: "0 1px 0 rgba(5, 18, 22, 0.35)",
+        }}
+      >
+        {day}
+      </span>
+      <span
+        className="font-medium tracking-[0.14em] uppercase"
+        style={{
+          background: "linear-gradient(90deg, #ecfdf5 0%, #a7f3d0 34%, #d1fae5 100%)",
+          WebkitBackgroundClip: "text",
+          backgroundClip: "text",
+          color: "transparent",
+          textShadow: "0 1px 0 rgba(5, 18, 22, 0.35)",
+        }}
+      >
+        {time}
+      </span>
 
       {storeName && (
-        <span className="flex items-center gap-1">
-          <span className="text-slate-400">Store:</span>
-          <span className="font-medium text-slate-200">{storeName}</span>
+        <span className="flex items-center gap-1.5">
+          <span className="text-emerald-100/70">Store:</span>
+          <span className="font-semibold text-emerald-50 drop-shadow-[0_1px_0_rgba(4,26,24,0.65)]">{storeName}</span>
         </span>
       )}
 
       {till && (
-        <span className="flex items-center gap-1">
-          <span className="text-slate-400">Till:</span>
-          <span className="font-medium text-slate-200">{till.terminal_name || till.name || "Till"}</span>
-          <span className={`text-xs font-medium ${isTillOpen ? "text-emerald-400" : "text-amber-400"}`}>
+        <span className="flex items-center gap-1.5">
+          <span className="text-emerald-100/70">Till:</span>
+          <span className="font-semibold text-emerald-50 drop-shadow-[0_1px_0_rgba(4,26,24,0.65)]">{till.terminal_name || till.name || "Till"}</span>
+          <span className={`text-xs font-semibold ${isTillOpen ? "text-emerald-300" : "text-amber-300"}`}>
             {isTillOpen ? "Open" : "Closed"}
           </span>
         </span>

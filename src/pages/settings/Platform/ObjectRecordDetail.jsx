@@ -1,4 +1,5 @@
 import React, { useMemo } from "react";
+import FormRenderer from "./FormRenderer.jsx";
 
 function getFieldKey(field) {
   return (
@@ -190,6 +191,8 @@ export default function ObjectRecordDetail({
   fields = [],
   objectLabel = "Record",
   objectKey = "",
+  definition = null,
+  embedded = false,
   onBack,
 }) {
   const activeFields = useMemo(
@@ -207,7 +210,7 @@ export default function ObjectRecordDetail({
 
   if (!record) {
     return (
-      <div className="platform-record-detail">
+      <div className={`platform-record-detail${embedded ? " platform-record-detail-embedded" : ""}`}>
         <div className="platform-record-detail-empty">
           <strong>No record selected</strong>
           <span>
@@ -253,7 +256,14 @@ export default function ObjectRecordDetail({
       </div>
 
       <div className="platform-record-detail-body">
-        {activeFields.length === 0 ? (
+        {definition ? (
+          <FormRenderer
+            definition={definition}
+            fields={activeFields}
+            initialValues={record}
+            mode="view"
+          />
+        ) : activeFields.length === 0 ? (
           <div className="platform-record-detail-empty compact">
             <strong>No active fields</strong>
             <span>
@@ -338,6 +348,12 @@ export default function ObjectRecordDetail({
           border-radius: 12px;
           background: var(--card-background, #fff);
           overflow: hidden;
+        }
+
+        .platform-record-detail-embedded {
+          border: 0;
+          border-radius: 0;
+          background: transparent;
         }
 
         .platform-record-detail-header {

@@ -2,8 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 
-const platform = fs.readFileSync(new URL("../server/routes/platform.js", import.meta.url), "utf8");
-const objectPage = fs.readFileSync(new URL("../app/src/pages/settings/Platform/ObjectPage.jsx", import.meta.url), "utf8");
+const platform = fs.readFileSync(new URL("../routes/platform.js", import.meta.url), "utf8");
+const objectPage = fs.readFileSync(new URL("../src/pages/settings/Platform/ObjectPage.jsx", import.meta.url), "utf8");
 
 test("Platform Record Page uses canonical record commands for every object", () => {
   assert.match(objectPage, /\/api\/platform\/objects\/\$\{encodeURIComponent\(resolvedObjectKey\)\}\/records/);

@@ -42,12 +42,28 @@
   --onepos-sidebar-width: 248px;
   --onepos-sidebar-width-collapsed: 68px;
   --onepos-header-height: 58px;
+  --onepos-font-display: "Inter", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  --onepos-font-body: "Inter", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
   --onepos-motion-fast: 140ms;
   --onepos-motion-normal: 220ms;
   --onepos-motion-slow: 320ms;
-  --onepos-motion-ease: cubic-bezier(.2,.8,.2,1);
+  --onepos-motion-page: 260ms;
+  --onepos-motion-record: 280ms;
+  --onepos-motion-form: 240ms;
+  --onepos-motion-popup: 180ms;
+  --onepos-motion-builder: 220ms;
+  --onepos-motion-ease: cubic-bezier(0.22, 1, 0.36, 1);
+  --onepos-motion-ease-quick: cubic-bezier(0.2, 0.8, 0.2, 1);
   --onepos-overlay-backdrop: rgba(15, 23, 42, .28);
-  --onepos-dock-bg: rgba(24, 31, 38, .92);
+  /* Semantic application layers: keep floating UI above page/navigation surfaces
+     without coupling components to arbitrary numeric z-index values. */
+  --onepos-layer-page: 0;
+  --onepos-layer-sticky: 10;
+  --onepos-layer-dock: 20;
+  --onepos-layer-dropdown: 30;
+  --onepos-layer-modal-backdrop: 40;
+  --onepos-layer-modal: 41;
+  --onepos-layer-toast: 50;
 
   /* Structural primitives (defaults = Modern + Light; the shell rewrites them
      per user preset/appearance/accent). */
@@ -106,9 +122,102 @@ body,
 }
 
 body {
-  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", Inter, ui-sans-serif, system-ui, "Segoe UI", sans-serif;
+  font-family: var(--onepos-font-body);
   color: var(--onepos-text-primary, #1d2429);
   background: var(--onepos-surface, #f5f7f6);
+  letter-spacing: -0.01em;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+@layer base {
+  h1, h2, h3, h4, h5, h6 {
+    font-family: var(--onepos-font-display);
+    letter-spacing: -0.04em;
+    color: var(--onepos-text-heading);
+    font-weight: 700;
+  }
+
+  p, span, div, label, input, textarea, select, button {
+    font-family: var(--onepos-font-body);
+  }
+
+  .onepos-type-display {
+    font-family: var(--onepos-font-display);
+    letter-spacing: -0.05em;
+  }
+}
+
+/* Shared motion system: page, record, form, modal, popup, builder surfaces.
+   Intent: smooth spatial movement, subtle scaling, fade and layered motion.
+   Dock/Jarvis is excluded by design and not altered in this file. */
+.onepos-motion-surface,
+.onepos-page-enter,
+.onepos-record-enter,
+.onepos-form-enter,
+.onepos-modal-enter,
+.onepos-popup-enter,
+.onepos-builder-enter {
+  animation: onepos-surface-in var(--onepos-motion-page) var(--onepos-motion-ease) both;
+  transform-origin: center center;
+}
+
+.onepos-record-enter {
+  animation-duration: var(--onepos-motion-record);
+}
+.onepos-form-enter {
+  animation-duration: var(--onepos-motion-form);
+}
+.onepos-modal-enter,
+.onepos-popup-enter {
+  animation-duration: var(--onepos-motion-popup);
+}
+.onepos-builder-enter {
+  animation-duration: var(--onepos-motion-builder);
+}
+
+@keyframes onepos-surface-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.985);
+    filter: blur(0.15px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+    filter: blur(0);
+  }
+}
+
+@keyframes onepos-sheet-in {
+  from {
+    opacity: 0;
+    transform: translateY(12px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes onepos-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.onepos-page-enter { animation-name: onepos-surface-in; }
+.onepos-overlay-backdrop {
+  animation: onepos-fade-in var(--onepos-motion-fast) ease-out both;
+}
+.onepos-overlay-panel,
+.onepos-modal,
+.onepos-popup {
+  animation: onepos-sheet-in var(--onepos-motion-normal) var(--onepos-motion-ease) both;
 }
 
 /* ==========================================================================
@@ -437,12 +546,12 @@ body {
 
   .settings-workspace {
     display: grid;
-    grid-template-columns: minmax(190px, 220px) minmax(170px, 205px) minmax(0, 820px);
+    grid-template-columns: minmax(220px, 260px) minmax(0, 1fr);
     align-items: start;
     gap: 16px;
     min-height: 0;
   }
-  .settings-categories { position: sticky; top: 0; max-height: calc(100dvh - var(--onepos-header-height, 58px) - 64px); overflow-y: auto; }
+  .settings-categories { position: sticky; z-index: var(--onepos-layer-page); top: 0; max-height: calc(100dvh - var(--onepos-header-height, 58px) - 64px); overflow-y: auto; }
   .settings-search-wrap { display:flex; align-items:center; gap:8px; min-height:36px; margin-bottom:12px; padding:0 10px; border:1px solid var(--onepos-border); border-radius:10px; background:var(--onepos-surface-muted); color:var(--onepos-text-secondary); }
   .settings-search-wrap input { width:100%; min-width:0; border:0; outline:0; background:transparent; color:var(--onepos-text-primary); font-size:13px; }
   .settings-category { width:100%; display:grid; grid-template-columns:30px minmax(0,1fr) 14px; align-items:center; gap:8px; padding:8px; border-radius:10px; color:var(--onepos-text-secondary); text-align:left; font-size:13px; }
@@ -450,10 +559,14 @@ body {
   .settings-category-active { background:color-mix(in srgb, var(--onepos-accent-600) 12%, transparent); color:var(--onepos-accent-700, var(--onepos-accent-600)); font-weight:600; }
   .settings-category-icon { width:28px; height:28px; display:grid; place-items:center; border-radius:8px; background:color-mix(in srgb, var(--onepos-accent-600) 10%, var(--onepos-surface-raised)); }
   .settings-category-chevron { justify-self:end; font-size:18px; opacity:.55; }
+  .settings-category-group + .settings-category-group { margin-top: 4px; }
+  .settings-category-sections { margin: 2px 0 8px 36px; padding-left: 8px; border-left: 1px solid var(--onepos-border); }
+  .settings-category-sections .onepos-settings-tab { min-height: 32px; padding: 6px 8px; font-size: 12px; }
   .settings-search-results .onepos-settings-tab { display:flex; align-items:center; gap:8px; }
 
   .settings-sidebar {
     position: sticky;
+    z-index: var(--onepos-layer-page);
     top: 0;
     max-height: calc(100dvh - var(--onepos-header-height, 58px) - 64px);
     min-height: 0;
@@ -520,7 +633,7 @@ body {
   .settings-related-detail { margin-top: 12px; margin-left: 14px; }
 
   @media (max-width: 900px) {
-    .settings-workspace { grid-template-columns: minmax(170px, 200px) minmax(150px, 180px) minmax(0, 1fr); gap: 12px; }
+    .settings-workspace { grid-template-columns: minmax(200px, 230px) minmax(0, 1fr); gap: 12px; }
   }
 
   @media (max-width: 700px) {
@@ -578,6 +691,7 @@ body {
   flex-shrink: 0;
   height: var(--onepos-header-height, 58px);
   color: var(--onepos-text-primary);
+  z-index: var(--onepos-layer-sticky);
   background-color: var(--onepos-header-bg, var(--onepos-surface-raised));
   backdrop-filter: blur(var(--onepos-header-blur, 0px));
   -webkit-backdrop-filter: blur(var(--onepos-header-blur, 0px));
@@ -594,6 +708,20 @@ body {
   padding-bottom: 84px; /* clear the fixed onePOS Dockbar + status bar */
   padding-left: max(var(--onepos-page-gap, 22px), env(safe-area-inset-left));
   padding-right: max(var(--onepos-page-gap, 22px), env(safe-area-inset-right));
+}
+
+@media (max-width: 639px) {
+  .onepos-shell-header {
+    gap: 6px;
+    padding-left: max(8px, env(safe-area-inset-left));
+    padding-right: max(8px, env(safe-area-inset-right));
+  }
+  .onepos-shell-content {
+    padding: 14px;
+    padding-bottom: 76px;
+    padding-left: max(14px, env(safe-area-inset-left));
+    padding-right: max(14px, env(safe-area-inset-right));
+  }
 }
 
 .onepos-sidebar {
@@ -941,13 +1069,9 @@ body {
 .onepos-collapsible { display:grid; grid-template-rows:1fr; opacity:1; transition:grid-template-rows var(--onepos-motion-normal) var(--onepos-motion-ease), opacity var(--onepos-motion-fast) ease; }
 .onepos-collapsible[data-collapsed="true"] { grid-template-rows:0fr; opacity:.35; }
 .onepos-collapsible > * { overflow:hidden; }
-.onepos-overlay-backdrop { position:fixed; inset:0; z-index:80; display:flex; align-items:center; justify-content:center; padding:24px; background:var(--onepos-overlay-backdrop); backdrop-filter:blur(10px); animation:onepos-fade-in var(--onepos-motion-fast) ease-out both; }
 .onepos-overlay-surface { width:min(760px, calc(100vw - 32px)); max-height:min(86vh, 900px); overflow:auto; border:1px solid color-mix(in srgb, var(--onepos-border) 82%, transparent); border-radius:var(--onepos-modal-radius); background:color-mix(in srgb, var(--onepos-surface-raised) 94%, transparent); box-shadow:0 28px 80px rgba(15,23,42,.24), 0 3px 14px rgba(15,23,42,.10); animation:onepos-sheet-in var(--onepos-motion-normal) var(--onepos-motion-ease) both; }
 .onepos-overlay-surface[data-presentation="overlay_square"] { width:min(540px, calc(100vw - 32px)); }
 .onepos-overlay-surface[data-presentation="overlay_rectangle"] { width:min(860px, calc(100vw - 32px)); }
-@keyframes onepos-fade-in { from { opacity:0 } to { opacity:1 } }
-@keyframes onepos-sheet-in { from { opacity:0; transform:translateY(12px) scale(.985) } to { opacity:1; transform:translateY(0) scale(1) } }
-@media (prefers-reduced-motion: reduce) { .onepos-motion,.onepos-collapsible,.onepos-overlay-backdrop,.onepos-overlay-surface { animation:none !important; transition:none !important; } }
 
 /* Batch 6: macOS-inspired motion/surfaces, using onePOS branding and tokens. */
 .onepos-page-enter { animation: onepos-page-enter var(--onepos-motion-normal) var(--onepos-motion-ease) both; }
@@ -965,9 +1089,7 @@ body {
 .onepos-icon-button:hover { background:var(--onepos-surface-hover); }
 .onepos-icon-button:active { transform:scale(.94); }
 @keyframes onepos-page-enter { from { opacity:0; transform:translateY(6px) scale(.997); } to { opacity:1; transform:none; } }
-@keyframes onepos-fade-in { from { opacity:0; } to { opacity:1; } }
 @keyframes onepos-sheet-in { from { opacity:0; transform:translateY(14px) scale(.975); } to { opacity:1; transform:none; } }
-@media (prefers-reduced-motion: reduce) { .onepos-page-enter,.onepos-overlay-backdrop,.onepos-overlay-panel { animation:none !important; } * { scroll-behavior:auto !important; } }
 
 
 /* ==========================================================================
@@ -1019,8 +1141,16 @@ body {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .onepos-motion, .onepos-collapsible,
+  .onepos-page-enter, .onepos-overlay-backdrop, .onepos-overlay-surface,
+  .onepos-overlay-panel, .settings-dialog-backdrop {
+    animation: none !important;
+    transition: none !important;
+  }
   .onepos-btn, .onepos-input, .onepos-card, .onepos-tab, .onepos-settings-tab,
-  .settings-category, .settings-category-icon, .settings-dialog {
+  .settings-category, .settings-category-icon, .settings-dialog,
+  .onepos-control, .onepos-icon-button {
     animation: none !important; transition: none !important; transform: none !important;
   }
+  * { scroll-behavior: auto !important; }
 }

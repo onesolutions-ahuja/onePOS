@@ -2,8 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 
-const objectPage = fs.readFileSync("app/src/pages/settings/Platform/ObjectPage.jsx", "utf8");
-const platformRoute = fs.readFileSync("server/routes/platform.js", "utf8");
+const objectPage = fs.readFileSync("src/pages/settings/Platform/ObjectPage.jsx", "utf8");
+const platformRoute = fs.readFileSync("routes/platform.js", "utf8");
 
 test("record page renders registered metadata buttons instead of adapter-owned action buttons", () => {
   assert.match(objectPage, /\/api\/platform\/objects\/\$\{encodeURIComponent\(objectId\)\}\/buttons/);

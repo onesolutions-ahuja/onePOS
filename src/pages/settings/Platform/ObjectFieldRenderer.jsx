@@ -1,4 +1,5 @@
-import React from "react";
+import React, { useEffect, useState } from "react";
+import { apiRequest } from "../../../services/api.js";
 
 function getFieldType(field) {
   if ((field?.fieldType || field?.field_type) === "formula") return field?.config?.resultType || "text";
@@ -160,6 +161,24 @@ export default function ObjectFieldRenderer({
   const fieldType = getFieldType(field);
   const label = getFieldLabel(field);
   const fieldKey = getFieldKey(field);
+  const [lookupOptions, setLookupOptions] = useState([]);
+  const [lookupError, setLookupError] = useState("");
+
+  useEffect(() => {
+    const targetKey = field?.config?.relatedObjectKey || field?.config?.related_object_key;
+    if (mode === "display" || fieldType !== "lookup" || !targetKey) return;
+    let active = true;
+    apiRequest(`/api/platform/objects/${encodeURIComponent(targetKey)}/records?limit=100`)
+      .then((response) => {
+        if (!active) return;
+        const records = response?.records || response?.data?.records || response?.data || [];
+        setLookupOptions(Array.isArray(records) ? records : []);
+      })
+      .catch((error) => {
+        if (active) setLookupError(error?.message || "Unable to load lookup records.");
+      });
+    return () => { active = false; };
+  }, [fieldType, field?.config?.relatedObjectKey, field?.config?.related_object_key, mode]);
 
   if (!fieldKey) {
     return null;
@@ -384,7 +403,16 @@ export default function ObjectFieldRenderer({
       break;
 
     case "lookup":
-      control = (
+      control = lookupOptions.length ? (
+        <select value={typeof value === "object" ? value?.id ?? "" : value ?? ""} disabled={disabled} onChange={(event) => handleChange(event.target.value)}>
+          <option value="">Select {label}</option>
+          {lookupOptions.map((record) => {
+            const recordId = record?.id ?? record?.record_id;
+            const recordLabel = record?.label ?? record?.name ?? record?.display_name ?? recordId;
+            return <option key={String(recordId)} value={String(recordId)}>{String(recordLabel)}</option>;
+          })}
+        </select>
+      ) : (
         <input
           type="text"
           value={
@@ -486,6 +514,11 @@ export default function ObjectFieldRenderer({
       {error ? (
         <div className="platform-field-error">
           {error}
+        </div>
+      ) : null}
+      {lookupError ? (
+        <div className="platform-field-error">
+          {lookupError}
         </div>
       ) : null}
 

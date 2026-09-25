@@ -57,12 +57,15 @@ export default function FieldEditor({
     rollupSourceField: field?.config?.field || "",
     rollupResultType: field?.config?.resultType || "number",
     rollupCondition: field?.config?.condition || null,
+    lookupRelationshipKey: field?.config?.relationshipKey || "",
+    lookupRelatedObjectKey: field?.config?.relatedObjectKey || field?.config?.related_object_key || "",
     options: Array.isArray(field?.options) ? field.options : [],
   });
 
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [valueSets, setValueSets] = useState([]);
+  const [relationships, setRelationships] = useState([]);
 
   useEffect(() => {
     if (!["picklist", "select"].includes(form.field_type)) return;
@@ -70,6 +73,13 @@ export default function FieldEditor({
       .then((response) => setValueSets(Array.isArray(response?.data) ? response.data : []))
       .catch((err) => setError(err?.message || "Unable to load reusable value sets."));
   }, [form.field_type]);
+
+  useEffect(() => {
+    if (form.field_type !== "lookup" || !object?.id) return;
+    apiRequest("/api/platform/relationships")
+      .then((response) => setRelationships(Array.isArray(response?.data) ? response.data : []))
+      .catch((err) => setError(err?.message || "Unable to load relationships."));
+  }, [form.field_type, object?.id]);
 
   function update(name, value) {
     setForm((current) => ({
@@ -218,6 +228,10 @@ export default function FieldEditor({
             field: form.rollupSourceField || null,
             resultType: form.rollupResultType,
             ...(form.rollupCondition ? { condition: form.rollupCondition } : {}),
+          } : {}),
+          ...(form.field_type === "lookup" ? {
+            relationshipKey: form.lookupRelationshipKey || null,
+            relatedObjectKey: form.lookupRelatedObjectKey || null,
           } : {}),
           ...(form.visibilityCondition ? { visibilityCondition: form.visibilityCondition } : {}),
           ...(form.requiredCondition ? { requiredCondition: form.requiredCondition } : {}),
@@ -397,6 +411,47 @@ export default function FieldEditor({
                   <button type="button" onClick={addOption}>Add value</button>
                 </>
               )}
+            </fieldset>
+          ) : null}
+
+          {form.field_type === "lookup" ? (
+            <fieldset className="platform-field-editor-wide">
+              <legend>Relationship target</legend>
+              <label>
+                <span>Relationship</span>
+                <select
+                  value={form.lookupRelationshipKey || ""}
+                  onChange={(event) => {
+                    const relationship = relationships.find((item) => item.relationship_key === event.target.value);
+                    const targetObjectKey = relationship
+                      ? String(relationship.parent_object_id) === String(object.id)
+                        ? relationship.child_object_key
+                        : relationship.parent_object_key
+                      : "";
+                    setForm((current) => ({
+                      ...current,
+                      lookupRelationshipKey: event.target.value,
+                      lookupRelatedObjectKey: targetObjectKey,
+                    }));
+                  }}
+                  required
+                >
+                  <option value="">Select a relationship</option>
+                  {relationships
+                    .filter((relationship) =>
+                      String(relationship.parent_object_id) === String(object.id) ||
+                      String(relationship.child_object_id) === String(object.id)
+                    )
+                    .map((relationship) => (
+                      <option key={relationship.id} value={relationship.relationship_key}>
+                        {relationship.relationship_key} ({relationship.parent_object_key} → {relationship.child_object_key})
+                      </option>
+                    ))}
+                </select>
+              </label>
+              <small>
+                Lookup values must come from an existing relationship. The relationship supplies the target object and tenant-safe reference.
+              </small>
             </fieldset>
           ) : null}
 

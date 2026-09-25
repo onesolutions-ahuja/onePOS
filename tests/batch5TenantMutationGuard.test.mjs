@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 
-const read = (name) => fs.readFileSync(new URL(`../server/routes/${name}`, import.meta.url), 'utf8');
+const read = (name) => fs.readFileSync(new URL(`../routes/${name}`, import.meta.url), 'utf8');
 
 test('hardware and payment-terminal test mutations retain tenant/store scope', () => {
   const src = read('settings.js');

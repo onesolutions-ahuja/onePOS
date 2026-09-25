@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { AlertTriangle, Percent, ShoppingBag, X } from "lucide-react";
+import DockHost from "../../components/DockHost.jsx";
 import { apiRequest } from "../../services/api.js";
 import {
   isNetworkError,
@@ -44,7 +45,6 @@ import {
 } from "../../services/offlineQueue.js";
 import { normaliseProduct } from "../../utils/formatters.js";
 import { computeBasketTotals, lineTaxFor } from "../../utils/saleTotals.js";
-import BottomStatusBar from "../../components/BottomStatusBar.jsx";
 import TillSessionModal from "./TillSessionModal.jsx";
 import POSHeader from "./POSHeader.jsx";
 import CartPanel from "./CartPanel.jsx";
@@ -104,8 +104,10 @@ function ModifierPickerModal({ product, groups, onClose, onConfirm }) {
 }
 /*
  * JARVES remains the existing components/jarvis/JarvisOrb.jsx and
- * components/jarvis/JarvisPanel.jsx interaction surface, but is mounted once
- * by App through JarvisCorner so it survives page navigation.
+ * components/jarvis/JarvisPanel.jsx interaction surface, embedded in the shared
+ * canonical dock (components/DockHost.jsx → components/AdminNavDock.jsx) that
+ * every onePOS surface renders — dashboard, settings, custom pages and this
+ * till. The till contributes none of the dock's composition.
  */
 
 /* =========================================================
@@ -116,6 +118,7 @@ function POS({
   onAdmin,
   onSettings,
   onOpenOnlineOrders,
+  onOpenApp,
   onLogout,
 }) {
   const [category, setCategory] = useState("All");
@@ -141,6 +144,7 @@ function POS({
   /* Cash completion popup: shows the change to return to the customer. */
   const [saleCompleteNotice, setSaleCompleteNotice] = useState(null);
   const [modifierPicker, setModifierPicker] = useState(null);
+  const [online, setOnline] = useState(isOnline);
 
   useEffect(() => {
     if (!showPayment || !online) return;
@@ -319,7 +323,7 @@ function POS({
   const [failedCount, setFailedCount] = useState(0);
   const [syncing, setSyncing] = useState(false);
   const [syncError, setSyncError] = useState(false);
-  const [online, setOnline] = useState(isOnline);
+
   const [showQueue, setShowQueue] = useState(false);
 
   const completing = useRef(false);
@@ -1569,6 +1573,13 @@ function POS({
 
         return;
       }
+      try {
+        await stored.ready;
+      } catch {
+        completing.current = false;
+        setSaleError("Unable to save a durable sale record. Do not take payment or clear the cart.");
+        return;
+      }
     }
 
     try {
@@ -1715,6 +1726,12 @@ function POS({
           });
 
         if (queued.ok) {
+          try {
+            await queued.ready;
+          } catch {
+            setSaleError("Unable to save a durable sale record. Do not take payment or clear the cart.");
+            return;
+          }
           requestRef.current = null;
 
           setDiscountType(null);
@@ -1823,7 +1840,7 @@ function POS({
   ========================================================= */
 
   return (
-    <div className="h-[100dvh] bg-slate-100 flex flex-col overflow-hidden">
+    <div className="h-[100dvh] bg-slate-100 flex flex-col overflow-hidden onepos-motion-surface onepos-page-enter">
 
       <POSHeader
         loadingTill={loadingTill}
@@ -2401,9 +2418,27 @@ function POS({
         />
       )}
 
-      <BottomStatusBar
-        storeName={storeName}
-        till={till}
+      {/* THE canonical dock — identical composition, geometry and CSS on every
+          onePOS surface. The till no longer supplies a page list: the six
+          quick-access slots come from the ONE saved configuration
+          (Settings → Store & Till) and are resolved against this session's
+          permissions, exactly as they are on the dashboard. Only navigation
+          and the active destination differ.
+
+          "Sales" is the till's own destination, so the configured Sales
+          shortcut highlights while the till is open. */}
+      <DockHost
+        page="Sales"
+        permissionState={{ isAdmin, permissions }}
+        canOpenSettings={isAdmin || permissions.includes("settings.manage")}
+        onNavigate={(nextPage, options) => {
+          /* One exit for every destination: App owns the admin route. */
+          if (onOpenApp) {
+            onOpenApp(nextPage, options);
+            return;
+          }
+          onAdmin?.();
+        }}
       />
 
     </div>

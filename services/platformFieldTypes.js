@@ -14,6 +14,7 @@ export const PLATFORM_FIELD_TYPES = Object.freeze([
   "lookup",
   "formula",
   "rollup",
+  "json",
 ]);
 
 export const PLATFORM_FIELD_TYPE_SQL = PLATFORM_FIELD_TYPES

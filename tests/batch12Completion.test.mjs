@@ -1,9 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { checkPayment, generateStatement } from '../server/services/customerCredit.js';
-import { calculateLoyaltyEarn, calculateLoyaltyReversal } from '../server/services/loyaltyRules.js';
-import { invoiceStatus, allocateSupplierPayment } from '../server/services/supplierAccounts.js';
-import { buildProfitReport } from '../server/services/profitMargin.js';
+import { checkPayment, generateStatement } from '../services/customerCredit.js';
+import { calculateLoyaltyEarn, calculateLoyaltyReversal } from '../services/loyaltyRules.js';
+import { invoiceStatus, allocateSupplierPayment } from '../services/supplierAccounts.js';
+import { buildProfitReport } from '../services/profitMargin.js';
 
 test('customer credit rejects zero, negative and non-numeric repayments', () => {
   assert.equal(checkPayment(1000, 0).allowed, false);

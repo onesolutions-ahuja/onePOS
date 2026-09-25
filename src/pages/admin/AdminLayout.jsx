@@ -1,5 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { BarChart3, Bell, Calculator, CreditCard, Database, FileText, Grid3X3, Home, KeyRound, Package, Percent, Plug, Receipt, RefreshCw, Settings, ShoppingBag, Store, Tag, Users, X } from "lucide-react";
+import { Bell, X } from "lucide-react";
 import { apiRequest } from "../../services/api.js";
 import { parseAppPath, buildAppPath, PAGE_SLUGS } from "../../utils/adminRoutes.js";
 import { buildSwitcherApps } from "../../utils/adminApps.js";
@@ -7,6 +7,19 @@ import {
   OBJECT_PAGE_KEY,
   buildConfiguredNavigation,
 } from "../../utils/platformObjectNavigation.js";
+/*
+ * The page catalogue and the module-catalogue adapter live in
+ * utils/navCatalogue.js — the ONE source every shell resolves navigation from
+ * (admin pages, Till/POS, custom pages). Re-exported here so existing importers
+ * keep working unchanged.
+ */
+import {
+  CATALOG_MODULE_BY_PAGE,
+  filterNavigationByCatalog,
+  permittedNavItems,
+} from "../../utils/navCatalogue.js";
+
+export { CATALOG_MODULE_BY_PAGE, filterNavigationByCatalog };
 import { normalizePreferences, preferencesDiffer } from "../../utils/adminPreferences.js";
 import {
   loadCachedPreferences,
@@ -75,41 +88,10 @@ function pathForPage(nextPage, settingsTab = null, route = null) {
 }
 
 /*
- * The catalogue owns module definitions; this small adapter only maps the
- * existing navigation labels to those definitions. Routes and permissions
- * remain owned by AdminLayout and the backend respectively.
+ * The catalogue owns module definitions and the shared page list lives in
+ * utils/navCatalogue.js, so the admin shell and the till can never disagree
+ * about which pages exist.
  */
-const CATALOG_MODULE_BY_PAGE = {
-  Dashboard: "retail_pos",
-  Dashboards: "reports",
-  Sales: "retail_pos",
-  Returns: "retail_pos",
-  "Supplier Returns": "retail_pos",
-  Payments: "retail_pos",
-  Products: "products",
-  "Global Products": "products",
-  Categories: "products",
-  Purchases: "suppliers",
-  Suppliers: "suppliers",
-  Inventory: "inventory",
-  Replenishment: "inventory",
-  Customers: "customers",
-  Employees: "staff",
-  Stores: "staff",
-  Reports: "reports",
-  "My Reports": "reports",
-  "Order Prep": "online_orders",
-  Integrations: "integrations",
-  Accounting: "integrations",
-};
-
-export function filterNavigationByCatalog(items, catalogKeys) {
-  if (!(catalogKeys instanceof Set)) return items;
-  return items.filter(([page]) => {
-    const moduleKey = CATALOG_MODULE_BY_PAGE[page];
-    return !moduleKey || catalogKeys.has(moduleKey);
-  });
-}
 
 export default function AdminLayout({
   onPOS,
@@ -236,16 +218,9 @@ export default function AdminLayout({
   const [objectNavLoaded, setObjectNavLoaded] = useState(false);
   /* T10W: dock quick-access pages configured in Settings → Store & Till.
      null = not loaded yet → the dock falls back to its default layout. */
-  const [dockQuickAccess, setDockQuickAccess] = useState(null);
-  useEffect(() => {
-    let alive = true;
-    apiRequest("/api/settings").then((data) => {
-      if (alive && data.success && Array.isArray(data.data?.dock?.quickAccess)) {
-        setDockQuickAccess(data.data.dock.quickAccess);
-      }
-    }).catch(() => {}); /* default dock layout on failure — non-critical */
-    return () => { alive = false; };
-  }, []);
+  /* The dock's quick-access configuration is owned by the canonical dock
+     runtime (utils/dockConfiguration.js + components/AdminNavDock.jsx), so the
+     admin shell, the till and custom pages all read the SAME saved list. */
   useEffect(() => {
     let alive = true;
     apiRequest("/api/platform/runtime/app-catalog")
@@ -419,59 +394,10 @@ export default function AdminLayout({
     }
   }, [configuredNavigation, objectNavLoaded]);
 
-  const permissionFilteredItems = [
-    ["Dashboard", Home],
-    ...(onlinePermissions.isAdmin || onlinePermissions.permissions.includes("reports.custom.view") ? [["Dashboards", BarChart3]] : []),
-    ["Sales", FileText],
-    /* T9M-SMALL: Returns respects the existing permission system —
-     * returns.view/returns.create for restricted roles, admin bypass. */
-    ...(onlinePermissions.isAdmin ||
-      onlinePermissions.permissions.includes("returns.view") ||
-      onlinePermissions.permissions.includes("returns.create")
-      ? [["Returns", RefreshCw]] : []),
-    ...(onlinePermissions.isAdmin ||
-      onlinePermissions.permissions.includes("returns.create")
-      ? [["Supplier Returns", RefreshCw]] : []),
-    ["Products", Package],
-    ["Global Products", Database],
-    ["Categories", Tag],
-    ["Purchases", Receipt],
-    ["Suppliers", Users],
-    ["Inventory", Grid3X3],
-    ...((onlinePermissions.isAdmin ||
-      onlinePermissions.permissions.includes("inventory.replenishment.view") ||
-      onlinePermissions.permissions.includes("inventory.view") ||
-      onlinePermissions.permissions.includes("reports.low_stock.view"))
-      ? [["Replenishment", Bell]] : []),
-    ["Customers", Users],
-    ["Employees", Users],
-    ["Stores", Store],
-    /* T10-AUDIT: Audit Log — gated by the audit.view permission (admin bypass). */
-    ...(onlinePermissions.isAdmin || onlinePermissions.permissions.includes("audit.view") ? [["Audit Log", FileText]] : []),
-    ["Payments", CreditCard],
-    ...(onlinePermissions.isAdmin || onlinePermissions.permissions.includes("online_orders.view")
-      ? [["Order Prep", ShoppingBag]] : []),
-    /* T9F: Integration management — existing permission system (integration.manage, admin bypass). */
-    ...(onlinePermissions.isAdmin || onlinePermissions.permissions.includes("integration.manage")
-      ? [["Integrations", Plug]] : []),
-    /* T9O: Accounting Integration — same permission mechanism, accounting-focused UI. */
-    ...(onlinePermissions.isAdmin || onlinePermissions.permissions.includes("integration.manage")
-      ? [["Accounting", Calculator]] : []),
-    /* Settings — reachable by EVERY signed-in user, matching the existing
-     * Settings surface's own authorization model: SettingsAdmin always
-     * prepends the per-user "Your account" → Appearance section, so every
-     * caller has at least one real Settings surface. The company/privileged
-     * sections are gated INSIDE SettingsAdmin (Platform needs
-     * isAdmin||isSuperadmin, Server / API Configuration needs isSuperadmin,
-     * Customer Loyalty needs the entitlement) and each endpoint keeps
-     * enforcing its own authorization. Navigation is discoverability, never
-     * the security boundary, so this entry grants nothing on its own.
-     * Deliberately unconditional rather than Superadmin-only: hiding it would
-     * remove the per-user Appearance surface that ships to everyone. */
-    ["Settings", Settings],
-    ["Reports", BarChart3],
-    ...(onlinePermissions.isSuperadmin ? [["Licensing", KeyRound]] : []),
-  ];
+  /* THE permitted page catalogue (utils/navCatalogue.js) — the SAME list the
+     till and custom pages resolve, so a page can never be reachable in one
+     shell and hidden in another. */
+  const permissionFilteredItems = permittedNavItems(onlinePermissions);
   /* Built-in pages first (catalogue + permission filtered, exactly as before),
      then the permitted configured Object pages. Configured entries were already
      authorised server-side and never carry a CATALOG_MODULE_BY_PAGE key, so the
@@ -508,7 +434,7 @@ export default function AdminLayout({
   }, []);
 
   return (
-    <div className="h-screen bg-slate-100 flex relative">
+    <div className="h-screen bg-slate-100 flex relative onepos-motion-surface onepos-page-enter">
       {/* NAVIGATION — the existing onePOS floating Dockbar, bottom-centre of
          the status bar. PRESERVED UNCHANGED (functionality, quick access,
          launcher, Open Till). Consumes the SAME permission-filtered items
@@ -523,8 +449,9 @@ export default function AdminLayout({
         reportItems={canViewReports ? catalogFilteredReportItems : []}
         page={page}
         onNavigate={navigate}
-        onOpenTill={onPOS}
-        quickAccess={dockQuickAccess}
+        /* Settings is in the permitted catalogue for every signed-in user, so
+           the fixed far-right destination is always available here. */
+        canOpenSettings
       />
 
       <ChangePasswordModal open={resetPwOpen} onClose={() => setResetPwOpen(false)} />

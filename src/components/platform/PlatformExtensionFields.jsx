@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { apiRequest } from "../../services/api.js";
-import ObjectForm from "../../pages/settings/Platform/ObjectForm.jsx";
+import FormRenderer from "../../pages/settings/Platform/FormRenderer.jsx";
 
 export default function PlatformExtensionFields({ objectKey, recordId, coreValues, onChange, onReady }) {
   const [configuration, setConfiguration] = useState(null);
@@ -27,11 +27,14 @@ export default function PlatformExtensionFields({ objectKey, recordId, coreValue
   const fields = useMemo(() => {
     if (!configuration) return [];
     const fields = configuration.fields.filter(field => field.config?.storage === "extension");
-    const layout = configuration.layouts.find(layout => layout.page_type === (recordId ? "edit" : "create") && (!layout.record_type_id || layout.record_type_id === typeId));
-    const components = layout?.definition?.components?.filter(component => component.type === "field") || [];
-    if (!components.length) return fields;
-    const order = new Map(components.map((component, index) => [component.field_key, { ...component, index }]));
-    return fields.filter(field => order.get(field.api_name)?.visible !== false).sort((a, b) => (order.get(a.api_name)?.index ?? 10000) - (order.get(b.api_name)?.index ?? 10000));
+    return fields;
+  }, [configuration, recordId, typeId]);
+  const layout = useMemo(() => {
+    if (!configuration) return null;
+    return configuration.layouts.find(candidate =>
+      candidate.page_type === (recordId ? "edit" : "create") &&
+      (!candidate.record_type_id || candidate.record_type_id === typeId)
+    ) || null;
   }, [configuration, recordId, typeId]);
   function changed(values) {
     const editable = new Set(configuration.fields.filter(field => field.config?.storage === "extension" && field.writable !== false).map(field => field.api_name));
@@ -46,6 +49,16 @@ export default function PlatformExtensionFields({ objectKey, recordId, coreValue
         onChange(previous => ({ ...previous, recordTypeId: id || null }));
       }}><option value="">Default</option>{configuration.recordTypes.map(type => <option key={type.id} value={type.id}>{type.label}</option>)}</select>
     </label>}
-    {fields.length > 0 && <ObjectForm embedded title="Additional details" fields={fields} initialValues={initialValues} onChange={changed} conditionFields={configuration.fields} contextValues={coreValues} />}
+    {fields.length > 0 && (
+      <FormRenderer
+        embedded
+        definition={layout?.definition || { components: fields.map((field, index) => ({ type: "field", field_key: field.api_name, order: index })) }}
+        fields={fields}
+        initialValues={initialValues}
+        mode={recordId ? "edit" : "create"}
+        onChange={changed}
+        className="platform-extension-form"
+      />
+    )}
   </section>;
 }

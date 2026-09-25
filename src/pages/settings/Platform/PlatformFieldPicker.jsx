@@ -22,6 +22,7 @@ export default function PlatformFieldPicker({
   label = "Field",
   includeObjectSelector = false,
   objectOnly = false,
+  availableFields = null,
   className = "",
 }) {
   const [objects, setObjects] = useState([]);
@@ -51,6 +52,11 @@ export default function PlatformFieldPicker({
   }, []);
 
   useEffect(() => {
+    if (Array.isArray(availableFields)) {
+      setFields(availableFields.filter((field) => field.active !== false && field.readable !== false));
+      setLoading(false);
+      return undefined;
+    }
     if (!selectedObjectKey) {
       setFields([]);
       setSearch("");
@@ -89,7 +95,7 @@ export default function PlatformFieldPicker({
         if (active) setLoading(false);
       });
     return () => { active = false; };
-  }, [objects, selectedObjectKey]);
+  }, [availableFields, objects, selectedObjectKey]);
 
   const filteredFields = useMemo(() => {
     const query = search.trim().toLowerCase();

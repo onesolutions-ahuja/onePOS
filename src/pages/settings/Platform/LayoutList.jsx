@@ -10,7 +10,7 @@ import { apiRequest } from "../../../services/api.js";
  * Purpose labels are humanised for display ("detail" → "View Details"). The
  * stored page_type is never rewritten. */
 
-const PURPOSE_ORDER = ["create", "edit", "detail", "view", "quick_create", "list"];
+const PURPOSE_ORDER = ["create", "edit", "quick_create", "detail", "view", "list"];
 
 const PURPOSE_LABELS = {
   create: "Create",
@@ -30,7 +30,7 @@ function purposeLabel(layout) {
   return PURPOSE_LABELS[raw] || raw;
 }
 
-export default function LayoutList({ onNew, onEdit, onMessage, onError, onBack, objectId = null }) {
+export default function LayoutList({ onNew, onEdit, onMessage, onError, onBack, objectId = null, pageTypes = null, title = null }) {
   const [layouts, setLayouts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [purposeFilter, setPurposeFilter] = useState("all");
@@ -40,9 +40,12 @@ export default function LayoutList({ onNew, onEdit, onMessage, onError, onBack, 
       setLoading(true);
       const response = await apiRequest("/api/platform/layouts?includeInactive=true");
       const loaded = response.data || [];
-      setLayouts(objectId
+      const scoped = objectId
         ? loaded.filter((layout) => String(layout.object_id) === String(objectId))
-        : loaded);
+        : loaded;
+      setLayouts(Array.isArray(pageTypes) && pageTypes.length
+        ? scoped.filter((layout) => pageTypes.includes(rawPurpose(layout)))
+        : scoped);
     } catch (error) {
       onError(error.message || "Unable to load layouts");
     } finally {
@@ -125,10 +128,12 @@ export default function LayoutList({ onNew, onEdit, onMessage, onError, onBack, 
     <div className="platform-layout-list">
       <div className="onepos-page-header">
         <div>
-          <h1 className="onepos-page-title">{objectId ? "Forms" : "Layouts"}</h1>
+          <h1 className="onepos-page-title">          {title || (objectId ? "Forms" : "Layouts")}</h1>
           <p className="onepos-page-subtitle">
-            {objectId
-              ? "Create, Edit, View Details and Quick Create forms for this object."
+            {title === "Record Pages"
+              ? "Configure the list and record pages used to present this object."
+              : objectId
+                ? "Create, Edit and Quick Create forms for this object."
               : "Configure metadata-driven page layouts."}
           </p>
         </div>
@@ -177,11 +182,15 @@ export default function LayoutList({ onNew, onEdit, onMessage, onError, onBack, 
         ) : visibleLayouts.length === 0 ? (
           <div className="onepos-empty">
             <span className="onepos-empty-title">
-              {layouts.length === 0 ? "No layouts configured." : "No forms for this purpose."}
+              {layouts.length === 0
+                ? (title === "Record Pages" ? "No record pages configured." : "No forms configured.")
+                : "No layouts for this purpose."}
             </span>
             <span className="ll-empty-hint">
               {layouts.length === 0
-                ? "Create a form to control how this object is displayed."
+                ? (title === "Record Pages"
+                  ? "Create a record page to control how this object is displayed."
+                  : "Create a form to control how this object is entered.")
                 : "Choose a different purpose filter."}
             </span>
           </div>

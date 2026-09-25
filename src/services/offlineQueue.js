@@ -4,8 +4,8 @@
 |--------------------------------------------------------------------------
 |
 | Frontend queue + sync engine for POS sales created while the network is
-| down. Storage primitives and tenant sealing come from T8B's
-| offlineStore.js (onepos_offline_queue, keyed to companyId+storeId).
+| down. IndexedDB is authoritative; localStorage is used only to migrate
+| queues created by older builds.
 |
 | Guarantees:
 |  - Only TRANSPORT failures are queued; server answers (400/403/500) are
@@ -29,13 +29,145 @@ import {
 import { isNetworkError, onNetworkChange, reportConnection } from "./networkStatus.js";
 
 /*
- * The queue lives in a PER-TENANT key: a different company/store logged in
- * on the same terminal can neither read, consume, nor overwrite another
- * tenant's unsynced sales. Records are additionally tenant-sealed (same
- * convention as offlineStore) as belt-and-braces.
+ * The queue lives in a PER-TENANT IndexedDB record: a different company/store
+ * logged in on the same terminal can neither read, consume, nor overwrite
+ * another tenant's unsynced sales.
  */
 function queueKeyFor(tenant) {
   return `onepos_offline_queue_${tenant.companyId}_${tenant.storeId}`;
+}
+
+const QUEUE_DB_NAME = "onepos_offline_transactions";
+const QUEUE_DB_VERSION = 1;
+const QUEUE_STORE_NAME = "queues";
+const queueCache = new Map();
+const queueReady = new Map();
+
+function tenantKey(tenant) {
+  return `${tenant.companyId}:${tenant.storeId}`;
+}
+
+function openQueueDatabase() {
+  if (typeof indexedDB === "undefined") return Promise.resolve(null);
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(QUEUE_DB_NAME, QUEUE_DB_VERSION);
+    request.onupgradeneeded = () => {
+      if (!request.result.objectStoreNames.contains(QUEUE_STORE_NAME)) {
+        request.result.createObjectStore(QUEUE_STORE_NAME);
+      }
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+}
+
+function idbRead(tenant) {
+  return openQueueDatabase().then((db) => {
+    if (!db) return null;
+    return new Promise((resolve, reject) => {
+      const request = db.transaction(QUEUE_STORE_NAME, "readonly")
+        .objectStore(QUEUE_STORE_NAME).get(tenantKey(tenant));
+      request.onsuccess = () => resolve(Array.isArray(request.result) ? request.result : []);
+      request.onerror = () => reject(request.error);
+    });
+  });
+}
+
+function idbWrite(tenant, entries) {
+  return openQueueDatabase().then((db) => {
+    if (!db) return false;
+    return new Promise((resolve, reject) => {
+      const request = db.transaction(QUEUE_STORE_NAME, "readwrite")
+        .objectStore(QUEUE_STORE_NAME).put(entries, tenantKey(tenant));
+      request.onsuccess = () => resolve(true);
+      request.onerror = () => reject(request.error);
+    });
+  });
+}
+
+function readLegacyQueue(tenant) {
+  try {
+    const raw = localStorage.getItem(queueKeyFor(tenant));
+    if (!raw) return [];
+    const record = JSON.parse(raw);
+    const stored = record?.tenant || {};
+    if (record?.v !== 1 || !Array.isArray(record.data) ||
+        stored.companyId !== tenant.companyId || stored.storeId !== tenant.storeId) return [];
+    return record.data.filter((entry) =>
+      entry?.id && entry.clientRequestId && entry.sale &&
+      entry.tenant?.companyId === tenant.companyId &&
+      entry.tenant?.storeId === tenant.storeId
+    );
+  } catch {
+    return [];
+  }
+}
+
+async function ensureQueueReady(tenant) {
+  if (!tenant) return [];
+  if (typeof indexedDB === "undefined") {
+    const entries = readLegacyQueue(tenant);
+    queueCache.set(tenantKey(tenant), entries);
+    return entries;
+  }
+  const key = tenantKey(tenant);
+  if (queueReady.has(key)) return queueReady.get(key);
+  const ready = (async () => {
+    const db = await openQueueDatabase();
+    if (!db) {
+      /* Test/non-browser environments have no IndexedDB. */
+      queueCache.set(key, queueCache.get(key) || readLegacyQueue(tenant));
+      return queueCache.get(key);
+    }
+    let entries = await idbRead(tenant);
+    if (!entries.length) {
+      const legacy = readLegacyQueue(tenant);
+      if (legacy.length) {
+        await idbWrite(tenant, legacy);
+        const verified = await idbRead(tenant);
+        if (!verified || verified.length !== legacy.length ||
+            verified.some((entry, index) => entry.id !== legacy[index].id)) {
+          throw new Error("Offline queue migration verification failed");
+        }
+        entries = verified;
+        localStorage.removeItem(queueKeyFor(tenant));
+      }
+    }
+    queueCache.set(key, entries);
+    return entries;
+  })().catch((error) => {
+    queueReady.delete(key);
+    console.error("Offline queue initialization failed:", error);
+    throw error;
+  });
+  queueReady.set(key, ready);
+  return ready;
+}
+
+function writeQueue(tenant, entries) {
+  queueCache.set(tenantKey(tenant), entries);
+  if (typeof indexedDB === "undefined") {
+    try {
+      writeLegacyQueue(tenant, entries);
+      return Promise.resolve(true);
+    } catch (error) {
+      return Promise.reject(error);
+    }
+  }
+  return idbWrite(tenant, entries).then((written) => {
+    if (written) return true;
+    throw new Error("Offline queue could not be persisted");
+  });
+}
+
+function writeLegacyQueue(tenant, entries) {
+  localStorage.setItem(queueKeyFor(tenant), JSON.stringify({
+    v: 1,
+    savedAt: new Date().toISOString(),
+    tenant: { companyId: tenant.companyId, storeId: tenant.storeId },
+    data: entries,
+  }));
+  return true;
 }
 
 /*
@@ -44,20 +176,10 @@ function queueKeyFor(tenant) {
  * login on this terminal and must survive).
  */
 export function readQueue(tenant) {
-  let record = null;
-  try {
-    const raw = localStorage.getItem(queueKeyFor(tenant));
-    if (!raw) return [];
-    record = JSON.parse(raw);
-  } catch {
-    return [];
-  }
-  if (!record || typeof record !== "object" || record.v !== 1) return [];
-  const stored = record.tenant || {};
-  if (stored.companyId !== tenant.companyId || stored.storeId !== tenant.storeId) {
-    return [];
-  }
-  return Array.isArray(record.data) ? record.data : [];
+  const key = tenantKey(tenant);
+  if (typeof indexedDB === "undefined") return readLegacyQueue(tenant);
+  if (!queueCache.has(key)) queueCache.set(key, readLegacyQueue(tenant));
+  return queueCache.get(key);
 }
 
 /* Read-only helper for debugging a queued offline sale from the browser.
@@ -91,23 +213,6 @@ export function inspectOfflineQueue() {
     console.log("[offlineQueue] sale=%o", item.sale);
   }
   return { key, tenant, items: queue };
-}
-
-function writeQueue(tenant, entries) {
-  try {
-    localStorage.setItem(
-      queueKeyFor(tenant),
-      JSON.stringify({
-        v: 1,
-        savedAt: new Date().toISOString(),
-        tenant: { companyId: tenant.companyId, storeId: tenant.storeId },
-        data: entries,
-      })
-    );
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 /*
@@ -359,10 +464,10 @@ export function retryFailedEntry(id) {
   const next = queue.map((item) =>
     item.id === id ? { ...item, status: "pending", lastError: null } : item
   );
-  if (!writeQueue(tenant, next)) return { ok: false };
+  const persistence = writeQueue(tenant, next);
   notify();
   syncOfflineQueue();
-  return { ok: true };
+  return { ok: true, ready: persistence };
 }
 
 /*
@@ -382,10 +487,10 @@ export function retryAllFailed() {
       ? { ...item, status: "pending", lastError: null }
       : item
   );
-  if (!writeQueue(tenant, next)) return { ok: false, retried: 0 };
+  const persistence = writeQueue(tenant, next);
   notify();
   syncOfflineQueue();
-  return { ok: true, retried: failedIds.size };
+  return { ok: true, retried: failedIds.size, ready: persistence };
 }
 
 /* ------------------------- sync statistics (T8G) ------------------------ */
@@ -468,12 +573,8 @@ let autoSyncStop = null;
 export function startAutoSync({ pollMs = 30000 } = {}) {
   if (autoSyncStop) return autoSyncStop;
   const attempt = async () => {
-    // Probe even with an empty/blocked queue: navigator.onLine alone does not
-    // detect a recovered backend. Never cache this authenticated response.
-    try {
-      const response = await fetch("/api/health", { signal: AbortSignal.timeout(10000), cache: "no-store" });
-      reportConnection(response.status < 500);
-    } catch { reportConnection(false); }
+    const tenant = getTenantFromToken();
+    if (tenant) await ensureQueueReady(tenant).catch(() => {});
     await syncOfflineQueue();
   };
   const removeNetworkListener = onNetworkChange((online) => {
@@ -524,10 +625,22 @@ export function enqueueOfflineSale({ sale, terminalNumber = null, paymentUnverif
   const queue = currentQueue(tenant);
   const existing = queue.find((item) => item.clientRequestId === sale.clientRequestId);
   if (existing) return { ok: true, entry: existing };
-  if (!writeQueue(tenant, [...queue, entry])) return { ok: false };
+  if (typeof indexedDB === "undefined") {
+    try {
+      writeLegacyQueue(tenant, [...queue, entry]);
+    } catch {
+      return { ok: false };
+    }
+  }
+  const persistence = ensureQueueReady(tenant)
+    .then(() => {
+      const current = readQueue(tenant);
+      if (current.some((item) => item.clientRequestId === sale.clientRequestId)) return true;
+      return writeQueue(tenant, [...current, entry]);
+    });
 
   notify();
-  return { ok: true, entry };
+  return { ok: true, entry, ready: persistence };
 }
 
 export function failQueuedSale(clientRequestId, status) {
@@ -535,7 +648,7 @@ export function failQueuedSale(clientRequestId, status) {
   if (!tenant) return;
   const queue = currentQueue(tenant).map((entry) => entry.clientRequestId === clientRequestId
     ? { ...entry, status: "failed", lastError: `Sale rejected (HTTP ${Number(status) || 400}). Check stock, permissions and till session before retrying.` } : entry);
-  writeQueue(tenant, queue);
+  void writeQueue(tenant, queue).catch((error) => console.error("Offline queue update failed:", error));
   notify();
 }
 
@@ -544,10 +657,22 @@ export function acknowledgeQueuedSale(clientRequestId, sale, tenant = getTenantF
   const queue = currentQueue(tenant);
   const entry = queue.find((item) => item.clientRequestId === clientRequestId);
   if (!entry) return true; // another response/tab already acknowledged it
-  if (!writeQueue(tenant, queue.filter((item) => item.id !== entry.id))) return false;
+  const next = queue.filter((item) => item.id !== entry.id);
+  let persistence;
+  if (typeof indexedDB === "undefined") {
+    try {
+      writeLegacyQueue(tenant, next);
+      persistence = Promise.resolve(true);
+    } catch {
+      return false;
+    }
+  } else {
+    persistence = writeQueue(tenant, next);
+  }
   recordSyncedReceipt(tenant, { clientRequestId, provisionalReceipt: entry.provisionalReceipt, receiptNumber: sale.receipt_number, saleId: sale.id });
   bumpSyncedStats(tenant);
   notify();
+  void persistence.catch((error) => console.error("Offline queue acknowledgement failed:", error));
   return true;
 }
 
@@ -559,7 +684,7 @@ let syncing = false;
  * Drains the queue oldest-first. Safe to call from anywhere (network event,
  * mount, after a sale); concurrent invocations collapse into the running one.
  */
-export async function syncOfflineQueue() {
+async function syncOfflineQueuePass() {
   if (syncing) return { attempted: 0, synced: 0, rejected: 0, networkDown: false, skipped: true };
   const tenant = getTenantFromToken();
   if (!tenant) return { attempted: 0, synced: 0, rejected: 0, networkDown: false, skipped: true };
@@ -567,6 +692,7 @@ export async function syncOfflineQueue() {
   syncing = true;
   notify(); // T8G: the indicator can show "Syncing…" while this runs
   try {
+    await ensureQueueReady(tenant);
     let queue = currentQueue(tenant);
     let synced = 0;
     let rejected = 0;
@@ -578,6 +704,7 @@ export async function syncOfflineQueue() {
         noteSyncError(tenant, "Unconfirmed payment requires review; automatic sync is blocked.");
         break;
       }
+
       const active = getTenantFromToken();
       if (!active || active.companyId !== tenant.companyId || active.storeId !== tenant.storeId || active.userId !== tenant.userId) break;
 
@@ -636,7 +763,14 @@ export async function syncOfflineQueue() {
           break;
         }
 
-        if (!acknowledgeQueuedSale(entry.clientRequestId, body.sale, tenant)) {
+        const acknowledgement = acknowledgeQueuedSale(entry.clientRequestId, body.sale, tenant);
+        if (!acknowledgement || acknowledgement.ok === false) {
+          noteSyncError(tenant, "Unable to update local storage. Sale retained; retry uses the same reference.");
+          break;
+        }
+        try {
+          await writeQueue(tenant, currentQueue(tenant));
+        } catch {
           noteSyncError(tenant, "Unable to update local storage. Sale retained; retry uses the same reference.");
           break;
         }
@@ -668,4 +802,25 @@ export async function syncOfflineQueue() {
     syncing = false;
     notify();
   }
+}
+
+/*
+ * The in-process guard above prevents duplicate sends in one tab. Where
+ * supported, Web Locks extends that guarantee across tabs sharing the same
+ * browser profile. IndexedDB remains the durable source of truth; the lock
+ * only serializes read/modify/write synchronization passes.
+ */
+export async function syncOfflineQueue() {
+  const tenant = getTenantFromToken();
+  if (!tenant) return { attempted: 0, synced: 0, rejected: 0, networkDown: false, skipped: true };
+  if (typeof navigator !== "undefined" && navigator.locks?.request) {
+    return navigator.locks.request(
+      `onepos-offline-sync-${tenant.companyId}-${tenant.storeId}`,
+      { ifAvailable: true },
+      (lock) => lock ? syncOfflineQueuePass() : {
+        attempted: 0, synced: 0, rejected: 0, networkDown: false, skipped: true,
+      }
+    );
+  }
+  return syncOfflineQueuePass();
 }

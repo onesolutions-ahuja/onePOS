@@ -1,8 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import { packageDefinition } from "../server/services/packageRegistry.js";
-import { getCompanyEntitlements, getUserLicenceState } from "../server/services/licensing.js";
+import { packageDefinition } from "../services/packageRegistry.js";
+import { getCompanyEntitlements, getUserLicenceState } from "../services/licensing.js";
 
 test("packages declare licence entitlement keys", () => {
   assert.equal(packageDefinition({ key: "retail_pos" }).manifest.entitlementKey, "pos");
@@ -23,13 +23,13 @@ test("user licence assignment has independent active and expiry state", async ()
 });
 
 test("package fields are classified as required/default metadata contracts", () => {
-  const source=fs.readFileSync(new URL("../server/services/packageRegistry.js",import.meta.url),"utf8");
+  const source=fs.readFileSync(new URL("../services/packageRegistry.js",import.meta.url),"utf8");
   assert.match(source,/packageContract: field.required === true \? "required" : "default"/);
   assert.match(source,/packageOwned: true/);
 });
 
 test("licence schema preserves data and tracks assignment dates", () => {
-  const schema=fs.readFileSync(new URL("../server/database/schema.sql",import.meta.url),"utf8");
+  const schema=fs.readFileSync(new URL("../database/schema.sql",import.meta.url),"utf8");
   assert.match(schema,/user_licence_assignments ADD COLUMN IF NOT EXISTS active/);
   assert.match(schema,/user_licence_assignments ADD COLUMN IF NOT EXISTS starts_at/);
   assert.match(schema,/user_licence_assignments ADD COLUMN IF NOT EXISTS expires_at/);

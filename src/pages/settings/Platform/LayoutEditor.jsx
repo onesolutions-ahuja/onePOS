@@ -16,6 +16,12 @@ const PAGE_TYPES = [
   { value: "quick_create", label: "Quick Create" },
 ];
 
+const FORM_PRESENTATION_MODES = [
+  { key: "inline", label: "Inline form" },
+  { key: "overlay_rectangle", label: "Rectangle overlay" },
+  { key: "overlay_square", label: "Compact overlay" },
+];
+
 /* The compact builder renders at three preview widths. These are canvas frames
    only — no runtime sizing or responsive behaviour is implied. */
 const DEVICE_WIDTHS = [
@@ -63,6 +69,7 @@ const EMPTY_LAYOUT = {
   role_id: "",
   company_id: "",
   active: true,
+  presentation_mode: "inline",
   components: [],
   sections: [{ id: "section-1", label: "Details", order: 0, columns: 1, visible: true }],
 };
@@ -140,6 +147,7 @@ export default function LayoutEditor({
   layout = null,
   objects = [],
   initialObjectId = "",
+  initialPageType = "detail",
   roles = [],
   companies = [],
   onSave,
@@ -155,7 +163,9 @@ export default function LayoutEditor({
     ...EMPTY_LAYOUT,
     ...(layout || {}),
     ...initialLayoutSections(layout),
+    presentation_mode: layout?.definition?.presentation_mode || layout?.presentation_mode || "inline",
     ...(isNew && initialObjectId ? { object_id: initialObjectId } : {}),
+    ...(isNew ? { page_type: initialPageType } : {}),
   });
 
   const [availableObjects, setAvailableObjects] =
@@ -169,6 +179,7 @@ export default function LayoutEditor({
 
   const [fields, setFields] = useState([]);
   const [relationships, setRelationships] = useState([]);
+  const [relatedFieldsByRelationship, setRelatedFieldsByRelationship] = useState({});
   const [componentRegistry, setComponentRegistry] = useState(FALLBACK_COMPONENT_REGISTRY);
   const [buttonVariants, setButtonVariants] = useState([{ key: "primary", label: "Primary" }, { key: "secondary", label: "Secondary" }, { key: "outline", label: "Outline" }, { key: "destructive", label: "Destructive" }, { key: "icon", label: "Icon" }, { key: "icon_label", label: "Icon + Label" }]);
   const [registeredActions, setRegisteredActions] = useState([]);
@@ -189,6 +200,7 @@ export default function LayoutEditor({
   const [fieldSearch, setFieldSearch] = useState("");
   const [pickerSectionId, setPickerSectionId] = useState("");
   const [device, setDevice] = useState("desktop");
+  const [mobilePane, setMobilePane] = useState("canvas");
   const [dropHint, setDropHint] = useState(null);
   const [dragging, setDragging] = useState(false);
   const [conditionFor, setConditionFor] = useState("");
@@ -221,6 +233,24 @@ export default function LayoutEditor({
   const firstSectionId = form.sections[0]?.id || "section-1";
   const sectionLabel = (id) => form.sections.find((section) => String(section.id) === String(id))?.label || "section";
   const objectLabel = getObjectName(availableObjects.find((object) => String(getId(object)) === String(form.object_id)));
+
+  useEffect(() => {
+    const nextIsNew = !layout?.id && !layout?.layout_id;
+    const nextForm = {
+      ...EMPTY_LAYOUT,
+      ...(layout || {}),
+      ...initialLayoutSections(layout),
+      presentation_mode: layout?.definition?.presentation_mode || layout?.presentation_mode || "inline",
+      ...(nextIsNew && initialObjectId ? { object_id: initialObjectId } : {}),
+      ...(nextIsNew ? { page_type: initialPageType } : {}),
+    };
+    setForm(nextForm);
+    setSelection({ kind: "form", id: "" });
+    setPickerSectionId("");
+    setPreviewMode("");
+    setFieldSearch("");
+    setMobilePane("canvas");
+  }, [layoutId, initialObjectId, initialPageType]);
 
   useEffect(() => {
     let cancelled = false;
@@ -263,9 +293,16 @@ export default function LayoutEditor({
 
   useEffect(() => {
     if (form.object_id) {
+      setFields([]);
+      setRelationships([]);
+      setRelatedFieldsByRelationship({});
+      setRecordTypes([]);
       loadFields(form.object_id);
     } else {
       setFields([]);
+      setRelationships([]);
+      setRelatedFieldsByRelationship({});
+      setRecordTypes([]);
     }
   }, [form.object_id]);
 
@@ -326,12 +363,20 @@ export default function LayoutEditor({
           ? loaded
           : []
       );
-      const recordTypesData = await apiRequest(`/api/platform/objects/${form.object_id}/record-types`);
+      const recordTypesData = await apiRequest(`/api/platform/objects/${objectId}/record-types`);
       const recordTypesLoaded = recordTypesData?.data || [];
       setRecordTypes(Array.isArray(recordTypesLoaded) ? recordTypesLoaded : []);
       const relationshipsData = await apiRequest("/api/platform/relationships");
       const relationshipRows = relationshipsData?.data || [];
-      setRelationships(Array.isArray(relationshipRows) ? relationshipRows.filter((relationship) => String(relationship.parent_object_id) === String(objectId)) : []);
+      const scopedRelationships = Array.isArray(relationshipRows)
+        ? relationshipRows.filter((relationship) => String(relationship.parent_object_id) === String(objectId))
+        : [];
+      setRelationships(scopedRelationships);
+      const relatedFieldEntries = await Promise.all(scopedRelationships.map(async (relationship) => {
+        const response = await apiRequest(`/api/platform/objects/${encodeURIComponent(relationship.child_object_id)}/fields`);
+        return [relationship.relationship_key, Array.isArray(response?.data) ? response.data : []];
+      }));
+      setRelatedFieldsByRelationship(Object.fromEntries(relatedFieldEntries));
       const customActionsData = await apiRequest(`/api/platform/objects/${objectId}/registered-actions`);
       const customActions = Array.isArray(customActionsData?.data) ? customActionsData.data.map((action) => ({ key: action.action_key, displayName: action.label })) : [];
       const coreActionsData = await apiRequest("/api/platform/action-registry");
@@ -593,6 +638,7 @@ export default function LayoutEditor({
         active: form.active !== false,
         isDefault: form.is_default === true,
         definition: {
+          presentation_mode: form.presentation_mode || "inline",
           components: Array.isArray(form.components) ? form.components : [],
           sections: form.sections.map((section) => ({
             ...section,
@@ -912,6 +958,19 @@ export default function LayoutEditor({
                 <option key={page.value} value={page.value}>{page.label}</option>
               ))}
             </select>
+          </label>
+          <label className="pfb-field">
+            <span className="pfb-field-label">Presentation</span>
+            <select
+              className="onepos-input"
+              value={form.presentation_mode || "inline"}
+              onChange={(event) => update("presentation_mode", event.target.value)}
+            >
+              {FORM_PRESENTATION_MODES.map((mode) => (
+                <option key={mode.key} value={mode.key}>{mode.label}</option>
+              ))}
+            </select>
+            <span className="pfb-help">Controls how this form is presented when opened at runtime.</span>
           </label>
         </div>
         <div className="pfb-preview-body">
@@ -1252,9 +1311,9 @@ export default function LayoutEditor({
   }
 
   function renderRelatedListProperties(component, index) {
-    const objectKey = availableObjects.find((object) => String(getId(object)) === String(form.object_id))?.object_key
-      || availableObjects.find((object) => String(getId(object)) === String(form.object_id))?.objectKey
-      || "";
+    const relationship = relationships.find((item) => item.relationship_key === component.relationship_key);
+    const relatedFields = relatedFieldsByRelationship[component.relationship_key] || [];
+    const objectKey = relationship?.child_object_key || "";
     return (
       <>
         <div className="pfb-field">
@@ -1263,6 +1322,7 @@ export default function LayoutEditor({
             <div className="pfb-column-row" key={`${column}-${columnIndex}`}>
               <PlatformFieldPicker
                 selectedObjectKey={objectKey}
+                availableFields={relatedFields}
                 value={column}
                 label="Select column"
                 onChange={(value) => updateComponent(index, "columns", (component.columns || []).map((item, itemIndex) => itemIndex === columnIndex ? value : item).filter(Boolean))}
@@ -1573,7 +1633,24 @@ export default function LayoutEditor({
         </div>
       ) : null}
 
-      <div className="pfb-body">
+      <div className="pfb-body" data-mobile-pane={mobilePane}>
+        <nav className="pfb-mobile-tabs" aria-label="Builder workspace pane">
+          {[
+            ["palette", "Fields"],
+            ["canvas", "Canvas"],
+            ["properties", "Properties"],
+          ].map(([key, label]) => (
+            <button
+              type="button"
+              key={key}
+              className={"pfb-mobile-tab" + (mobilePane === key ? " pfb-mobile-tab-active" : "")}
+              aria-pressed={mobilePane === key}
+              onClick={() => setMobilePane(key)}
+            >
+              {label}
+            </button>
+          ))}
+        </nav>
         <aside className="pfb-panel" aria-label="Fields and components">
           <div className="pfb-panel-title">Fields</div>
           {renderSearchBox()}
@@ -1697,6 +1774,7 @@ export default function LayoutEditor({
           align-items: start;
           min-height: 0;
         }
+        .pfb-mobile-tabs { display: none; }
 
         /* --------------------------------- palette ------------------------- */
         .pfb-panel {
@@ -1883,6 +1961,26 @@ export default function LayoutEditor({
         }
         @media (max-width: 1023px) {
           .pfb-body { grid-template-columns: minmax(0, 1fr); }
+          .pfb-mobile-tabs {
+            display: flex; gap: 4px; padding: 4px;
+            border: 1px solid var(--border-color); border-radius: 8px;
+            background: var(--muted-background);
+          }
+          .pfb-mobile-tab {
+            flex: 1; border: 0; border-radius: 6px; padding: 7px 8px;
+            background: transparent; color: var(--text-secondary);
+            font-size: 11px; font-weight: 600; cursor: pointer;
+          }
+          .pfb-mobile-tab-active {
+            background: var(--card-background); color: var(--text-primary);
+            box-shadow: 0 1px 2px rgba(15, 23, 42, 0.1);
+          }
+          .pfb-body[data-mobile-pane="palette"] .pfb-canvas,
+          .pfb-body[data-mobile-pane="palette"] .pfb-properties,
+          .pfb-body[data-mobile-pane="canvas"] .pfb-panel,
+          .pfb-body[data-mobile-pane="canvas"] .pfb-properties,
+          .pfb-body[data-mobile-pane="properties"] .pfb-panel,
+          .pfb-body[data-mobile-pane="properties"] .pfb-canvas { display: none; }
           .pfb-panel, .pfb-props { position: static; max-height: none; }
           .pfb-canvas { order: 1; }
           .pfb-panel { order: 2; }

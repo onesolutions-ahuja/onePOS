@@ -17,21 +17,12 @@ const loaded = fs.existsSync(testEnvPath)
   ? dotenv.config({ path: testEnvPath, override: true })
   : { parsed: null, error: new Error("missing .env.test") };
 
-export function requireTestDatabaseUrl(key = "TEST_DATABASE_URL") {
-  const configured = process.env[key] || loaded.parsed?.[key];
-  if (!configured) {
+export function requireTestDatabaseUrl(key = "DATABASE_URL") {
+  if (loaded.error || !loaded.parsed?.[key] || !process.env[key]) {
     throw new Error(
       `PostgreSQL integration tests require ${key} in the separate .env.test file. ` +
       "Create .env.test with a disposable test database URL; the application .env is not used."
     );
   }
-  return configured;
-}
-
-export function getTestDatabaseUrl(key = "TEST_DATABASE_URL") {
-  try {
-    return requireTestDatabaseUrl(key);
-  } catch {
-    return null;
-  }
+  return process.env[key];
 }

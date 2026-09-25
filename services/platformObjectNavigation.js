@@ -134,6 +134,12 @@ export function normalizeObjectPageDefinition(value) {
     components: Array.isArray(source.components) ? source.components : builderComponents,
   };
 
+  /* Custom Page Builder tree (nested sections.children). Sections/components
+     above stay for legacy pages; when the nested tree is present it is the
+     authoritative shape and the flat arrays are kept in sync for readers. */
+  if (Array.isArray(source.sections) && source.sections.some((section) => section && Array.isArray(section.children))) {
+    definition.pageTree = true;
+  }
   const device = optionalString(source.device ?? legacyBuilder?.device, 20);
   if (["desktop", "tablet", "mobile"].includes(device)) definition.device = device;
 

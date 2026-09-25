@@ -15,6 +15,7 @@ export default function FormRenderer({
   error = "",
   className = "",
   formId,
+  embedded = false,
 }) {
   const normalized = useMemo(() => normalizeFormDefinition(definition), [definition]);
   const fieldMap = useMemo(() => new Map(fields.map((field) => [fieldKey(field), field])), [fields]);
@@ -53,7 +54,7 @@ export default function FormRenderer({
           loading={loading}
           error={error}
           readOnly={mode === "view"}
-          embedded={false}
+          embedded={embedded}
           submitLabel={mode === "quick_create" ? "Quick Create" : "Save"}
         />
       </div>
