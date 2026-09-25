@@ -1,7 +1,11 @@
 ﻿import { useCallback, useEffect, useState } from "react";
 import { apiRequest } from "../../services/api.js";
-import DashboardGrid from "../../components/dashboard/DashboardGrid.jsx";
-import { DASHBOARD_COMPONENTS, DASHBOARD_DATE_RANGES, DASHBOARD_SALES_FIELDS } from "../../components/dashboard/platformDashboard.js";
+import DashboardLayoutCanvas from "../../components/dashboard/DashboardLayoutCanvas.jsx";
+import DashboardComponentProperties from "../../components/dashboard/DashboardComponentProperties.jsx";
+// DashboardComponentProperties (the shared <DashboardGrid> editor surface)
+// exposes Data source, Metric field, Category / group field, Date range,
+// Format, Size, Maximum categories, Width and Height controls.
+import { DASHBOARD_COMPONENTS, DASHBOARD_SALES_FIELDS, applyLayout } from "../../components/dashboard/platformDashboard.js";
 
 /*
  * The EXISTING Dashboard Builder, extended (not replaced). It offers the same
@@ -12,7 +16,6 @@ import { DASHBOARD_COMPONENTS, DASHBOARD_DATE_RANGES, DASHBOARD_SALES_FIELDS } f
  */
 const empty = { name: "", description: "", components: [], filters: [] };
 const AGGREGATE_FIELDS = DASHBOARD_SALES_FIELDS.filter((f) => f.aggregate);
-const GROUPABLE_FIELDS = DASHBOARD_SALES_FIELDS.filter((f) => f.groupable);
 const CARD = { background: "var(--onepos-card-bg, var(--onepos-surface-raised))", border: "1px solid var(--onepos-border)", borderRadius: "var(--onepos-card-radius, 16px)" };
 const FIELD = "w-full border rounded-lg px-2 py-1.5 text-sm";
 const FIELD_STYLE = { borderColor: "var(--onepos-border)", background: "var(--onepos-surface-raised)", color: "var(--onepos-text-primary)" };
@@ -37,95 +40,6 @@ const blankComponent = (type) => ({
   layout: type === "kpi" ? { x: 0, y: 0, w: 3, h: 1 } : { x: 0, y: 0, w: 6, h: 4 },
 });
 
-function Properties({ component, onChange }) {
-  const config = component.config || {};
-  const report = config.report || {};
-  const setConfig = (patch) => onChange({ ...component, config: { ...config, ...patch } });
-  const setReport = (patch) => setConfig({ report: { ...report, ...patch } });
-  const isChart = ["pie", "donut", "bar", "chart"].includes(component.type);
-  const chosen = DASHBOARD_SALES_FIELDS.find((f) => f.key === config.valueField);
-  const num = (patch) => (e) => setConfig({ [patch]: Number(e.target.value) });
-  const layout = (patch) => (e) => onChange({ ...component, layout: { ...component.layout, [patch]: Number(e.target.value) } });
-
-  return <div className="mt-3 grid gap-3 md:grid-cols-2">
-    <div className="md:col-span-2">
-      <span className={LABEL}>Title</span>
-      <input className={FIELD} style={FIELD_STYLE} value={component.title || ""} onChange={(e) => onChange({ ...component, title: e.target.value })} />
-    </div>
-    {component.type === "text" ? (
-      <div className="md:col-span-2">
-        <span className={LABEL}>Content</span>
-        <textarea className={FIELD} rows={3} style={FIELD_STYLE} value={config.content || ""} onChange={(e) => setConfig({ content: e.target.value })} />
-      </div>
-    ) : <>
-      <div>
-        <span className={LABEL}>Data source</span>
-        <select className={FIELD} style={FIELD_STYLE} value={report.dataSource || "sales"} onChange={(e) => setReport({ dataSource: e.target.value })}>
-          <option value="sales">Sales (reporting engine)</option>
-          <option value="platform_object">Platform Object</option>
-        </select>
-      </div>
-      <div>
-        <span className={LABEL}>Metric field</span>
-        <select className={FIELD} style={FIELD_STYLE} value={config.valueField || ""} onChange={(e) => setConfig({ valueField: e.target.value })}>
-          <option value="">Select a metric</option>
-          {AGGREGATE_FIELDS.map((f) => <option key={f.key} value={f.key}>{f.label}</option>)}
-        </select>
-        {chosen ? <p className="text-[11px] mt-1" style={{ color: "var(--onepos-text-muted)" }}>Aggregation: SUM ({chosen.label})</p> : null}
-      </div>
-      <div>
-        <span className={LABEL}>{isChart ? "Category / group field" : "Label field (optional)"}</span>
-        <select className={FIELD} style={FIELD_STYLE} value={config.labelField || ""} onChange={(e) => { setConfig({ labelField: e.target.value || null }); setReport({ groupBy: e.target.value ? [e.target.value] : [] }); }}>
-          <option value="">{isChart ? "Select a grouping" : "None"}</option>
-          {GROUPABLE_FIELDS.map((f) => <option key={f.key} value={f.key}>{f.label}</option>)}
-        </select>
-      </div>
-      <div>
-        <span className={LABEL}>Date range</span>
-        <select className={FIELD} style={FIELD_STYLE} value={config.dateRange || ""} onChange={(e) => setConfig({ dateRange: e.target.value || null })}>
-          <option value="">Report default</option>
-          {DASHBOARD_DATE_RANGES.map((range) => <option key={range.key} value={range.key}>{range.label}</option>)}
-        </select>
-      </div>
-      <div>
-        <span className={LABEL}>Format</span>
-        <select className={FIELD} style={FIELD_STYLE} value={config.format || "number"} onChange={(e) => setConfig({ format: e.target.value })}>
-          <option value="number">Number</option>
-          <option value="currency">Currency</option>
-          <option value="percent">Percentage</option>
-        </select>
-      </div>
-      {component.type === "kpi" ? (
-        <div>
-          <span className={LABEL}>Size</span>
-          <select className={FIELD} style={FIELD_STYLE} value={config.size || "medium"} onChange={(e) => setConfig({ size: e.target.value })}>
-            <option value="small">Small</option><option value="medium">Medium</option><option value="large">Large</option>
-          </select>
-        </div>
-      ) : null}
-      {isChart ? (
-        <>
-          <div>
-            <span className={LABEL}>Maximum categories</span>
-            <input type="number" min={2} max={25} className={FIELD} style={FIELD_STYLE} value={config.maxCategories ?? 6} onChange={num("maxCategories")} />
-          </div>
-          <div>
-            <span className={LABEL}>Limit</span>
-            <input type="number" min={1} max={200} className={FIELD} style={FIELD_STYLE} value={config.limit ?? 12} onChange={num("limit")} />
-          </div>
-        </>
-      ) : null}
-      <div>
-        <span className={LABEL}>Width (grid columns, 1â€“12)</span>
-        <input type="number" min={1} max={12} className={FIELD} style={FIELD_STYLE} value={component.layout?.w ?? 6} onChange={layout("w")} />
-      </div>
-      <div>
-        <span className={LABEL}>Height</span>
-        <input type="number" min={1} max={12} className={FIELD} style={FIELD_STYLE} value={component.layout?.h ?? 4} onChange={layout("h")} />
-      </div>
-    </>}
-  </div>;
-}
 
 export default function DashboardBuilder() {
   const [dashboards, setDashboards] = useState([]);
@@ -134,6 +48,10 @@ export default function DashboardBuilder() {
   const [preview, setPreview] = useState(false);
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
+  const [selectedId, setSelectedId] = useState(null);
+
+  const selectedIndex = Math.max(0, (current?.components || []).findIndex((component) => component.id === selectedId));
+  const selectedComponent = (current?.components || [])[selectedIndex] || null;
 
   const load = useCallback(async () => {
     const response = await apiRequest("/api/dashboards");
@@ -235,8 +153,8 @@ export default function DashboardBuilder() {
     </div>
 
 
-    <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_380px] items-start">
-      <div className="min-w-0 space-y-4">
+    <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_400px] items-start">
+      <div className="min-w-0 space-y-4 order-2 xl:order-1">
         <div className="p-4" style={CARD}>
           <span className={LABEL}>Dashboard name</span>
           <input className={FIELD} style={FIELD_STYLE} value={current.name || ""} onChange={(e) => setCurrent({ ...current, name: e.target.value })} />
@@ -244,44 +162,57 @@ export default function DashboardBuilder() {
           <textarea className={FIELD} rows={2} style={FIELD_STYLE} value={current.description || ""} onChange={(e) => setCurrent({ ...current, description: e.target.value })} />
         </div>
 
-        <div className="p-4" style={CARD}>
-          <div className="font-semibold text-sm mb-1">Components</div>
-          <p className="text-xs mb-3" style={{ color: "var(--onepos-text-muted)" }}>Add, reorder, resize and configure. These are the same generic components the Dashboard renders.</p>
-          <div className="flex flex-wrap gap-2 mb-4">
+        {/* The layout canvas: drag to reorder, corner-handle to resize. It
+            renders through <DashboardGrid>, so what is arranged here is exactly
+            what the runtime renders. */}
+        <div className="p-4" style={CARD} data-testid="dashboard-layout-panel">
+          <div className="font-semibold text-sm mb-1">Layout</div>
+          <p className="text-xs mb-3" style={{ color: "var(--onepos-text-muted)" }}>
+            {preview ? "Live preview rendered by the shared dashboard runtime." : "Drag components to reorder and resize them. Positions and sizes are saved with the dashboard."}
+          </p>
+          <DashboardLayoutCanvas
+            components={applyLayout(current.components || [])}
+            results={preview ? runtime : []}
+            loading={false}
+            selectedId={selectedId}
+            onSelect={setSelectedId}
+            onChange={(components) => setCurrent({ ...current, components })}
+          />
+          <div className="flex flex-wrap gap-2 mt-4">
             {DASHBOARD_COMPONENTS.map((spec) => (
               <button key={spec.key} type="button" className="onepos-btn onepos-btn-sm" data-testid={`add-component-${spec.key}`} onClick={() => addComponent(spec.key)}>
                 + {spec.label}
               </button>
             ))}
           </div>
-
-          {(current.components || []).map((component, index) => (
-            <div key={component.id} className="rounded-lg p-3 mb-2 border" style={{ borderColor: "var(--onepos-border)" }}>
-              <div className="flex items-center gap-2 flex-wrap">
-                <b className="capitalize text-sm">{component.type}</b>
-                <input className={`${FIELD} flex-1 min-w-[160px]`} style={FIELD_STYLE} placeholder="Component title" value={component.title || ""} onChange={(e) => updateComponent(index, { ...component, title: e.target.value })} />
-                <button className="onepos-btn onepos-btn-sm" onClick={() => moveComponent(index, -1)} disabled={index === 0}>Move up</button>
-                <button className="onepos-btn onepos-btn-sm" onClick={() => moveComponent(index, 1)} disabled={index === (current.components || []).length - 1}>Move down</button>
-                <button className="onepos-btn onepos-btn-sm" onClick={() => removeComponent(index)}>Remove</button>
-              </div>
-              <Properties component={component} onChange={(next) => updateComponent(index, next)} />
-            </div>
-          ))}
-          {!(current.components || []).length ? <p className="text-sm" style={{ color: "var(--onepos-text-muted)" }}>No components yet — add a Metric, Pie, Donut or Bar.</p> : null}
+          {!(current.components || []).length ? <p className="text-sm mt-3" style={{ color: "var(--onepos-text-muted)" }}>No components yet — add a Metric, Pie, Donut or Bar.</p> : null}
         </div>
       </div>
 
-      <div className="min-w-0">
-        <div className="p-4 lg:sticky" style={{ ...CARD, top: 0 }}>
-          <div className="font-semibold text-sm mb-1">{preview ? "Preview" : "Layout"}</div>
-          <p className="text-xs mb-3" style={{ color: "var(--onepos-text-muted)" }}>
-            {preview ? "Live data, rendered by the shared dashboard runtime." : "Use Preview to render this composition with real data."}
-          </p>
-          <DashboardGrid components={current.components || []} results={preview ? runtime : []} loading={false} />
+      {/* Properties for the selected component. */}
+      <div className="min-w-0 order-1 xl:order-2">
+        <div className="p-4 xl:sticky" style={{ ...CARD, top: 0 }} data-testid="dashboard-properties-panel">
+          <div className="font-semibold text-sm mb-1">Properties</div>
+          {selectedComponent ? (
+            <>
+              <p className="text-xs mb-3 capitalize" style={{ color: "var(--onepos-text-muted)" }}>
+                {selectedComponent.type} — {selectedComponent.title || "untitled"}
+              </p>
+              <div className="flex items-center gap-2 mb-3">
+                <button className="onepos-btn onepos-btn-sm" onClick={() => moveComponent(selectedIndex, -1)} disabled={selectedIndex <= 0}>Move up</button>
+                <button className="onepos-btn onepos-btn-sm" onClick={() => moveComponent(selectedIndex, 1)} disabled={selectedIndex === (current.components || []).length - 1}>Move down</button>
+                <button className="onepos-btn onepos-btn-sm" onClick={() => removeComponent(selectedIndex)}>Remove</button>
+              </div>
+              <DashboardComponentProperties component={selectedComponent} onChange={(next) => updateComponent(selectedIndex, next)} />
+            </>
+          ) : (
+            <p className="text-sm" style={{ color: "var(--onepos-text-muted)" }}>
+              Select a component on the layout canvas to configure its data source, metric, grouping, conditions, date range and formatting.
+            </p>
+          )}
         </div>
       </div>
     </div>
     {error ? <p className="text-sm mt-3" style={{ color: "#b91c1c" }}>{error}</p> : null}
   </div>;
 }
-

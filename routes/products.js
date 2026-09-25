@@ -380,56 +380,6 @@ export default function createProductsRouter({ authenticate, authorize, db: doma
         data: result.rows,
       });
 
-      router.get("/products/catalogue", authenticate, authorize("product.view"), async (req, res) => {
-        try {
-          const since = typeof req.query.since === "string" && req.query.since
-            ? req.query.since
-            : null;
-          const params = [req.user.companyId, req.user.storeId || null];
-          const sinceClause = since ? `AND GREATEST(p.updated_at, COALESCE(ps.updated_at, p.updated_at), COALESCE(c.created_at, p.updated_at)) > $3::timestamptz` : "";
-          if (since) params.push(since);
-          const products = await db(
-            `SELECT p.id, p.name, p.sku, p.barcode, p.price, p.vat_rate, p.vat_applicable,
-                    p.age_restricted, p.image_url, p.low_stock_level, p.track_stock,
-                    p.category_id, p.active, c.name AS category_name,
-                    COALESCE(ps.quantity, p.stock_quantity) AS stock,
-                    GREATEST(p.updated_at, COALESCE(ps.updated_at, p.updated_at), COALESCE(c.created_at, p.updated_at)) AS catalogue_updated_at
-             FROM products p
-             LEFT JOIN categories c ON c.id=p.category_id AND c.company_id=p.company_id
-             LEFT JOIN product_store_stock ps ON ps.product_id=p.id AND ps.company_id=p.company_id AND ps.store_id=$2
-             WHERE p.company_id=$1 AND p.sku IS DISTINCT FROM 'MISC' ${sinceClause}
-             ORDER BY p.name`,
-            params
-          );
-          const categories = await db(
-            `SELECT id, name, display_order, active, created_at
-             FROM categories
-             WHERE company_id=$1
-             ORDER BY display_order, name`,
-            [req.user.companyId]
-          );
-          const versionResult = await db(
-            `SELECT GREATEST(
-               COALESCE((SELECT MAX(updated_at) FROM products WHERE company_id=$1), 'epoch'::timestamptz),
-               COALESCE((SELECT MAX(created_at) FROM categories WHERE company_id=$1), 'epoch'::timestamptz),
-               COALESCE((SELECT MAX(updated_at) FROM product_store_stock WHERE company_id=$1 AND store_id=$2), 'epoch'::timestamptz)
-             ) AS version`,
-            [req.user.companyId, req.user.storeId || null]
-          );
-          res.json({
-            success: true,
-            data: {
-              version: versionResult.rows[0]?.version || null,
-              full: !since,
-              products: products.rows,
-              categories: categories.rows,
-            },
-          });
-        } catch (error) {
-          console.error("Catalogue load error:", error);
-          res.status(500).json({ success: false, message: "Unable to load POS catalogue" });
-        }
-      });
     } catch (error) {
       console.error("Load products error:", error);
 
@@ -448,6 +398,57 @@ export default function createProductsRouter({ authenticate, authorize, db: doma
    * Store-scoped users can only export their own store; admins can
    * export all stores within the company.
    */
+router.get("/products/catalogue", authenticate, authorize("product.view"), async (req, res) => {
+  try {
+    const since = typeof req.query.since === "string" && req.query.since
+      ? req.query.since
+      : null;
+    const params = [req.user.companyId, req.user.storeId || null];
+    const sinceClause = since ? `AND GREATEST(p.updated_at, COALESCE(ps.updated_at, p.updated_at), COALESCE(c.created_at, p.updated_at)) > $3::timestamptz` : "";
+    if (since) params.push(since);
+    const products = await db(
+      `SELECT p.id, p.name, p.sku, p.barcode, p.price, p.vat_rate, p.vat_applicable,
+              p.age_restricted, p.image_url, p.low_stock_level, p.track_stock,
+              p.category_id, p.active, c.name AS category_name,
+              COALESCE(ps.quantity, p.stock_quantity) AS stock,
+              GREATEST(p.updated_at, COALESCE(ps.updated_at, p.updated_at), COALESCE(c.created_at, p.updated_at)) AS catalogue_updated_at
+       FROM products p
+       LEFT JOIN categories c ON c.id=p.category_id AND c.company_id=p.company_id
+       LEFT JOIN product_store_stock ps ON ps.product_id=p.id AND ps.company_id=p.company_id AND ps.store_id=$2
+       WHERE p.company_id=$1 AND p.sku IS DISTINCT FROM 'MISC' ${sinceClause}
+       ORDER BY p.name`,
+      params
+    );
+    const categories = await db(
+      `SELECT id, name, display_order, active, created_at
+       FROM categories
+       WHERE company_id=$1
+       ORDER BY display_order, name`,
+      [req.user.companyId]
+    );
+    const versionResult = await db(
+      `SELECT GREATEST(
+         COALESCE((SELECT MAX(updated_at) FROM products WHERE company_id=$1), 'epoch'::timestamptz),
+         COALESCE((SELECT MAX(created_at) FROM categories WHERE company_id=$1), 'epoch'::timestamptz),
+         COALESCE((SELECT MAX(updated_at) FROM product_store_stock WHERE company_id=$1 AND store_id=$2), 'epoch'::timestamptz)
+       ) AS version`,
+      [req.user.companyId, req.user.storeId || null]
+    );
+    res.json({
+      success: true,
+      data: {
+        version: versionResult.rows[0]?.version || null,
+        full: !since,
+        products: products.rows,
+        categories: categories.rows,
+      },
+    });
+  } catch (error) {
+    console.error("Catalogue load error:", error);
+    res.status(500).json({ success: false, message: "Unable to load POS catalogue" });
+  }
+});
+
   router.get("/products/export", authenticate, authorize("product.view"), async (req, res) => {
     try {
       const { storeId } = req.query;

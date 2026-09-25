@@ -29,6 +29,34 @@ export function getDashboardComponent(key) {
   return DASHBOARD_COMPONENT_MAP.get(String(key || "")) || null;
 }
 
+/*
+ * THE dashboard layout algorithm. This is deliberately duplicated in
+ * src/components/dashboard/platformDashboard.js (`packLayout`) because that
+ * module is also imported by browser code and must not pull server modules into
+ * the bundle. Both implementations are byte-for-byte equivalent and a unit
+ * test asserts they agree, so the Builder canvas and the persisted metadata can
+ * never drift.
+ */
+export const DASHBOARD_COLUMNS = 12;
+export const clampWidth = (value) => Math.min(DASHBOARD_COLUMNS, Math.max(1, Number(value) || 1));
+export const clampHeight = (value) => Math.min(12, Math.max(1, Number(value) || 1));
+
+export function packLayout(layouts = []) {
+  const placements = [];
+  let x = 0;
+  let y = 0;
+  let rowHeight = 0;
+  for (const layout of layouts) {
+    const w = clampWidth(layout?.w);
+    const h = clampHeight(layout?.h);
+    if (x + w > DASHBOARD_COLUMNS) { x = 0; y += rowHeight; rowHeight = 0; }
+    placements.push({ x, y, w, h });
+    x += w;
+    rowHeight = Math.max(rowHeight, h);
+  }
+  return placements;
+}
+
 export function validateDashboardDefinition(input = {}) {
   const name = String(input.name || "").trim();
   if (!name || name.length > 150) throw new Error("A dashboard name up to 150 characters is required");
@@ -38,12 +66,13 @@ export function validateDashboardDefinition(input = {}) {
     if (!COMPONENT_TYPES.includes(type)) throw new Error(`Invalid dashboard component at position ${index + 1}`);
     const config = component?.config && typeof component.config === "object" ? component.config : {};
     if (type !== "text" && !config.reportId && !config.report) throw new Error(`Component ${index + 1} must reference a report`);
-    if (config.report && config.report.dataSource && !["sales", "platform_object"].includes(String(config.report.dataSource))) {
-      throw new Error(`Component ${index + 1} uses an unsupported data source`);
-    }
     if (config.report) {
-      if (config.report.dataSource && !["sales", "platform_object"].includes(String(config.report.dataSource))) throw new Error(`Component ${index + 1} has an unsupported data source`);
-      if (!Array.isArray(config.report.fields) || !config.report.fields.length) throw new Error(`Component ${index + 1} must select at least one field`);
+      if (config.report.dataSource && !["sales", "platform_object"].includes(String(config.report.dataSource))) {
+        throw new Error(`Component ${index + 1} uses an unsupported data source`);
+      }
+      if (!Array.isArray(config.report.fields) || !config.report.fields.length) {
+        throw new Error(`Component ${index + 1} must select at least one field`);
+      }
     }
     return {
       id: String(component.id || crypto.randomUUID()),
@@ -79,10 +108,16 @@ export function validateDashboardDefinition(input = {}) {
         x: Math.max(0, Number(component.layout?.x) || 0),
         y: Math.max(0, Number(component.layout?.y) || 0),
         w: Math.min(12, Math.max(1, Number(component.layout?.w) || 4)),
-        h: Math.min(12, Math.max(1, Number(component.layout?.h) || 3)),
+        h: Math.min(12, Math.max(1, Number(component.layout?.h) || 1)),
       },
     };
   });
+  /* Repack the 12-column layout with the SAME algorithm the Builder canvas
+     uses (see src/components/dashboard/platformDashboard.js `packLayout`).
+     This is what makes "reload exactly as saved" true: a hand-edited or
+     out-of-date definition can never persist overlapping coordinates. */
+  const packed = packLayout(normalized.map((entry) => entry.layout));
+  normalized.forEach((entry, index) => { entry.layout = packed[index]; });
   const filters = Array.isArray(input.filters) ? input.filters.slice(0, 10).map((filter) => {
     const field = String(filter?.field || "");
     if (!FILTER_FIELDS.includes(field)) throw new Error("Invalid dashboard filter");

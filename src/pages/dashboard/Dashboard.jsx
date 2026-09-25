@@ -6,30 +6,64 @@ import DashboardGrid from "../../components/dashboard/DashboardGrid.jsx";
 /*
  * The Dashboard is a RUNTIME, not a composition.
  *
- * It asks the platform for a dashboard definition (the saved one for this user
- * when one exists, otherwise the shipped default definition) and renders every
- * component through the shared generic component runtime. No KPI, chart or
- * metric is named in this file: which components appear, their order, their
- * size, their datasource, metric, grouping and date range all come from
- * dashboard metadata written by Dashboard Builder.
+ * It asks the platform for the dashboards this user may see (the existing
+ * `/api/dashboards` endpoint already applies permission, company and
+ * archive scoping), lets the user pick one, and renders its persisted
+ * definition through the shared generic component runtime. When the user has no
+ * saved dashboard — or lacks the custom-report permission that lists them — it
+ * falls back to the shipped default definition. No KPI, chart or metric is
+ * named in this file.
  */
 export default function Dashboard({ onNavigate, onAddProduct, canViewReports = true }) {
+  const [available, setAvailable] = useState([]);
+  const [activeId, setActiveId] = useState(null);
   const [definition, setDefinition] = useState(null);
   const [components, setComponents] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
-  const loadDashboard = useCallback(async () => {
+  /* Saved dashboards permitted for this user, or an empty list when the user
+     cannot see them. Archived and inaccessible dashboards are excluded
+     server-side and therefore never offered here. */
+  useEffect(() => {
+    let alive = true;
+    apiRequest("/api/dashboards")
+      .then((response) => { if (alive && response.success) setAvailable(response.data || []); })
+      .catch(() => { if (alive) setAvailable([]); });
+    return () => { alive = false; };
+  }, []);
+
+  const loadDashboard = useCallback(async (dashboardId) => {
     try {
       setLoading(true);
       setError("");
-      const definitionResponse = await apiRequest("/api/dashboards/default");
-      if (!definitionResponse.success) throw new Error(definitionResponse.message || "Unable to load dashboard");
-      const value = definitionResponse.data;
+      let value = null;
+      if (dashboardId) {
+        const saved = await apiRequest(`/api/dashboards/${dashboardId}`);
+        if (saved.success) {
+          value = {
+            name: saved.data.name,
+            description: saved.data.description,
+            components: saved.data.components || [],
+            filters: saved.data.filters || [],
+          };
+        }
+      }
+      if (!value) {
+        /* Sensible default: the shipped default definition. */
+        const fallback = await apiRequest("/api/dashboards/default");
+        if (!fallback.success) throw new Error(fallback.message || "Unable to load dashboard");
+        value = fallback.data;
+      }
       setDefinition(value);
       /* One call runs every component through the one reporting engine. */
-      const run = await apiRequest("/api/dashboards/run", { method: "POST", body: JSON.stringify(value) });
-      setComponents(run.success ? run.data?.components || [] : []);
+      if (dashboardId) {
+        const run = await apiRequest(`/api/dashboards/${dashboardId}/run`, { method: "POST" });
+        setComponents(run.success ? run.data?.components || [] : []);
+      } else {
+        const run = await apiRequest("/api/dashboards/run", { method: "POST", body: JSON.stringify(value) });
+        setComponents(run.success ? run.data?.components || [] : []);
+      }
     } catch (err) {
       setError(err.message || "Unable to load dashboard");
     } finally {
@@ -37,7 +71,7 @@ export default function Dashboard({ onNavigate, onAddProduct, canViewReports = t
     }
   }, []);
 
-  useEffect(() => { loadDashboard(); }, [loadDashboard]);
+  useEffect(() => { loadDashboard(activeId); }, [activeId, loadDashboard]);
 
   if (loading) {
     return <div data-testid="dashboard-loading">
@@ -59,6 +93,9 @@ export default function Dashboard({ onNavigate, onAddProduct, canViewReports = t
     </div>;
   }
 
+  /* A saved dashboard can only be edited by someone who can see it, so the
+     action is only framed as "Customise" when one is selected. */
+  const canEditActive = !activeId || available.some((item) => item.id === activeId);
   const quickAction = "text-left rounded-xl p-4 transition-colors";
   const quickStyle = { background: "var(--onepos-card-bg, var(--onepos-surface-raised))", border: "1px solid var(--onepos-border)" };
 
@@ -69,9 +106,24 @@ export default function Dashboard({ onNavigate, onAddProduct, canViewReports = t
         {definition?.description ? <p className="onepos-page-subtitle">{definition.description}</p> : null}
       </div>
       {canViewReports ? (
-        <button onClick={() => onNavigate("Dashboards")} className="onepos-btn onepos-btn-sm" data-testid="dashboard-edit">
-          Customise dashboard
-        </button>
+        <div className="flex items-center gap-2">
+          {available.length > 1 ? (
+            <select
+              data-testid="dashboard-selector"
+              aria-label="Choose a dashboard"
+              className="onepos-input text-sm"
+              style={{ width: "auto", maxWidth: 260 }}
+              value={activeId || ""}
+              onChange={(event) => setActiveId(event.target.value || null)}
+            >
+              <option value="">Default dashboard</option>
+              {available.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+            </select>
+          ) : null}
+          <button onClick={() => onNavigate("Dashboards")} className="onepos-btn onepos-btn-sm" data-testid="dashboard-edit">
+            {canEditActive ? "Customise dashboard" : "Open Dashboard Builder"}
+          </button>
+        </div>
       ) : null}
     </div>
 

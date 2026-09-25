@@ -35,9 +35,10 @@ test("workflow create actions scope company and store values correctly", async (
   const calls = [];
   const db = async (sql, params) => {
     calls.push({ sql, params });
-    if (sql.startsWith("SELECT * FROM platform_objects")) return { rows: [{ id: "child-object", object_key: "ledger_entries", source_table: "ledger_entries", company_scoped: true, store_scoped: true }] };
+    if (sql.startsWith("SELECT * FROM platform_objects")) return { rows: [{ id: "child-object", object_key: "ledger_entries", source_table: "ledger_entries", company_id: "company-a", company_scoped: true, store_scoped: true }] };
     if (sql.startsWith("SELECT * FROM platform_relationships")) return { rows: [{ child_object_id: "child-object", child_field_id: "field-1" }] };
-    if (sql.startsWith("SELECT * FROM platform_fields")) return { rows: [{ id: "field-1", source_column: "sale_id", api_name: "sale_id" }] };
+    if (sql.startsWith("SELECT * FROM platform_fields")) return { rows: [{ id: "field-1", source_column: "sale_id", api_name: "sale_id", writable: true, active: true }] };
+    if (sql.startsWith("SELECT api_name, source_column")) return { rows: [{ source_column: "amount", api_name: "amount", writable: true, active: true }] };
     if (sql.startsWith("INSERT INTO \"ledger_entries\"")) return { rows: [{ id: "ledger-1", sale_id: "sale-1", amount: 50, company_id: "company-a", store_id: "store-a" }] };
     return { rows: [] };
   };

@@ -377,31 +377,21 @@ export const WORKFLOW_ACTION_REGISTRY = Object.freeze([
     },
     async: false,
     requiredPermissions: ["records.create"],
-    executor: async ({ db, action, req, object, companyId }) => {
-      let targetObject = object || null;
-      if (!targetObject && (action.objectId || action.object_key || action.objectKey)) {
-        targetObject = await resolveTargetObjectMetadata({ db, objectId: action.objectId || action.object_id || null, objectKey: action.objectKey || action.object_key || null, companyId: req?.user?.companyId || companyId || null });
-      }
-      if (!targetObject) {
-        targetObject = {
-          source_table: action.sourceTable || action.targetTable || action.objectKey || null,
-          company_scoped: !!(action.companyScoped || action.company_scoped),
-          store_scoped: !!(action.storeScoped || action.store_scoped),
-        };
-      }
-      const table = targetObject?.source_table || action.sourceTable || action.targetTable || action.objectKey || null;
-      if (!table) throw new Error("Create Record requires a target object or source table");
+    executor: async ({ db, action, req, object, companyId, fields }) => {
+      const targetObject = await resolveWorkflowTargetObject({ db, action, object, companyId, req });
+      const table = targetObject.source_table;
       const entries = Object.entries(action.fieldValues || {});
       if (!entries.length) return { status: "completed", created: null };
-      const columns = entries.map(([field]) => `"${String(field).replace(/"/g, "")}"`);
+      const mappedFields = await resolveWorkflowWritableFields({ db, object: targetObject, fields, entries });
+      const columns = mappedFields.map((field) => `"${field.source_column}"`);
       const params = entries.map(([, value]) => value);
       const values = entries.map((_, index) => `$${index + 1}`);
-      if (req?.user?.companyId && (targetObject?.company_scoped || action.companyScoped || action.company_scoped)) {
+      if (req?.user?.companyId && targetObject.company_scoped) {
         columns.push('"company_id"');
         values.push(`$${params.length + 1}`);
         params.push(req.user.companyId);
       }
-      if (req?.user?.storeId && (targetObject?.store_scoped || action.storeScoped || action.store_scoped)) {
+      if (req?.user?.storeId && targetObject.store_scoped) {
         columns.push('"store_id"');
         values.push(`$${params.length + 1}`);
         params.push(req.user.storeId);
@@ -432,20 +422,21 @@ export const WORKFLOW_ACTION_REGISTRY = Object.freeze([
     },
     async: false,
     requiredPermissions: ["records.update"],
-    executor: async ({ db, action, object, req, companyId }) => {
-      const table = object?.source_table || action.sourceTable;
-      if (!table) throw new Error("Update Record requires an object with a source table");
+    executor: async ({ db, action, object, req, companyId, fields }) => {
+      const targetObject = await resolveWorkflowTargetObject({ db, action, object, companyId, req });
+      const table = targetObject.source_table;
       const entries = Object.entries(action.fieldValues || {});
       if (!entries.length) return { status: "completed", updated: null };
-      const sets = entries.map(([field], index) => `"${String(field).replace(/"/g, "")}"=$${index + 1}`).join(", ");
+      const mappedFields = await resolveWorkflowWritableFields({ db, object: targetObject, fields, entries });
+      const sets = mappedFields.map((field, index) => `"${field.source_column}"=$${index + 1}`).join(", ");
       const params = [...entries.map(([, value]) => value), action.recordId];
       const clauses = ["id=$" + params.length];
-      if (object?.company_scoped || action.companyScoped) {
-        params.push(req?.user?.companyId || action.companyId || companyId || null);
+      if (targetObject.company_scoped) {
+        params.push(req?.user?.companyId || companyId || null);
         clauses.push(`company_id=$${params.length}`);
       }
-      if (object?.store_scoped || action.storeScoped) {
-        params.push(req?.user?.storeId || action.storeId || null);
+      if (targetObject.store_scoped) {
+        params.push(req?.user?.storeId || null);
         clauses.push(`store_id=$${params.length}`);
       }
       const query = `UPDATE "${table}" SET ${sets} WHERE ${clauses.join(" AND ")} RETURNING *`;
@@ -463,15 +454,16 @@ export const WORKFLOW_ACTION_REGISTRY = Object.freeze([
     },
     async: false,
     requiredPermissions: ["records.update"],
-    executor: async ({ db, action, object, req }) => {
+    executor: async ({ db, action, object, req, companyId }) => {
       if (!action.recordId) throw new Error("Update Related Record requires a recordId");
-      let table = object?.source_table || action.relatedTable || action.sourceTable || null;
-      if (!table && db && typeof db === "function") {
-        const relationshipResult = await db("SELECT * FROM platform_relationships WHERE relationship_key=$1 AND parent_object_id=$2 AND active=true LIMIT 1", [action.relationshipKey, object?.id || action.parentObjectId || null]);
+      const parentObject = await resolveWorkflowTargetObject({ db, action: { objectId: action.parentObjectId }, object, companyId, req });
+      let table = null;
+      if (db && typeof db === "function") {
+        const relationshipResult = await db("SELECT * FROM platform_relationships WHERE relationship_key=$1 AND parent_object_id=$2 AND active=true LIMIT 1", [action.relationshipKey, parentObject.id]);
         const relationship = relationshipResult.rows[0];
         if (relationship) {
-          const childObjectResult = await db("SELECT * FROM platform_objects WHERE id=$1 AND active=true LIMIT 1", [relationship.child_object_id]);
-          table = childObjectResult.rows[0]?.source_table || null;
+          const childObject = await resolveTargetObjectMetadata({ db, objectId: relationship.child_object_id, companyId: companyId || req?.user?.companyId });
+          table = childObject?.source_table || null;
         }
       }
       if (!table) throw new Error("Update Related Record requires a target table");
@@ -500,17 +492,17 @@ export const WORKFLOW_ACTION_REGISTRY = Object.freeze([
     requiredPermissions: ["records.create"],
     executor: async ({ db, action, req, object, recordId, companyId }) => {
       let relationship = action.relationship || null;
-      let table = object?.source_table || action.relatedTable || action.sourceTable || null;
+      const parentObject = await resolveWorkflowTargetObject({ db, action: { objectId: action.parentObjectId || action.parent_object_id }, object, companyId, req });
+      let table = null;
       let targetObject = null;
       const parentRecordId = action.recordId || action.parentRecordId || recordId || null;
       const relationshipKey = action.relationshipKey || action.relationship_key || null;
       if (relationshipKey && db && typeof db === "function") {
-        const relationshipResult = await db("SELECT * FROM platform_relationships WHERE relationship_key=$1 AND parent_object_id=$2 AND active=true LIMIT 1", [relationshipKey, object?.id || action.parentObjectId || action.parent_object_id || null]);
+        const relationshipResult = await db("SELECT * FROM platform_relationships WHERE relationship_key=$1 AND parent_object_id=$2 AND active=true LIMIT 1", [relationshipKey, parentObject.id]);
         relationship = relationshipResult.rows[0] || relationship;
       }
       if (relationship?.child_object_id && db && typeof db === "function") {
-        const objectResult = await db("SELECT * FROM platform_objects WHERE id=$1 AND active=true LIMIT 1", [relationship.child_object_id]);
-        targetObject = objectResult.rows[0] || null;
+        targetObject = await resolveTargetObjectMetadata({ db, objectId: relationship.child_object_id, companyId: companyId || req?.user?.companyId });
         table = targetObject?.source_table || table;
       }
       if (!table) throw new Error("Create Related Record requires a target table");
@@ -552,13 +544,13 @@ export const WORKFLOW_ACTION_REGISTRY = Object.freeze([
     },
     async: false,
     requiredPermissions: ["records.delete"],
-    executor: async ({ db, action, object, req }) => {
-      const table = object?.source_table || action.sourceTable;
-      if (!table) throw new Error("Delete Record requires a target object");
+    executor: async ({ db, action, object, req, companyId }) => {
+      const targetObject = await resolveWorkflowTargetObject({ db, action, object, companyId, req });
+      const table = targetObject.source_table;
       const hasActive = await db(`SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = $1 AND column_name = 'active'`, [table]);
       const result = hasActive.rows.length
-        ? await db(`UPDATE "${table}" SET active=false WHERE id=$1 RETURNING *`, [action.recordId])
-        : await db(`DELETE FROM "${table}" WHERE id=$1 RETURNING *`, [action.recordId]);
+        ? await db(`UPDATE "${table}" SET active=false WHERE id=$1${targetObject.company_scoped ? " AND company_id=$2" : ""} RETURNING *`, targetObject.company_scoped ? [action.recordId, req?.user?.companyId || companyId] : [action.recordId])
+        : await db(`DELETE FROM "${table}" WHERE id=$1${targetObject.company_scoped ? " AND company_id=$2" : ""} RETURNING *`, targetObject.company_scoped ? [action.recordId, req?.user?.companyId || companyId] : [action.recordId]);
       return { status: result.rows.length ? "completed" : "skipped", deleted: result.rows[0] || null };
     },
   },
@@ -572,11 +564,14 @@ export const WORKFLOW_ACTION_REGISTRY = Object.freeze([
     },
     async: false,
     requiredPermissions: ["records.update"],
-    executor: async ({ db, action, object, req }) => {
-      const table = object?.source_table || action.sourceTable;
-      if (!table) throw new Error("Assign Record requires a target object");
+    executor: async ({ db, action, object, req, companyId }) => {
+      const targetObject = await resolveWorkflowTargetObject({ db, action, object, companyId, req });
+      const table = targetObject.source_table;
       const assignee = action.assignee ?? action.assignedTo;
-      const result = await db(`UPDATE "${table}" SET assigned_to=$1 WHERE id=$2 RETURNING *`, [assignee, action.recordId]);
+      const params = [assignee, action.recordId];
+      const scope = targetObject.company_scoped ? " AND company_id=$3" : "";
+      if (targetObject.company_scoped) params.push(req?.user?.companyId || companyId);
+      const result = await db(`UPDATE "${table}" SET assigned_to=$1 WHERE id=$2${scope} RETURNING *`, params);
       return { status: result.rows.length ? "completed" : "skipped", updated: result.rows[0] || null };
     },
   },
@@ -995,16 +990,61 @@ export function getRegisteredFunctionsRegistry() {
 }
 
 async function resolveTargetObjectMetadata({ db, objectId, objectKey, companyId }) {
-  if (!db || typeof db !== "function") return null;
-  if (objectId) {
-    const result = await db("SELECT * FROM platform_objects WHERE id=$1 AND active=true LIMIT 1", [objectId]);
-    if (result.rows[0]) return result.rows[0];
+  if (!db || typeof db !== "function" || !companyId) return null;
+  const where = objectId ? "id=$1" : "object_key=$1";
+  const value = objectId || objectKey;
+  if (!value) return null;
+  const result = await db(
+    `SELECT * FROM platform_objects
+      WHERE ${where} AND company_id=$2 AND active=true
+        AND source_table IS NOT NULL
+      LIMIT 1`,
+    [value, companyId]
+  );
+  return result.rows[0] || null;
+}
+
+async function resolveWorkflowTargetObject({ db, action = {}, object = null, companyId, req }) {
+  const runtimeCompanyId = companyId || req?.user?.companyId || null;
+  if (!runtimeCompanyId || (req?.user?.companyId && String(req.user.companyId) !== String(runtimeCompanyId))) {
+    throw new Error("Workflow target company context is invalid");
   }
-  if (objectKey) {
-    const result = await db("SELECT * FROM platform_objects WHERE object_key=$1 AND active=true AND (company_id IS NULL OR company_id=$2) LIMIT 1", [objectKey, companyId || null]);
-    if (result.rows[0]) return result.rows[0];
+  if (action.sourceTable || action.targetTable || action.relatedTable) {
+    throw new Error("Workflow target tables must be resolved from tenant-scoped Platform metadata");
   }
-  return null;
+  const requestedObjectId = action.objectId || action.object_id || null;
+  const requestedObjectKey = action.objectKey || action.object_key || null;
+  const objectId = requestedObjectId || (!requestedObjectKey ? object?.id || null : null);
+  const objectKey = requestedObjectKey || (!objectId ? object?.object_key || object?.api_name || null : null);
+  const target = await resolveTargetObjectMetadata({ db, objectId, objectKey, companyId: runtimeCompanyId });
+  if (!target) throw new Error("Workflow target object is not available for this company");
+  if (!isSafeIdentifier(target.source_table) || target.company_id == null || String(target.company_id) !== String(runtimeCompanyId)) {
+    throw new Error("Workflow target object is not permitted");
+  }
+  return target;
+}
+
+async function resolveWorkflowWritableFields({ db, object, fields = [], entries }) {
+  const requested = new Map(entries.map(([name]) => [String(name), true]));
+  const metadata = Array.isArray(fields) && fields.length
+    ? fields
+    : (await db(
+      `SELECT api_name, source_column, writable, active
+         FROM platform_fields
+        WHERE object_id=$1 AND active=true AND writable=true`,
+      [object.id]
+    )).rows;
+  const resolved = [];
+  for (const [name] of requested) {
+    const field = metadata.find((candidate) =>
+      String(candidate.api_name || "") === name || String(candidate.source_column || "") === name
+    );
+    if (!field || field.active === false || field.writable === false || !isSafeIdentifier(field.source_column || field.api_name)) {
+      throw new Error(`Workflow field "${name}" is not writable for the target object`);
+    }
+    resolved.push({ source_column: field.source_column || field.api_name });
+  }
+  return resolved;
 }
 
 export function createWorkflowRun({ db, companyId, workflowId, workflowName, objectId, recordId, triggerKey, parentRunId = null, startedAt = new Date(), status = "PENDING", metadata = {} }) {

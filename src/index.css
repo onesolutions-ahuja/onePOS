@@ -42,8 +42,10 @@
   --onepos-sidebar-width: 248px;
   --onepos-sidebar-width-collapsed: 68px;
   --onepos-header-height: 58px;
-  --onepos-font-display: "Inter", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
-  --onepos-font-body: "Inter", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  --onepos-font-display: -apple-system, BlinkMacSystemFont, "SF Pro Text",
+    "SF Pro Display", Inter, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  --onepos-font-body: -apple-system, BlinkMacSystemFont, "SF Pro Text",
+    "SF Pro Display", Inter, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
   --onepos-motion-fast: 140ms;
   --onepos-motion-normal: 220ms;
   --onepos-motion-slow: 320ms;
