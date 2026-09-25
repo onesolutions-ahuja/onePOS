@@ -38,6 +38,13 @@ export function validateDashboardDefinition(input = {}) {
     if (!COMPONENT_TYPES.includes(type)) throw new Error(`Invalid dashboard component at position ${index + 1}`);
     const config = component?.config && typeof component.config === "object" ? component.config : {};
     if (type !== "text" && !config.reportId && !config.report) throw new Error(`Component ${index + 1} must reference a report`);
+    if (config.report && config.report.dataSource && !["sales", "platform_object"].includes(String(config.report.dataSource))) {
+      throw new Error(`Component ${index + 1} uses an unsupported data source`);
+    }
+    if (config.report) {
+      if (config.report.dataSource && !["sales", "platform_object"].includes(String(config.report.dataSource))) throw new Error(`Component ${index + 1} has an unsupported data source`);
+      if (!Array.isArray(config.report.fields) || !config.report.fields.length) throw new Error(`Component ${index + 1} must select at least one field`);
+    }
     return {
       id: String(component.id || crypto.randomUUID()),
       type,

@@ -3,6 +3,7 @@ const DB_VERSION = 2;
 const STORE_NAME = "catalogues";
 const MODIFIER_STORE_NAME = "modifiers";
 const FALLBACK_PREFIX = "onepos_catalogue_v1_";
+const CACHE_SCHEMA_VERSION = 1;
 
 function cacheKey(tenant) {
   return `${tenant?.companyId || ""}:${tenant?.storeId || ""}`;
@@ -46,11 +47,16 @@ export async function loadCatalogueCache(tenant) {
   try {
     const db = await openDatabase();
     if (!db) return fallbackRead(key);
-    return await new Promise((resolve, reject) => {
+    const value = await new Promise((resolve, reject) => {
       const request = db.transaction(STORE_NAME, "readonly").objectStore(STORE_NAME).get(key);
       request.onsuccess = () => resolve(request.result || null);
       request.onerror = () => reject(request.error);
     });
+    if (value && value.schemaVersion !== CACHE_SCHEMA_VERSION) {
+      await clearCatalogueCache(tenant);
+      return null;
+    }
+    return value;
   } catch {
     return fallbackRead(key);
   }
@@ -59,7 +65,7 @@ export async function loadCatalogueCache(tenant) {
 export async function saveCatalogueCache(tenant, catalogue) {
   if (!tenant?.companyId || !tenant?.storeId || !catalogue) return false;
   const value = {
-    schemaVersion: 1,
+    schemaVersion: CACHE_SCHEMA_VERSION,
     tenant: { companyId: tenant.companyId, storeId: tenant.storeId },
     savedAt: new Date().toISOString(),
     version: catalogue.version || null,
@@ -98,9 +104,31 @@ export function applyCatalogueChanges(current, payload) {
   };
 }
 
-export function clearCatalogueCache(tenant) {
+export async function clearCatalogueCache(tenant) {
   if (!tenant?.companyId || !tenant?.storeId) return;
+  const key = cacheKey(tenant);
   try { localStorage.removeItem(`${FALLBACK_PREFIX}${cacheKey(tenant)}`); } catch { /* storage unavailable */ }
+  try { localStorage.removeItem(`${FALLBACK_PREFIX}modifier_${key}`); } catch { /* storage unavailable */ }
+  try {
+    const db = await openDatabase();
+    if (!db) return;
+    await new Promise((resolve, reject) => {
+      const transaction = db.transaction([STORE_NAME, MODIFIER_STORE_NAME], "readwrite");
+      transaction.objectStore(STORE_NAME).delete(key);
+      const modifiers = transaction.objectStore(MODIFIER_STORE_NAME).openCursor();
+      modifiers.onsuccess = () => {
+        const cursor = modifiers.result;
+        if (!cursor) return;
+        if (String(cursor.key).startsWith(`${key}:`)) cursor.delete();
+        cursor.continue();
+      };
+      transaction.oncomplete = resolve;
+      transaction.onerror = () => reject(transaction.error);
+      transaction.onabort = () => reject(transaction.error);
+    });
+  } catch {
+    // The local fallback was already cleared; a later refresh can retry IDB eviction.
+  }
 }
 
 
@@ -128,7 +156,7 @@ export async function saveModifierCache(tenant, productId, rows) {
   if (!tenant?.companyId || !tenant?.storeId || !productId || !Array.isArray(rows)) return false;
   const key = modifierKey(tenant, productId);
   const value = {
-    schemaVersion: 1,
+    schemaVersion: CACHE_SCHEMA_VERSION,
     tenant: { companyId: tenant.companyId, storeId: tenant.storeId },
     productId: String(productId),
     savedAt: new Date().toISOString(),

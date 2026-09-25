@@ -110,6 +110,8 @@ function BarChart({ points, config }) {
     <div className="flex gap-1.5 mt-1.5">
       {shown.map((point) => <span key={point.label} className="flex-1 min-w-0 text-center text-[10px] truncate" style={{ color: "var(--onepos-text-muted)" }}>{point.label}</span>)}
     </div>
+  </div>;
+}
 
 function MetricTile({ points, config }) {
   if (!points.length) return <Empty>Configure a datasource and metric for this KPI.</Empty>;
@@ -128,6 +130,13 @@ function RecordTable({ result }) {
   const columns = Array.isArray(result?.data?.columns) ? result.data.columns : [];
   const rows = Array.isArray(result?.data?.rows) ? result.data.rows : [];
   if (!rows.length) return <Empty />;
+  return <div className="h-full overflow-auto">
+    <table className="w-full text-sm">
+      <thead><tr>{columns.map((column) => <th key={column} className="text-left font-semibold pb-2" style={{ color: "var(--onepos-text-secondary)" }}>{column}</th>)}</tr></thead>
+      <tbody>{rows.map((row, index) => <tr key={index} className="border-t" style={{ borderColor: "var(--onepos-border)" }}>{columns.map((column) => <td key={column} className="py-1.5 truncate">{String(row[column] ?? "—")}</td>)}</tr>)}</tbody>
+    </table>
+  </div>;
+}
 
 function Card({ component, state, children }) {
   const type = component.type === "chart" ? (component.config?.chartType || "bar") : component.type;
@@ -169,14 +178,3 @@ export function renderDashboardComponent(component, result, state) {
 }
 
 export default renderDashboardComponent;
-
-  return <div className="h-full overflow-auto">
-    <table className="w-full text-sm">
-      <thead><tr>{columns.map((column) => <th key={column} className="text-left font-semibold pb-2" style={{ color: "var(--onepos-text-secondary)" }}>{column}</th>)}</tr></thead>
-      <tbody>{rows.map((row, index) => <tr key={index} className="border-t" style={{ borderColor: "var(--onepos-border)" }}>{columns.map((column) => <td key={column} className="py-1.5 truncate">{String(row[column] ?? "—")}</td>)}</tr>)}</tbody>
-    </table>
-  </div>;
-}
-
-  </div>;
-}
