@@ -105,6 +105,7 @@ export function packageDefinition(entry) {
     online_orders: "OneOnline",
     integrations: "OneIntegrations",
     uber_eats: "Uber Eats",
+    finance_core: "Finance Core",
   };
   const packageDescriptions = {
     retail_pos: "Sales, payments, returns and order processing.",
@@ -122,6 +123,7 @@ export function packageDefinition(entry) {
     online_orders: "Online order intake and preparation.",
     integrations: "External delivery, payment and communication integrations.",
     uber_eats: "Uber Eats connection and online order integration.",
+    finance_core: "Reusable financial ledger and supplier-accounting foundation.",
   };
   const entitlementKeys = {
     retail_pos: "pos", products: "pos", inventory: "inventory", batch_expiry: "batch_expiry",
@@ -139,6 +141,7 @@ export function packageDefinition(entry) {
     reports: [],
     platform: [],
     uber_eats: ["integrations", "online_orders"],
+    finance_core: ["suppliers"],
   };
   const packageType = entry.packageType === "FOUNDATION" || entry.technical === true
     ? "FOUNDATION"
@@ -726,6 +729,144 @@ export function packageDefinition(entry) {
         listViews: [
           { objectKey: "inventory_batch", viewKey: "all", label: "All Batches", columns: ["product_id","batch_number","expiry_date","quantity"], isDefault: true },
           { objectKey: "inventory_batch", viewKey: "expiring", label: "Expiring Batches", columns: ["product_id","batch_number","expiry_date","quantity"] }
+        ],
+      } : {}),
+      ...(entry.key === "finance_core" ? {
+        objects: [
+          {
+            objectKey: "supplier_invoice",
+            metadataScope: "global",
+            label: "Supplier Invoice",
+            pluralLabel: "Supplier Invoices",
+            description: "Authoritative supplier invoice records.",
+            sourceTable: "supplier_invoices",
+            required: true,
+            fields: [
+              { apiName: "company_id", label: "Company", fieldType: "lookup", required: true, writable: false },
+              { apiName: "supplier_id", label: "Supplier", fieldType: "lookup", required: true, writable: false },
+              { apiName: "store_id", label: "Store", fieldType: "lookup", writable: false },
+              { apiName: "purchase_id", label: "Purchase Order", fieldType: "lookup", writable: false },
+              { apiName: "invoice_number", label: "Invoice Number", fieldType: "text", required: true, writable: false },
+              { apiName: "invoice_date", label: "Invoice Date", fieldType: "date", required: true, writable: false },
+              { apiName: "due_date", label: "Due Date", fieldType: "date", writable: false },
+              { apiName: "subtotal", label: "Subtotal", fieldType: "currency", required: true, writable: false },
+              { apiName: "tax", label: "VAT / Tax", fieldType: "currency", required: true, writable: false },
+              { apiName: "total", label: "Total", fieldType: "currency", required: true, writable: false },
+              { apiName: "status", label: "Status", fieldType: "picklist", required: true, writable: false, options: ["OPEN", "PARTIALLY_PAID", "PAID", "VOID"] },
+              { apiName: "created_at", label: "Created", fieldType: "datetime", writable: false },
+              { apiName: "updated_at", label: "Updated", fieldType: "datetime", writable: false },
+            ],
+          },
+          {
+            objectKey: "supplier_payment",
+            metadataScope: "global",
+            label: "Supplier Payment",
+            pluralLabel: "Supplier Payments",
+            description: "Authoritative supplier-account payment records.",
+            sourceTable: "supplier_payments",
+            required: true,
+            fields: [
+              { apiName: "company_id", label: "Company", fieldType: "lookup", required: true, writable: false },
+              { apiName: "supplier_id", label: "Supplier", fieldType: "lookup", required: true, writable: false },
+              { apiName: "store_id", label: "Store", fieldType: "lookup", writable: false },
+              { apiName: "amount", label: "Amount", fieldType: "currency", required: true, writable: false },
+              { apiName: "payment_date", label: "Payment Date", fieldType: "date", required: true, writable: false },
+              { apiName: "payment_method", label: "Payment Method", fieldType: "text", writable: false },
+              { apiName: "reference", label: "Reference", fieldType: "text", writable: false },
+              { apiName: "status", label: "Status", fieldType: "picklist", required: true, writable: false, options: ["PENDING", "COMPLETED", "CANCELLED"] },
+              { apiName: "created_at", label: "Created", fieldType: "datetime", writable: false },
+            ],
+          },
+          {
+            objectKey: "supplier_payment_allocation",
+            metadataScope: "global",
+            label: "Payment Allocation",
+            pluralLabel: "Payment Allocations",
+            description: "Authoritative junction between supplier payments and invoices.",
+            sourceTable: "supplier_payment_allocations",
+            required: true,
+            fields: [
+              { apiName: "payment_id", label: "Supplier Payment", fieldType: "lookup", required: true, writable: false },
+              { apiName: "invoice_id", label: "Supplier Invoice", fieldType: "lookup", required: true, writable: false },
+              { apiName: "amount", label: "Allocated Amount", fieldType: "currency", required: true, writable: false },
+            ],
+          },
+          {
+            objectKey: "supplier_ledger",
+            metadataScope: "global",
+            label: "Supplier Ledger Entry",
+            pluralLabel: "Supplier Ledger Entries",
+            description: "Authoritative supplier-account ledger entries.",
+            sourceTable: "supplier_ledger_entries",
+            required: true,
+            fields: [
+              { apiName: "company_id", label: "Company", fieldType: "lookup", required: true, writable: false },
+              { apiName: "supplier_id", label: "Supplier", fieldType: "lookup", required: true, writable: false },
+              { apiName: "store_id", label: "Store", fieldType: "lookup", writable: false },
+              { apiName: "entry_type", label: "Entry Type", fieldType: "picklist", required: true, writable: false, options: ["INVOICE", "PAYMENT", "RETURN_CREDIT", "OPENING"] },
+              { apiName: "reference_type", label: "Reference Type", fieldType: "text", writable: false },
+              { apiName: "reference_id", label: "Source Reference", fieldType: "lookup", writable: false },
+              { apiName: "reference", label: "Reference", fieldType: "text", writable: false },
+              { apiName: "amount", label: "Amount", fieldType: "currency", required: true, writable: false },
+              { apiName: "debit", label: "Debit", fieldType: "boolean", required: true, writable: false },
+              { apiName: "created_at", label: "Created", fieldType: "datetime", writable: false },
+            ],
+          },
+          {
+            objectKey: "financial_ledger",
+            metadataScope: "global",
+            label: "Financial Ledger Entry",
+            pluralLabel: "Financial Ledger Entries",
+            description: "Shared financial ledger contract backed by existing entries.",
+            sourceTable: "financial_ledger_entries",
+            required: true,
+            fields: [
+              { apiName: "company_id", label: "Company", fieldType: "lookup", required: true, writable: false },
+              { apiName: "transaction_id", label: "Transaction", fieldType: "lookup", writable: false },
+              { apiName: "payment_id", label: "Payment", fieldType: "lookup", writable: false },
+              { apiName: "customer_id", label: "Customer", fieldType: "lookup", writable: false },
+              { apiName: "supplier_id", label: "Supplier", fieldType: "lookup", writable: false },
+              { apiName: "supplier_invoice_id", label: "Supplier Invoice", fieldType: "lookup", writable: false },
+              { apiName: "transaction_type", label: "Transaction Type", fieldType: "text", required: true, writable: false },
+              { apiName: "debit", label: "Debit", fieldType: "currency", writable: false },
+              { apiName: "credit", label: "Credit", fieldType: "currency", writable: false },
+              { apiName: "amount", label: "Amount", fieldType: "currency", required: true, writable: false },
+              { apiName: "net_amount", label: "Net Amount", fieldType: "currency", writable: false },
+              { apiName: "vat_amount", label: "VAT / Tax", fieldType: "currency", writable: false },
+              { apiName: "reference", label: "Reference", fieldType: "text", writable: false },
+              { apiName: "status", label: "Status", fieldType: "text", writable: false },
+              { apiName: "created_at", label: "Created", fieldType: "datetime", writable: false },
+            ],
+          },
+        ],
+        relationships: [
+          { parentObjectKey: "supplier", childObjectKey: "supplier_invoice", relationshipKey: "invoices", relationshipType: "one_to_many", childFieldApiName: "supplier_id", required: true },
+          { parentObjectKey: "supplier_invoice", childObjectKey: "supplier", relationshipKey: "supplier", relationshipType: "lookup", parentFieldApiName: "supplier_id", required: true },
+          { parentObjectKey: "supplier", childObjectKey: "supplier_payment", relationshipKey: "payments", relationshipType: "one_to_many", childFieldApiName: "supplier_id", required: true },
+          { parentObjectKey: "supplier_payment", childObjectKey: "supplier", relationshipKey: "supplier", relationshipType: "lookup", parentFieldApiName: "supplier_id", required: true },
+          { parentObjectKey: "supplier_payment", childObjectKey: "supplier_payment_allocation", relationshipKey: "allocations", relationshipType: "one_to_many", childFieldApiName: "payment_id", required: true },
+          { parentObjectKey: "supplier_payment_allocation", childObjectKey: "supplier_payment", relationshipKey: "payment", relationshipType: "lookup", parentFieldApiName: "payment_id", required: true },
+          { parentObjectKey: "supplier_payment_allocation", childObjectKey: "supplier_invoice", relationshipKey: "invoice", relationshipType: "lookup", parentFieldApiName: "invoice_id", required: true },
+          { parentObjectKey: "supplier_invoice", childObjectKey: "purchase", relationshipKey: "purchase_order", relationshipType: "lookup", parentFieldApiName: "purchase_id" },
+          { parentObjectKey: "supplier_ledger", childObjectKey: "supplier", relationshipKey: "supplier", relationshipType: "lookup", parentFieldApiName: "supplier_id", required: true },
+          { parentObjectKey: "financial_ledger", childObjectKey: "supplier", relationshipKey: "supplier", relationshipType: "lookup", parentFieldApiName: "supplier_id" },
+        ],
+        listViews: [
+          { objectKey: "supplier_invoice", viewKey: "supplier_invoices", label: "Supplier Invoices", columns: ["invoice_number", "supplier_id", "invoice_date", "due_date", "total", "status"] },
+          { objectKey: "supplier_payment", viewKey: "supplier_payments", label: "Supplier Payments", columns: ["supplier_id", "payment_date", "amount", "payment_method", "reference", "status"] },
+          { objectKey: "supplier_ledger", viewKey: "supplier_ledger", label: "Supplier Ledger", columns: ["supplier_id", "entry_type", "amount", "debit", "reference", "created_at"] },
+          { objectKey: "financial_ledger", viewKey: "financial_ledger", label: "Financial Ledger", columns: ["transaction_type", "supplier_id", "amount", "debit", "credit", "reference", "created_at"] },
+        ],
+        actions: [
+          { actionKey: "supplier_invoice.manage", label: "Manage Supplier Invoices", handlerKey: "SUPPLIER_INVOICE_MANAGE", requiredPermission: "purchase.edit" },
+          { actionKey: "supplier_payment.manage", label: "Manage Supplier Payments", handlerKey: "SUPPLIER_PAYMENT_MANAGE", requiredPermission: "purchase.edit" },
+          { actionKey: "supplier_ledger.view", label: "View Supplier Ledger", handlerKey: "SUPPLIER_LEDGER_VIEW", requiredPermission: "purchase.view" },
+        ],
+        permissionDeclarations: [
+          { permission: "purchase.view", label: "View supplier accounting" },
+          { permission: "purchase.edit", label: "Manage supplier invoices and payments" },
+          { permission: "inventory.adjust", label: "Post supplier account adjustments" },
+          { permission: "reports.payments.view", label: "View financial ledger" },
         ],
       } : {}),
       ...(entry.key === "hospitality" ? {
@@ -1414,8 +1555,16 @@ export async function provisionPackageMetadata(db, { packageId, moduleId, compan
       if (!fieldResult.rows[0]?.id) throw new Error(`Package relationship field not found: ${childFieldKey}`);
       if (relationshipType !== "lookup") childFieldId = fieldResult.rows[0].id;
     }
-    const registeredRelationship = await db(
-      `INSERT INTO platform_relationships
+    const parentFieldKey = relationship.parentFieldApiName || relationship.parent_field_api_name;
+    const relationshipType = relationship.relationshipType || relationship.relationship_type || "lookup";
+    if (relationshipType === "lookup" && parentFieldKey) {
+      const parentFieldResult = await db(
+        "SELECT id FROM platform_fields WHERE object_id=$1 AND api_name=$2 AND (company_id IS NULL OR company_id=$3) LIMIT 1",
+        [parentObjectId, parentFieldKey, companyId]
+      );
+      if (!parentFieldResult.rows.length) throw new Error(`Package relationship field not found: ${parentFieldKey}`);
+    }
+    const registeredRelationship = await db(      `INSERT INTO platform_relationships
        (parent_object_id,child_object_id,relationship_key,relationship_type,child_field_id,active,source_package_id,source_package_version,managed,package_required)
        VALUES ($1,$2,$3,$4,$5,true,$6,$7,true,$8)
        ON CONFLICT (parent_object_id,relationship_key)
