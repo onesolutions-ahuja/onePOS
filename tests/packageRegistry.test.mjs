@@ -253,7 +253,7 @@ test("Loyalty Core is a hidden foundation over the existing loyalty records", ()
   ]);
 });
 
- with dependencies and safe metadata", () => {
+test("Uber Eats is declared as a licensed package with dependencies and safe metadata", () => {
   const definition = packageDefinitions().find((pkg) => pkg.packageKey === "uber_eats");
   assert.ok(definition);
   assert.equal(definition.name, "Uber Eats");
@@ -620,6 +620,8 @@ test("package catalog and Uber Eats installation preserve existing client config
       description: definition.description,
       module_key: definition.moduleKey,
       manifest: definition.manifest,
+      package_type: definition.manifest.packageType,
+      installable: definition.manifest.installable,
     }));
     const clientConfiguration = {
       environment: "production",

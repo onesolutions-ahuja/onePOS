@@ -14,6 +14,13 @@ function metadataDatabase() {
   const query = async (sql, params = []) => {
     if (sql === platformSchema) return { rows: [] };
     if (sql.includes("INSERT INTO platform_modules")) return { rows: [{ id: "retail-module" }] };
+    if (sql.startsWith("UPDATE platform_objects employee")) return { rows: [] };
+    if (sql.startsWith("DELETE FROM package_metadata_ownership ownership")) return { rows: [] };
+    if (sql.startsWith("UPDATE platform_fields field")) return { rows: [] };
+    if (sql.startsWith("UPDATE platform_objects AS supplier")) return { rows: [] };
+    if (sql.startsWith("SELECT id FROM platform_modules WHERE module_key=$1")) {
+      return { rows: [{ id: `module-${params[0]}` }] };
+    }
     if (sql.includes("INSERT INTO platform_objects")) {
       const [module_id, object_key, label, plural_label, source_table] = params;
       const existing = objects.get(object_key);
@@ -56,7 +63,7 @@ async function metadataApi(t, db, companyId = "company-a") {
   };
 }
 
-test("inactive Customer reproduces the five-object API response and bootstrap restores the same row", async t => {
+test("inactive Customer is omitted and bootstrap restores the same canonical object", async t => {
   const db = metadataDatabase();
   await initializePlatformMetadata(db);
   const customer = db.objects.get("customer");
@@ -72,7 +79,7 @@ test("inactive Customer reproduces the five-object API response and bootstrap re
   assert.equal(db.objects.get("customer").source_table, "customers");
   assert.equal(db.objects.get("customer").company_scoped, true);
   assert.equal(db.objects.get("customer").company_id, null);
-  assert.equal(db.objects.size, 6);
+  assert.equal(db.objects.size, CORE.length);
   assert.deepEqual([...db.fields.values()].map(field => field.id), fieldIds);
 });
 

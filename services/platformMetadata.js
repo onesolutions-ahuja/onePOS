@@ -822,6 +822,20 @@ export async function initializePlatformMetadata(pool, { includeOperationalObjec
         AND staff.package_key='staff' AND field.object_id=employee.id AND field.company_id IS NULL
         AND (field.source_package_id IS NULL OR field.source_package_id=(SELECT id FROM package_registry WHERE package_key='retail_pos'))`
   );
+  await pool.query(
+    `UPDATE platform_objects AS supplier
+        SET module_id=core_module.id, package_id=core_package.id
+       FROM platform_modules AS core_module
+       JOIN package_registry AS core_package ON core_package.package_key='supplier_core'
+       JOIN platform_modules AS retail_module ON retail_module.module_key='retail_pos'
+       LEFT JOIN package_registry AS retail_package ON retail_package.package_key='retail_pos'
+      WHERE supplier.object_key='supplier'
+        AND supplier.company_id IS NULL
+        AND supplier.source_table='suppliers'
+        AND supplier.module_id=retail_module.id
+        AND (supplier.package_id IS NULL OR supplier.package_id=retail_package.id)
+        AND core_module.module_key='supplier_core'`
+  );
   const moduleResult = await pool.query(
     `INSERT INTO platform_modules (module_key, name, version, description, installed)
      VALUES ('retail_pos', 'Retail POS', '1.0.0', 'Core onePOS retail application', TRUE)

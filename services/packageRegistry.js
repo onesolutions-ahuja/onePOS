@@ -105,6 +105,7 @@ export function packageDefinition(entry) {
     online_orders: "OneOnline",
     integrations: "OneIntegrations",
     uber_eats: "Uber Eats",
+    supplier_core: "Supplier Core",
     loyalty: "Loyalty Core",
     finance_core: "Finance Core",
   };
@@ -124,6 +125,7 @@ export function packageDefinition(entry) {
     online_orders: "Online order intake and preparation.",
     integrations: "External delivery, payment and communication integrations.",
     uber_eats: "Uber Eats connection and online order integration.",
+    supplier_core: "Canonical supplier identity and supplier-product sourcing metadata.",
     loyalty: "Canonical loyalty configuration, balances, activity and rules.",
     finance_core: "Reusable financial ledger and supplier-accounting foundation.",
   };
@@ -140,6 +142,8 @@ export function packageDefinition(entry) {
     hospitality: ["retail_pos", "customers"],
     kds: ["hospitality", "retail_pos"],
     customer_credit: ["customers", "retail_pos"],
+    suppliers: ["supplier_core"],
+    supplier_core: ["products"],
     reports: [],
     platform: [],
     uber_eats: ["integrations", "online_orders"],
@@ -710,6 +714,72 @@ export function packageDefinition(entry) {
         upgradeMetadata: { strategy: "additive", preserveExistingUserIds: true, preserveAttendanceRecords: true },
         migrations: ["staff_core_object_metadata_v1"],
       } : {}),
+      ...(entry.key === "supplier_core" ? {
+        objects: [
+          {
+            objectKey: "supplier",
+            label: "Supplier",
+            pluralLabel: "Suppliers",
+            description: "Canonical supplier identity and contact details.",
+            sourceTable: "suppliers",
+            metadataScope: "global",
+            fields: [
+              { apiName: "company_id", label: "Company", fieldType: "lookup", sourceColumn: "company_id", required: true, writable: false },
+              { apiName: "name", label: "Name", fieldType: "text", sourceColumn: "name", required: true, writable: true },
+              { apiName: "contact_name", label: "Contact Name", fieldType: "text", sourceColumn: "contact_name", writable: true },
+              { apiName: "phone", label: "Phone", fieldType: "phone", sourceColumn: "phone", writable: true },
+              { apiName: "email", label: "Email", fieldType: "email", sourceColumn: "email", writable: true },
+              { apiName: "address", label: "Address", fieldType: "text", sourceColumn: "address", writable: true },
+              { apiName: "notes", label: "Notes", fieldType: "text", sourceColumn: "notes", writable: true },
+              { apiName: "active", label: "Active", fieldType: "boolean", sourceColumn: "active", writable: true },
+              { apiName: "created_at", label: "Created", fieldType: "datetime", sourceColumn: "created_at", writable: false },
+              { apiName: "updated_at", label: "Updated", fieldType: "datetime", sourceColumn: "updated_at", writable: false },
+            ],
+          },
+          {
+            objectKey: "supplier_product",
+            label: "Supplier Product",
+            pluralLabel: "Supplier Products",
+            description: "Supplier-specific product references, costs and effective dates.",
+            sourceTable: "supplier_products",
+            metadataScope: "global",
+            fields: [
+              { apiName: "company_id", label: "Company", fieldType: "lookup", sourceColumn: "company_id", required: true, writable: false },
+              { apiName: "supplier_id", label: "Supplier", fieldType: "lookup", sourceColumn: "supplier_id", required: true, writable: true, config: { relationshipKey: "supplier", relatedObjectKey: "supplier" } },
+              { apiName: "product_id", label: "Product", fieldType: "lookup", sourceColumn: "product_id", required: true, writable: true, config: { relationshipKey: "product", relatedObjectKey: "product" } },
+              { apiName: "supplier_sku", label: "Supplier SKU", fieldType: "text", sourceColumn: "supplier_sku", writable: true },
+              { apiName: "supplier_description", label: "Supplier Description", fieldType: "text", sourceColumn: "supplier_description", writable: true },
+              { apiName: "cost_price", label: "Supplier Cost", fieldType: "currency", sourceColumn: "cost_price", required: true, writable: true },
+              { apiName: "effective_from", label: "Effective From", fieldType: "date", sourceColumn: "effective_from", required: true, writable: true },
+              { apiName: "effective_to", label: "Effective To", fieldType: "date", sourceColumn: "effective_to", writable: true },
+              { apiName: "preferred", label: "Preferred Supplier", fieldType: "boolean", sourceColumn: "preferred", writable: true },
+              { apiName: "active", label: "Active", fieldType: "boolean", sourceColumn: "active", writable: true },
+              { apiName: "created_at", label: "Created", fieldType: "datetime", sourceColumn: "created_at", writable: false },
+              { apiName: "updated_at", label: "Updated", fieldType: "datetime", sourceColumn: "updated_at", writable: false },
+            ],
+          },
+        ],
+        relationships: [
+          { parentObjectKey: "supplier", childObjectKey: "supplier_product", relationshipKey: "products", relationshipType: "one_to_many", childFieldApiName: "supplier_id" },
+          { parentObjectKey: "product", childObjectKey: "supplier_product", relationshipKey: "supplier_products", relationshipType: "one_to_many", childFieldApiName: "product_id" },
+          { parentObjectKey: "supplier_product", childObjectKey: "supplier", relationshipKey: "supplier", relationshipType: "lookup", parentFieldApiName: "supplier_id" },
+          { parentObjectKey: "supplier_product", childObjectKey: "product", relationshipKey: "product", relationshipType: "lookup", parentFieldApiName: "product_id" },
+        ],
+        listViews: [
+          { objectKey: "supplier", viewKey: "all", label: "All Suppliers", columns: ["name", "contact_name", "phone", "email", "active", "updated_at"], isDefault: true },
+          { objectKey: "supplier_product", viewKey: "sourcing", label: "Supplier Product Sourcing", columns: ["supplier_id", "product_id", "supplier_sku", "cost_price", "effective_from", "effective_to", "preferred", "active"], isDefault: true },
+        ],
+        permissionDeclarations: [
+          { permission: "inventory.view", label: "View supplier master data" },
+          { permission: "inventory.adjust", label: "Manage supplier master data" },
+          { permission: "purchase.view", label: "View supplier references used in purchasing" },
+        ],
+        lifecycle: {
+          preservesExistingRecords: true,
+          preservesCustomFields: true,
+          disableBehavior: "deactivate-package-access-only",
+        },
+      } : {}),
       ...(entry.key === "batch_expiry" ? {
         objects: [
           {
@@ -1199,7 +1269,7 @@ export function packageDefinition(entry) {
           { packageKey: "retail_pos", objectKey: "payment", purpose: "Loyalty redemption remains a Payment Core tender" },
         ],
       } : {}),
-
+      ...(entry.key === "uber_eats" ? {
         objects: [
           {
             objectKey: "uber_eats_connection",
