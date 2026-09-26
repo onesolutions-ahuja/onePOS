@@ -21,6 +21,7 @@ export async function createGenericOrder({
   notes,
   payment,
   createInventoryMovement,
+  publishEvent,
 }) {
   if (!externalOrderId) {
     throw new Error("externalOrderId is required");
@@ -134,17 +135,18 @@ export async function createGenericOrder({
     const orderResult = await client.query(
       `
       INSERT INTO online_orders (
-        company_id, store_id, platform, external_order_id, external_reference,
+        company_id, store_id, customer_id, platform, external_order_id, external_reference,
         status, fulfilment_type, customer_name, customer_phone, customer_email,
         delivery_address, customer_data, currency, subtotal, tax, total, notes,
         payment_method, payment_status, inventory_reserved
       )
-      VALUES ($1,$2,'direct',$3,$4,'RECEIVED',$5,$6,$7,$8,$9,$10,'GBP',$11,$12,$13,$14,$15,$16,FALSE)
+      VALUES ($1,$2,$3,'direct',$4,$5,'RECEIVED',$6,$7,$8,$9,$10,$11,'GBP',$12,$13,$14,$15,$16,$17,FALSE)
       RETURNING *
       `,
       [
         companyId,
         storeId || null,
+        customerId || null,
         externalOrderId,
         `${externalOrderId}-ref`,
         fulfilmentType,
@@ -298,6 +300,15 @@ export async function createGenericOrder({
       [order.id, `Online order received; external_order_id=${externalOrderId}`]
     );
 
+    if (typeof publishEvent === "function") {
+      await publishEvent({
+        client,
+        eventType: "online_order.created",
+        payload: { orderId: order.id, platform: order.platform, storeId: order.store_id, status: order.status },
+        actorUserId: userId,
+      });
+    }
+
     await client.query("COMMIT");
 
     return { duplicate: false, order: orderResult.rows[0], items: resolvedItems };
@@ -361,6 +372,7 @@ export async function transitionGenericOrder({
   reason = null,
   createSale = null,
   createInventoryMovement = null,
+  publishEvent = null,
 }) {
   const client = await pool.connect();
   let transactionStarted = false;
@@ -382,7 +394,11 @@ export async function transitionGenericOrder({
 
     const order = orderResult.rows[0];
 
-    if (order.status === GENERIC_ORDER_STATUSES.CANCELLED || order.status === GENERIC_ORDER_STATUSES.COMPLETED) {
+    if (
+      order.status === GENERIC_ORDER_STATUSES.CANCELLED ||
+      order.status === GENERIC_ORDER_STATUSES.REJECTED ||
+      order.status === GENERIC_ORDER_STATUSES.COMPLETED
+    ) {
       await client.query("ROLLBACK");
       transactionStarted = false;
       return { success: false, error: `Order in status ${order.status} cannot be transitioned` };
@@ -407,6 +423,7 @@ export async function transitionGenericOrder({
       [GENERIC_ORDER_STATUSES.COLLECTED]: "completed_at",
       [GENERIC_ORDER_STATUSES.COMPLETED]: "completed_at",
       [GENERIC_ORDER_STATUSES.CANCELLED]: "cancelled_at",
+      [GENERIC_ORDER_STATUSES.REJECTED]: "cancelled_at",
     };
 
     const params = [toStatus, order.id];
@@ -441,7 +458,9 @@ export async function transitionGenericOrder({
       ]
     );
 
-    const isCancelled = toStatus === GENERIC_ORDER_STATUSES.CANCELLED;
+    const isCancelled =
+      toStatus === GENERIC_ORDER_STATUSES.CANCELLED ||
+      toStatus === GENERIC_ORDER_STATUSES.REJECTED;
     const isFulfilled =
       toStatus === GENERIC_ORDER_STATUSES.COLLECTED ||
       toStatus === GENERIC_ORDER_STATUSES.COMPLETED;
@@ -520,6 +539,28 @@ export async function transitionGenericOrder({
           `Order was NOT fulfilled: the POS sale could not be created (${saleError.message})`
         );
       }
+    }
+
+    if (typeof publishEvent === "function") {
+      const eventType = toStatus === GENERIC_ORDER_STATUSES.CANCELLED
+        ? "online_order.cancelled"
+        : toStatus === GENERIC_ORDER_STATUSES.COMPLETED
+          ? "online_order.completed"
+          : fromStatus === GENERIC_ORDER_STATUSES.RECEIVED && toStatus === GENERIC_ORDER_STATUSES.PREPARING
+            ? "online_order.accepted"
+            : "online_order.status_changed";
+      await publishEvent({
+        client,
+        eventType,
+        payload: {
+          orderId: order.id,
+          platform: order.platform,
+          storeId: order.store_id,
+          fromStatus,
+          toStatus,
+        },
+        actorUserId: userId,
+      });
     }
 
     await client.query("COMMIT");

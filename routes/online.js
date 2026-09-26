@@ -13,6 +13,7 @@ import {
 } from "../services/onlineOrders/genericOrderService.js";
 import { syncBatchMovement } from "../services/inventory.js";
 import { executeWorkflowAction } from "../services/platformWorkflow.js";
+import { publishPlatformEvent } from "../services/platformEvents.js";
 
 /*
  * ONLINE ORDERS FOUNDATION (Uber Eats / Deliveroo)
@@ -27,6 +28,15 @@ import { executeWorkflowAction } from "../services/platformWorkflow.js";
  */
 
 const ACTIVE_STATUSES = ["RECEIVED", "ACCEPTED", "PREPARING", "READY"];
+
+const onlineOrderEventPublisher = (companyId) => ({ client, eventType, payload, actorUserId }) =>
+  publishPlatformEvent({
+    db: client.query.bind(client),
+    companyId,
+    eventType,
+    payload,
+    actorUserId,
+  });
 
 export default function createOnlineRouter({
   authenticate,
@@ -3257,6 +3267,7 @@ export default function createOnlineRouter({
         notes,
         payment,
         createInventoryMovement,
+        publishEvent: onlineOrderEventPublisher(req.user.companyId),
       });
 
       if (result.duplicate) {
@@ -3341,6 +3352,7 @@ export default function createOnlineRouter({
       reason,
       createSale: (client, context) => createSaleForCompletedOrder(client, context),
       createInventoryMovement,
+      publishEvent: onlineOrderEventPublisher(req.user.companyId),
     });
 
     if (!result.success) {
@@ -3380,6 +3392,7 @@ export default function createOnlineRouter({
       userId: req.user.id,
       toStatus,
       reason,
+      publishEvent: onlineOrderEventPublisher(req.user.companyId),
     });
 
     if (!result.success) {
@@ -3426,6 +3439,7 @@ export default function createOnlineRouter({
       toStatus,
       reason,
       createSale: (client, context) => createSaleForCompletedOrder(client, context),
+      publishEvent: onlineOrderEventPublisher(req.user.companyId),
     });
 
     if (!result.success) {
@@ -3455,6 +3469,7 @@ export default function createOnlineRouter({
       toStatus: "CANCELLED",
       reason: reason || "Cancelled",
       createInventoryMovement,
+      publishEvent: onlineOrderEventPublisher(req.user.companyId),
     });
 
     if (!result.success) {

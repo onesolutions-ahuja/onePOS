@@ -718,7 +718,8 @@ export async function initializeDatabase(pool) {
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
       store_id UUID REFERENCES stores(id) ON DELETE SET NULL,
-      platform VARCHAR(20) NOT NULL CHECK (platform IN ('uber', 'deliveroo', 'direct')),
+      customer_id UUID REFERENCES customers(id) ON DELETE SET NULL,
+      platform VARCHAR(20) NOT NULL CHECK (platform ~ '^[a-z][a-z0-9_]{0,19}$'),
       external_order_id VARCHAR(255) NOT NULL,
       external_reference VARCHAR(255),
       status VARCHAR(30) NOT NULL DEFAULT 'RECEIVED' CHECK (
@@ -728,6 +729,7 @@ export async function initializeDatabase(pool) {
       customer_phone VARCHAR(50),
       customer_email VARCHAR(255),
       delivery_address TEXT,
+      customer_data JSONB,
       fulfilment_type VARCHAR(20) NOT NULL DEFAULT 'DELIVERY',
       otp_code VARCHAR(20),
       otp_verified_at TIMESTAMPTZ,
@@ -789,6 +791,12 @@ export async function initializeDatabase(pool) {
 
     ALTER TABLE online_order_items
       ADD COLUMN IF NOT EXISTS mapping_status VARCHAR(20) NOT NULL DEFAULT 'MAPPED';
+    ALTER TABLE online_orders
+      ADD COLUMN IF NOT EXISTS customer_id UUID REFERENCES customers(id) ON DELETE SET NULL;
+    ALTER TABLE online_orders
+      ADD COLUMN IF NOT EXISTS customer_data JSONB;
+    CREATE INDEX IF NOT EXISTS idx_online_orders_customer
+      ON online_orders(company_id, customer_id);
 
     CREATE TABLE IF NOT EXISTS online_order_events (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -1863,6 +1871,8 @@ export async function initializeDatabase(pool) {
     ["accounting.export", "Export to Accounting"],
     ["online_orders.view", "View Online Orders"],
     ["online_orders.manage", "Manage Online Orders"],
+    ["online_orders.status_update", "Update Online Order Status"],
+    ["online_orders.cancel", "Cancel Online Orders"],
     ["online_orders.configure", "Configure Online Platforms"],
     /* Staff attendance (clock in/out). attendance.view gates the management
      * records list; clock in/out itself is available to every active user. */
@@ -2172,12 +2182,7 @@ ON secure_invoice_links(company_id, created_at DESC);
     ON sale_combo_applications(company_id, created_at DESC);
   `);
 
-    /*
-     * T10-ONLINE: Platform CHECK extended to support 'direct' platform
-     * (generic external client orders). Status CHECK extended with
-     * SELF_PICKUP/DELIVERY-specific statuses. Both use drop-and-recreate
-     * pattern for existing databases.
-     */
+    /* Preserve provider keys while allowing future normalized connector names. */
     try {
       await pool.query(`
         ALTER TABLE platform_layouts ADD COLUMN IF NOT EXISTS is_default BOOLEAN NOT NULL DEFAULT FALSE;
@@ -2187,8 +2192,16 @@ ON secure_invoice_links(company_id, created_at DESC);
         ALTER TABLE online_orders
           DROP CONSTRAINT IF EXISTS online_orders_platform_check;
         ALTER TABLE online_orders
-          ADD CONSTRAINT online_orders_platform_check
-          CHECK (platform IN ('uber', 'deliveroo', 'direct'));
+          DROP CONSTRAINT IF EXISTS online_orders_platform_format_check;
+        ALTER TABLE online_orders
+          ADD CONSTRAINT online_orders_platform_format_check
+          CHECK (platform ~ '^[a-z][a-z0-9_]{0,19}$');
+        UPDATE online_orders AS o
+           SET customer_id = c.id
+          FROM customers AS c
+         WHERE o.customer_id IS NULL
+           AND c.id::text = o.customer_data->>'id'
+           AND c.company_id = o.company_id;
       `);
     } catch {
       /* Constraint may already exist or table may not exist yet. */

@@ -1,4 +1,4 @@
-﻿import { internalAppCatalog } from "./internalAppCatalog.js";
+import { internalAppCatalog } from "./internalAppCatalog.js";
 
 export const packageRegistrySchema = `
   CREATE TABLE IF NOT EXISTS package_registry (
@@ -370,6 +370,199 @@ export function packageDefinition(entry) {
           { duplicateIdentity: "Enforced by the existing Product API and active-company unique indexes for SKU and barcode." },
         ],
         migrations: ["product_core.adopt_canonical_metadata.v1"],
+      } : {}),
+      ...(entry.key === "online_orders" ? {
+        metadataOwnership: {
+          policy: "PACKAGE_MANAGED",
+          preserveUserModified: true,
+          requiredTypes: ["object", "field", "relationship", "form", "layout", "workflow", "action", "report", "permission", "connector", "template"],
+          objects: ["online_order", "online_order_line"],
+          relationships: ["order_lines", "product", "customer", "store"],
+          layouts: ["online_order_detail"],
+          forms: ["online_order_create", "online_order_edit"],
+          listViews: ["all"],
+          validations: ["online_order_line_quantity_positive"],
+          permissions: ["online_orders.view", "online_orders.manage", "online_orders.status_update", "online_orders.cancel"],
+          actions: [
+            "online_order.accept",
+            "online_order.reject",
+            "online_order.prepare",
+            "online_order.mark_ready",
+            "online_order.mark_ready_for_pickup",
+            "online_order.mark_ready_for_delivery",
+            "online_order.collect",
+            "online_order.complete",
+            "online_order.cancel",
+          ],
+          events: [
+            "online_order.created",
+            "online_order.accepted",
+            "online_order.status_changed",
+            "online_order.cancelled",
+            "online_order.completed",
+          ],
+        },
+        upgrade: {
+          migrationKey: "online_orders_core_1_0_0",
+          strategy: "additive",
+          preservesRecordIds: true,
+          idempotentMetadataProvisioning: true,
+        },
+        objects: [
+          {
+            objectKey: "online_order",
+            metadataScope: "global",
+            label: "Online Order",
+            pluralLabel: "Online Orders",
+            description: "Canonical provider-neutral online order record.",
+            sourceTable: "online_orders",
+            required: true,
+            fields: [
+              { apiName: "external_reference", sourceColumn: "external_reference", label: "Order Reference", fieldType: "text", writable: false },
+              { apiName: "external_order_id", sourceColumn: "external_order_id", label: "External Provider Order ID", fieldType: "text", required: true, writable: false },
+              { apiName: "platform", sourceColumn: "platform", label: "Provider / Channel", fieldType: "text", required: true, writable: false, config: { normalizedProviderKey: true, allowFutureProviders: true } },
+              { apiName: "company_id", sourceColumn: "company_id", label: "Company", fieldType: "lookup", required: true, writable: false },
+              { apiName: "store_id", sourceColumn: "store_id", label: "Store", fieldType: "lookup", writable: false },
+              { apiName: "customer_id", sourceColumn: "customer_id", label: "Customer", fieldType: "lookup", writable: false },
+              { apiName: "customer_name", sourceColumn: "customer_name", label: "Customer Name", fieldType: "text", writable: false },
+              { apiName: "customer_phone", sourceColumn: "customer_phone", label: "Customer Phone", fieldType: "phone", writable: false },
+              { apiName: "customer_email", sourceColumn: "customer_email", label: "Customer Email", fieldType: "email", writable: false },
+              { apiName: "fulfilment_type", sourceColumn: "fulfilment_type", label: "Fulfilment", fieldType: "picklist", required: true, writable: false, options: ["SELF_PICKUP", "DELIVERY"] },
+              { apiName: "status", sourceColumn: "status", label: "Status", fieldType: "picklist", required: true, writable: false, options: ["RECEIVED", "ACCEPTED", "PREPARING", "READY", "READY_FOR_PICKUP", "READY_FOR_DELIVERY", "COLLECTED", "COMPLETED", "REJECTED", "CANCELLED"] },
+              { apiName: "subtotal", sourceColumn: "subtotal", label: "Subtotal", fieldType: "currency", writable: false },
+              { apiName: "tax", sourceColumn: "tax", label: "Tax", fieldType: "currency", writable: false },
+              { apiName: "total", sourceColumn: "total", label: "Total", fieldType: "currency", writable: false },
+              { apiName: "notes", sourceColumn: "notes", label: "Notes", fieldType: "text", writable: false },
+              { apiName: "delivery_address", sourceColumn: "delivery_address", label: "Delivery Address", fieldType: "text", writable: false },
+              { apiName: "created_at", sourceColumn: "created_at", label: "Created", fieldType: "datetime", writable: false },
+              { apiName: "updated_at", sourceColumn: "updated_at", label: "Updated", fieldType: "datetime", writable: false },
+            ],
+          },
+          {
+            objectKey: "online_order_line",
+            metadataScope: "global",
+            label: "Online Order Line",
+            pluralLabel: "Online Order Lines",
+            description: "Existing online order item rows and Product Core references.",
+            sourceTable: "online_order_items",
+            required: true,
+            fields: [
+              { apiName: "order_id", sourceColumn: "order_id", label: "Online Order", fieldType: "lookup", required: true, writable: false },
+              { apiName: "product_id", sourceColumn: "product_id", label: "Product", fieldType: "lookup", writable: false },
+              { apiName: "product_name", sourceColumn: "product_name", label: "Product Name", fieldType: "text", required: true, writable: false },
+              { apiName: "external_item_id", sourceColumn: "external_item_id", label: "External Item ID", fieldType: "text", writable: false },
+              { apiName: "quantity", sourceColumn: "quantity", label: "Quantity", fieldType: "decimal", required: true, writable: false, config: { minimum: 0.001 } },
+              { apiName: "unit_price", sourceColumn: "unit_price", label: "Unit Price", fieldType: "currency", required: true, writable: false },
+              { apiName: "tax", sourceColumn: "tax", label: "Tax", fieldType: "currency", writable: false },
+              { apiName: "total", sourceColumn: "total", label: "Line Total", fieldType: "currency", required: true, writable: false },
+              { apiName: "mapping_status", sourceColumn: "mapping_status", label: "Product Mapping", fieldType: "picklist", required: true, writable: false, options: ["MAPPED", "UNMAPPED"] },
+              { apiName: "platform_data", sourceColumn: "platform_data", label: "Provider Item Data", fieldType: "json", writable: false },
+              { apiName: "created_at", sourceColumn: "created_at", label: "Created", fieldType: "datetime", writable: false },
+            ],
+          },
+        ],
+        relationships: [
+          { parentObjectKey: "online_order", childObjectKey: "online_order_line", relationshipKey: "order_lines", relationshipType: "one_to_many", childFieldApiName: "order_id", required: true },
+          { parentObjectKey: "online_order_line", childObjectKey: "product", relationshipKey: "product", relationshipType: "lookup", childFieldApiName: "product_id" },
+          { parentObjectKey: "customer", childObjectKey: "online_order", relationshipKey: "online_orders", relationshipType: "one_to_many", childFieldApiName: "customer_id" },
+          { parentObjectKey: "store", childObjectKey: "online_order", relationshipKey: "online_orders", relationshipType: "one_to_many", childFieldApiName: "store_id" },
+        ],
+        listViews: [
+          {
+            objectKey: "online_order",
+            viewKey: "all",
+            label: "All Online Orders",
+            columns: ["external_reference", "external_order_id", "platform", "store_id", "fulfilment_type", "status", "total", "created_at"],
+            sort: { field: "created_at", direction: "desc" },
+            pageSize: 50,
+            isDefault: true,
+          },
+        ],
+        layouts: [
+          {
+            objectKey: "online_order",
+            layoutKey: "online_order_detail",
+            pageType: "detail",
+            name: "Online Order Details",
+            isDefault: true,
+            required: true,
+            definition: {
+              sections: [{ id: "order-details", label: "Order Details", order: 0, columns: 2, visible: true }],
+              components: [
+                ...["external_reference", "external_order_id", "platform", "store_id", "customer_id", "customer_name", "fulfilment_type", "status", "subtotal", "tax", "total", "created_at"].map((fieldKey, order) => ({
+                  id: `field-${fieldKey}`,
+                  type: "field",
+                  field_key: fieldKey,
+                  section_id: "order-details",
+                  order,
+                  width: "1/2",
+                  visible: true,
+                  readOnly: true,
+                })),
+                { id: "related-order-lines", type: "related_list", relationship_key: "order_lines", label: "Order Lines", visible: true },
+              ],
+            },
+          },
+        ],
+        forms: [
+          {
+            objectKey: "online_order",
+            formKey: "online_order_create",
+            pageType: "create",
+            name: "Online Order Create",
+            fields: ["external_order_id", "platform", "store_id", "customer_id", "fulfilment_type", "status"],
+          },
+          {
+            objectKey: "online_order",
+            formKey: "online_order_edit",
+            pageType: "edit",
+            name: "Online Order Edit",
+            fields: ["external_reference", "external_order_id", "platform", "store_id", "customer_id", "fulfilment_type", "status", "notes"],
+          },
+        ],
+        validationRules: [
+          {
+            objectKey: "online_order_line",
+            name: "online_order_line_quantity_positive",
+            triggerKey: "before_create",
+            conditions: [{ field: "quantity", operator: "less_than", value: 0.001 }],
+            action: { message: "Order line quantity must be greater than zero." },
+            required: true,
+          },
+        ],
+        permissionDeclarations: [
+          { key: "online_order_read", permission: "online_orders.view", access: "read" },
+          { key: "online_order_lifecycle", permission: "online_orders.manage", access: "execute" },
+        ],
+        actions: [
+          { actionKey: "online_order.accept", objectKey: "online_order", label: "Accept Order", handlerKey: "ONLINE_ORDER_TRANSITION", requiredPermission: "online_orders.manage", config: { toStatus: "PREPARING" } },
+          { actionKey: "online_order.reject", objectKey: "online_order", label: "Reject Order", handlerKey: "ONLINE_ORDER_TRANSITION", requiredPermission: "online_orders.manage", config: { toStatus: "REJECTED" } },
+          { actionKey: "online_order.prepare", objectKey: "online_order", label: "Prepare Order", handlerKey: "ONLINE_ORDER_TRANSITION", requiredPermission: "online_orders.manage", config: { toStatus: "PREPARING" } },
+          { actionKey: "online_order.mark_ready", objectKey: "online_order", label: "Mark Ready", handlerKey: "ONLINE_ORDER_TRANSITION", requiredPermission: "online_orders.manage", config: { toStatus: "AUTO_READY" } },
+          { actionKey: "online_order.mark_ready_for_pickup", objectKey: "online_order", label: "Mark Ready for Pickup", handlerKey: "ONLINE_ORDER_TRANSITION", requiredPermission: "online_orders.manage", config: { toStatus: "READY_FOR_PICKUP" } },
+          { actionKey: "online_order.mark_ready_for_delivery", objectKey: "online_order", label: "Mark Ready for Delivery", handlerKey: "ONLINE_ORDER_TRANSITION", requiredPermission: "online_orders.manage", config: { toStatus: "READY_FOR_DELIVERY" } },
+          { actionKey: "online_order.collect", objectKey: "online_order", label: "Collect Order", handlerKey: "ONLINE_ORDER_TRANSITION", requiredPermission: "online_orders.manage", config: { toStatus: "COLLECTED" } },
+          { actionKey: "online_order.complete", objectKey: "online_order", label: "Complete Order", handlerKey: "ONLINE_ORDER_TRANSITION", requiredPermission: "online_orders.manage", config: { toStatus: "COMPLETED" } },
+          { actionKey: "online_order.cancel", objectKey: "online_order", label: "Cancel Order", handlerKey: "ONLINE_ORDER_TRANSITION", requiredPermission: "online_orders.manage", config: { toStatus: "CANCELLED" } },
+        ],
+        buttons: [
+          { buttonKey: "online_order_accept", objectKey: "online_order", label: "Accept", actionKey: "online_order.accept", requiredPermission: "online_orders.manage", variant: "primary" },
+          { buttonKey: "online_order_reject", objectKey: "online_order", label: "Reject", actionKey: "online_order.reject", requiredPermission: "online_orders.manage", variant: "danger" },
+          { buttonKey: "online_order_prepare", objectKey: "online_order", label: "Prepare", actionKey: "online_order.prepare", requiredPermission: "online_orders.manage", variant: "secondary" },
+          { buttonKey: "online_order_ready", objectKey: "online_order", label: "Mark Ready", actionKey: "online_order.mark_ready", requiredPermission: "online_orders.manage", variant: "secondary" },
+          { buttonKey: "online_order_ready_pickup", objectKey: "online_order", label: "Ready for Pickup", actionKey: "online_order.mark_ready_for_pickup", requiredPermission: "online_orders.manage", variant: "secondary" },
+          { buttonKey: "online_order_ready_delivery", objectKey: "online_order", label: "Ready for Delivery", actionKey: "online_order.mark_ready_for_delivery", requiredPermission: "online_orders.manage", variant: "secondary" },
+          { buttonKey: "online_order_collect", objectKey: "online_order", label: "Collect", actionKey: "online_order.collect", requiredPermission: "online_orders.manage", variant: "secondary" },
+          { buttonKey: "online_order_complete", objectKey: "online_order", label: "Complete", actionKey: "online_order.complete", requiredPermission: "online_orders.manage", variant: "secondary" },
+          { buttonKey: "online_order_cancel", objectKey: "online_order", label: "Cancel", actionKey: "online_order.cancel", requiredPermission: "online_orders.manage", variant: "danger" },
+        ],
+        events: [
+          { eventType: "online_order.created", description: "A canonical online order was created." },
+          { eventType: "online_order.accepted", description: "A canonical online order was accepted." },
+          { eventType: "online_order.status_changed", description: "A canonical online order status changed." },
+          { eventType: "online_order.cancelled", description: "A canonical online order was cancelled." },
+          { eventType: "online_order.completed", description: "A canonical online order was completed." },
+        ],
       } : {}),
       ...(entry.key === "staff" ? {
         packageKey: "staff",
@@ -1212,12 +1405,14 @@ export async function provisionPackageMetadata(db, { packageId, moduleId, compan
     let childFieldId = null;
     const childFieldKey = relationship.childFieldApiName || relationship.child_field_api_name;
     if (childFieldKey) {
+      const relationshipType = relationship.relationshipType || relationship.relationship_type || "lookup";
+      const fieldObjectId = relationshipType === "lookup" ? parentObjectId : childObjectId;
       const fieldResult = await db(
         "SELECT id FROM platform_fields WHERE object_id=$1 AND api_name=$2 AND (company_id IS NULL OR company_id=$3) LIMIT 1",
-        [childObjectId, childFieldKey, companyId]
+        [fieldObjectId, childFieldKey, companyId]
       );
-      childFieldId = fieldResult.rows[0]?.id || null;
-      if (!childFieldId) throw new Error(`Package relationship field not found: ${childFieldKey}`);
+      if (!fieldResult.rows[0]?.id) throw new Error(`Package relationship field not found: ${childFieldKey}`);
+      if (relationshipType !== "lookup") childFieldId = fieldResult.rows[0].id;
     }
     const registeredRelationship = await db(
       `INSERT INTO platform_relationships
@@ -1671,6 +1866,41 @@ export async function provisionPackageMetadata(db, { packageId, moduleId, compan
     );
     if (!registered.rows?.length && registered.rowCount === 0) {
       throw new Error(`Package field permission is owned by another declaration: ${fieldApiName}`);
+    }
+  }
+
+  for (const event of Array.isArray(manifest.events) ? manifest.events : []) {
+    const eventType = String(event.eventType || event.event_type || "").trim();
+    if (!eventType || eventType.length > 200) throw new Error("Package events require an event type of 1 to 200 characters");
+    const registered = await db(
+      `INSERT INTO platform_event_types(event_type,description,source_package_id,active)
+       VALUES($1,$2,$3,TRUE)
+       ON CONFLICT(event_type) DO UPDATE SET description=EXCLUDED.description,source_package_id=EXCLUDED.source_package_id,active=TRUE
+       WHERE platform_event_types.source_package_id IS NULL OR platform_event_types.source_package_id=EXCLUDED.source_package_id
+       RETURNING event_type`,
+      [eventType, event.description || null, packageId]
+    );
+    if (!registered.rows.length) throw new Error(`Package event type is owned by another declaration: ${eventType}`);
+  }
+
+  const ownedPermissionCodes = manifest.metadataOwnership?.permissions;
+  if (Array.isArray(ownedPermissionCodes) && ownedPermissionCodes.length) {
+    const permissions = await db(
+      "SELECT id,code FROM permissions WHERE code=ANY($1::text[])",
+      [ownedPermissionCodes]
+    );
+    const permissionsByCode = new Map(permissions.rows.map((permission) => [permission.code, permission]));
+    for (const code of ownedPermissionCodes) {
+      const permission = permissionsByCode.get(code);
+      if (!permission) throw new Error(`Package permission is not seeded: ${code}`);
+      await db(
+        `INSERT INTO package_metadata_ownership
+         (package_id,package_version,metadata_type,metadata_id,managed,package_required,default_snapshot)
+         VALUES ($1,$2,'permission',$3,true,true,$4::jsonb)
+         ON CONFLICT(package_id,metadata_type,metadata_id) DO UPDATE SET
+           package_version=EXCLUDED.package_version,managed=true,package_required=true,updated_at=NOW()`,
+        [packageId, packageVersion, permission.id, JSON.stringify({ code })]
+      );
     }
   }
 

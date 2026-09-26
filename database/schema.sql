@@ -1795,7 +1795,9 @@ CREATE TABLE IF NOT EXISTS online_orders (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
     store_id UUID REFERENCES stores(id) ON DELETE SET NULL,
-    platform VARCHAR(20) NOT NULL CHECK (platform IN ('uber', 'deliveroo', 'direct')),
+    customer_id UUID REFERENCES customers(id) ON DELETE SET NULL,
+    platform VARCHAR(20) NOT NULL CONSTRAINT online_orders_platform_format_check
+        CHECK (platform ~ '^[a-z][a-z0-9_]{0,19}$'),
     external_order_id VARCHAR(255) NOT NULL,
     external_reference VARCHAR(255),
     status VARCHAR(30) NOT NULL DEFAULT 'RECEIVED' CHECK (
@@ -1805,6 +1807,7 @@ CREATE TABLE IF NOT EXISTS online_orders (
     customer_phone VARCHAR(50),
     customer_email VARCHAR(255),
     delivery_address TEXT,
+    customer_data JSONB,
     fulfilment_type VARCHAR(20) NOT NULL DEFAULT 'DELIVERY',
     otp_code VARCHAR(20),
     otp_verified_at TIMESTAMPTZ,
@@ -1831,11 +1834,40 @@ CREATE TABLE IF NOT EXISTS online_orders (
     CONSTRAINT online_orders_platform_external_unique UNIQUE (company_id, platform, external_order_id)
 );
 
+ALTER TABLE online_orders
+    ADD COLUMN IF NOT EXISTS customer_id UUID REFERENCES customers(id) ON DELETE SET NULL;
+ALTER TABLE online_orders
+    ADD COLUMN IF NOT EXISTS customer_data JSONB;
+ALTER TABLE online_orders
+    DROP CONSTRAINT IF EXISTS online_orders_platform_check;
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conrelid = 'online_orders'::regclass
+          AND conname = 'online_orders_platform_format_check'
+    ) THEN
+        ALTER TABLE online_orders
+            ADD CONSTRAINT online_orders_platform_format_check
+            CHECK (platform ~ '^[a-z][a-z0-9_]{0,19}$');
+    END IF;
+END $$;
+
+UPDATE online_orders AS o
+SET customer_id = c.id
+FROM customers AS c
+WHERE o.customer_id IS NULL
+  AND c.id::text = o.customer_data->>'id'
+  AND c.company_id = o.company_id;
+
 CREATE INDEX IF NOT EXISTS idx_online_orders_company
 ON online_orders(company_id, created_at);
 
 CREATE INDEX IF NOT EXISTS idx_online_orders_status
 ON online_orders(company_id, status, created_at);
+
+CREATE INDEX IF NOT EXISTS idx_online_orders_customer
+ON online_orders(company_id, customer_id);
 
 /*
  * ONLINE ORDER -> POS SALE link (column declared on the sales table above,
@@ -2070,6 +2102,8 @@ VALUES
 
 ('online_orders.view', 'View Online Orders', 'View online platform orders'),
 ('online_orders.manage', 'Manage Online Orders', 'Accept, reject, cancel and complete online orders'),
+('online_orders.status_update', 'Update Online Order Status', 'Update online order fulfilment and lifecycle status'),
+('online_orders.cancel', 'Cancel Online Orders', 'Cancel or reject online orders'),
 ('online_orders.configure', 'Configure Online Platforms', 'Configure product availability on Uber Eats / Deliveroo')
 
 ON CONFLICT (code) DO NOTHING;

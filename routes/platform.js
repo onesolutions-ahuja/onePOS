@@ -1884,6 +1884,7 @@ router.get("/platform/runtime/apps", authenticate, async (req, res) => {
           const results = await executeWorkflowActions({
             actions,
             db,
+            pool,
             req,
             object,
             record,
@@ -1930,7 +1931,7 @@ router.get("/platform/runtime/apps", authenticate, async (req, res) => {
           definition.validation?.({ type: core.key });
         } catch { /* argument-shape validation happens inside the executor. */ }
         const result = await executeWorkflowAction({
-          db, req, object, record, recordId: record?.id || null, companyId: req.user.companyId,
+          db, pool, req, object, record, recordId: record?.id || null, companyId: req.user.companyId,
           action: { type: core.key, ...(interaction.config || {}) },
         });
         return res.json({ success: true, data: result });
@@ -2978,7 +2979,7 @@ router.get("/platform/runtime/apps", authenticate, async (req, res) => {
         if (!workflow) return res.status(404).json({ success: false, message: "Configured workflow not found" });
         const actions = Array.isArray(workflow.action?.actions) ? workflow.action.actions : [];
         if (!actions.length) return res.status(422).json({ success: false, message: "Configured workflow contains no executable actions" });
-        const results = await executeWorkflowActions({ actions, db, req, object, record, recordId: req.params.recordId, companyId: req.user.companyId, trigger: "record_page_button" });
+        const results = await executeWorkflowActions({ actions, db, pool, req, object, record, recordId: req.params.recordId, companyId: req.user.companyId, trigger: "record_page_button" });
         return res.json({ success: true, data: { results } });
       }
 
@@ -2997,7 +2998,7 @@ router.get("/platform/runtime/apps", authenticate, async (req, res) => {
         if (!(await hasExecutionPermission(req, permission))) return res.status(403).json({ success: false, message: `You do not have permission to execute ${handlerKey}` });
       }
       const result = await executeWorkflowAction({
-        db, req, object, record, recordId: req.params.recordId, companyId: req.user.companyId,
+        db, pool, req, object, record, recordId: req.params.recordId, companyId: req.user.companyId,
         action: { type: handlerKey, ...(target.action?.config || {}), inputs: { ...(button.input_mappings || {}), ...(req.body?.inputs || {}) } },
       });
       return res.json({ success: true, data: result });
