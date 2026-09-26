@@ -17,7 +17,10 @@ test("field security metadata is role and company scoped", () => {
 test("generic record reads and writes apply role field security", () => {
   assert.match(routes, /applyFieldSecurity/);
   assert.match(routes, /platform_field_security WHERE role_id=\$1 AND company_id=\$2/);
-  assert.match(routes, /Field "\$\{apiName\}" is read-only/);
+  /* The write guard's wording was consolidated during the Batch 5 platform
+     pass: protected/read-only fields (including calculated ones) are refused. */
+  assert.match(routes, /Calculated field "\$\{apiName\}" is read-only/);
+  assert.match(routes, /Field "\$\{apiName\}" is protected or read-only/);
   assert.match(routes, /\/platform\/fields\/:fieldId\/security\/:roleId/);
 });
 

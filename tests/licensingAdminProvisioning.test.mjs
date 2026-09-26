@@ -18,6 +18,26 @@ test("Superadmin licensing UI contains independent client-admin provisioning con
   assert.match(source, /JSON\.stringify\(databaseConfigurationPayload\(databaseForm\)\)/);
 });
 
+test("Superadmin can manage independent package, bundle, and tier marketplace policies", async () => {
+  const source = await readFile(sourcePath, "utf8");
+  for (const endpoint of [
+    "/api/superadmin/packages",
+    "/api/superadmin/bundles",
+    "/api/superadmin/tiers",
+    "/marketplace",
+  ]) assert.ok(source.includes(endpoint), `UI uses ${endpoint}`);
+  for (const control of [
+    "OneApps marketplace packages",
+    "Bundle marketplace visibility",
+    "Tier marketplace visibility",
+    "system_only",
+    "Billable",
+    "Licence mode",
+    "Allowed company IDs",
+    "Allowed tier keys",
+  ]) assert.ok(source.includes(control), `UI exposes ${control}`);
+});
+
 test("database save sends an entered password and omits a blank password to preserve saved credentials", () => {
   const form = {
     databaseMode: "CUSTOMER_MANAGED", host: "db.example", port: "5432",

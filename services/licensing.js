@@ -40,7 +40,7 @@ export async function getCompanyEntitlements(db, companyId) {
   const row = result.rows[0];
   const activeLicence = row?.active === true &&
     !(row.starts_at && new Date(row.starts_at) > new Date()) &&
-    !(row.expires_at && new Date(row.expires_at) < new Date());
+    !(row.expires_at && new Date(row.expires_at) <= new Date());
   const entitlements = activeLicence ? mergeEntitlements(row.entitlements) : {};
   const bundleResult = await db(
     `SELECT be.entitlement_key, be.enabled
@@ -48,11 +48,13 @@ export async function getCompanyEntitlements(db, companyId) {
        JOIN licence_bundles b ON b.id=a.bundle_id AND b.active=true
        JOIN licence_bundle_entitlements be ON be.bundle_id=b.id
       WHERE a.company_id=$1 AND a.active=true
-        AND (a.starts_at IS NULL OR a.starts_at<=NOW())
+         AND (cardinality(b.allowed_companies)=0 OR $1=ANY(b.allowed_companies))
+         AND (a.starts_at IS NULL OR a.starts_at<=NOW())
         AND (a.expires_at IS NULL OR a.expires_at>NOW())`,
     [companyId]
   );
   for (const item of bundleResult.rows) {
+    if (!item.entitlement_key) continue;
     if (item.enabled === true) entitlements[item.entitlement_key] = true;
     else if (!(item.entitlement_key in (row?.entitlements || {}))) entitlements[item.entitlement_key] = false;
   }
@@ -63,12 +65,33 @@ export async function getCompanyEntitlements(db, companyId) {
        JOIN licence_bundle_packages bp ON bp.bundle_id=b.id
        JOIN package_registry p ON p.id=bp.package_id
       WHERE a.company_id=$1 AND a.active=true AND bp.entitlement_type='COMMERCIAL'
+        AND (cardinality(b.allowed_companies)=0 OR $1=ANY(b.allowed_companies))
+        AND (cardinality(p.allowed_companies)=0 OR $1=ANY(p.allowed_companies))
+        AND p.licence_mode='COMMERCIAL'
         AND (a.starts_at IS NULL OR a.starts_at<=NOW())
         AND (a.expires_at IS NULL OR a.expires_at>NOW())
         AND p.manifest->>'entitlementKey' IS NOT NULL`,
     [companyId]
   );
-  for (const item of packageResult.rows) entitlements[item.entitlement_key] = true;
+  for (const item of packageResult.rows) {
+    if (item.entitlement_key) entitlements[item.entitlement_key] = true;
+  }
+  const tierEntitlements = await db(
+    `SELECT te.entitlement_key,te.enabled
+       FROM company_tier_assignments a
+       JOIN licence_tiers t ON t.id=a.tier_id AND t.active=true
+       JOIN licence_tier_entitlements te ON te.tier_id=t.id
+      WHERE a.company_id=$1 AND a.active=true
+         AND (cardinality(t.allowed_companies)=0 OR $1=ANY(t.allowed_companies))
+         AND (a.starts_at IS NULL OR a.starts_at<=NOW())
+        AND (a.expires_at IS NULL OR a.expires_at>NOW())`,
+    [companyId]
+  );
+  for (const item of tierEntitlements.rows) {
+    if (!item.entitlement_key) continue;
+    if (item.enabled === true) entitlements[item.entitlement_key] = true;
+    else if (!(item.entitlement_key in (row?.entitlements || {}))) entitlements[item.entitlement_key] = false;
+  }
   const licensedPackageResult = await db(
     `SELECT p.manifest->>'entitlementKey' AS entitlement_key
        FROM companies c
@@ -78,10 +101,33 @@ export async function getCompanyEntitlements(db, companyId) {
       WHERE c.id=$1
         AND (l.starts_at IS NULL OR l.starts_at<=NOW())
         AND (l.expires_at IS NULL OR l.expires_at>NOW())
+        AND p.licence_mode='COMMERCIAL'
+        AND (cardinality(p.allowed_companies)=0 OR c.id=ANY(p.allowed_companies))
         AND p.manifest->>'entitlementKey' IS NOT NULL`,
     [companyId]
   );
-  for (const item of licensedPackageResult.rows) entitlements[item.entitlement_key] = true;
+  for (const item of licensedPackageResult.rows) {
+    if (item.entitlement_key) entitlements[item.entitlement_key] = true;
+  }
+  const packageSources = await db(
+    `SELECT p.package_key,p.licence_mode,s.source_type,p.manifest->>'entitlementKey' AS entitlement_key
+       FROM company_package_entitlement_sources s
+       JOIN package_registry p ON p.id=s.package_id
+      WHERE s.company_id=$1 AND s.active=true
+        AND (cardinality(p.allowed_companies)=0 OR $1=ANY(p.allowed_companies))
+        AND (s.starts_at IS NULL OR s.starts_at<=NOW())
+        AND (s.expires_at IS NULL OR s.expires_at>NOW())`,
+    [companyId]
+  );
+  for (const item of packageSources.rows) {
+    if (!item.package_key) continue;
+    entitlements[`package:${item.package_key}`] = true;
+    if (item.licence_mode !== "TECHNICAL" &&
+        !["DIRECT_INSTALL", "REQUIRED_DEPENDENCY", "OPTIONAL_DEPENDENCY"].includes(item.source_type) &&
+        item.entitlement_key && item.entitlement_key !== "undefined") {
+      entitlements[item.entitlement_key] = true;
+    }
+  }
   return entitlements;
 }
 
@@ -121,8 +167,12 @@ export function isPackageLicensed(entitlements, packageEntry = {}) {
     packageEntry?.package_type === "FOUNDATION" ||
     packageEntry?.packageType === "FOUNDATION" ||
     packageEntry?.manifest?.packageType === "FOUNDATION" ||
+    packageEntry?.manifest?.licenceMode === "TECHNICAL" ||
+    packageEntry?.licence_mode === "TECHNICAL" ||
     packageEntry?.manifest?.licenceRequired === false
   ) return true;
+  const packageKey = packageEntry?.package_key || packageEntry?.packageKey || packageEntry?.manifest?.packageKey;
+  if (packageKey && hasEntitlement(entitlements, `package:${packageKey}`)) return true;
   const key = packageEntry?.manifest?.entitlementKey;
   return !key || hasEntitlement(entitlements, key);
 }

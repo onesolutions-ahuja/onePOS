@@ -2835,3 +2835,309 @@ CREATE TABLE IF NOT EXISTS user_licence_assignments (user_id UUID PRIMARY KEY RE
 ALTER TABLE user_licence_assignments ADD COLUMN IF NOT EXISTS active BOOLEAN NOT NULL DEFAULT TRUE;
 ALTER TABLE user_licence_assignments ADD COLUMN IF NOT EXISTS starts_at TIMESTAMPTZ;
 ALTER TABLE user_licence_assignments ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ;
+
+-- Base Foundation package manifest, ownership, lifecycle, and entitlement schema.
+ALTER TABLE package_registry
+    ADD COLUMN IF NOT EXISTS package_type VARCHAR(30) NOT NULL DEFAULT 'APPLICATION',
+    ADD COLUMN IF NOT EXISTS publisher VARCHAR(200) NOT NULL DEFAULT 'OneSolutions',
+    ADD COLUMN IF NOT EXISTS category VARCHAR(100),
+    ADD COLUMN IF NOT EXISTS required_platform_version VARCHAR(40),
+    ADD COLUMN IF NOT EXISTS publication_state VARCHAR(20) NOT NULL DEFAULT 'PUBLISHED',
+    ADD COLUMN IF NOT EXISTS visible BOOLEAN NOT NULL DEFAULT TRUE,
+    ADD COLUMN IF NOT EXISTS installable BOOLEAN NOT NULL DEFAULT TRUE,
+    ADD COLUMN IF NOT EXISTS billable BOOLEAN NOT NULL DEFAULT TRUE,
+    ADD COLUMN IF NOT EXISTS system_only BOOLEAN NOT NULL DEFAULT FALSE,
+    ADD COLUMN IF NOT EXISTS display_order INTEGER NOT NULL DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS available_tiers JSONB NOT NULL DEFAULT '[]'::jsonb,
+    ADD COLUMN IF NOT EXISTS licence_mode VARCHAR(30) NOT NULL DEFAULT 'COMMERCIAL',
+    ADD COLUMN IF NOT EXISTS allowed_bundles TEXT[] NOT NULL DEFAULT '{}',
+    ADD COLUMN IF NOT EXISTS allowed_companies UUID[] NOT NULL DEFAULT '{}';
+UPDATE package_registry
+   SET licence_mode=CASE WHEN package_type='FOUNDATION' OR billable=false THEN 'TECHNICAL' ELSE 'COMMERCIAL' END
+ WHERE licence_mode='COMMERCIAL' AND (package_type='FOUNDATION' OR billable=false);
+DO $$ BEGIN
+    ALTER TABLE package_registry ADD CONSTRAINT package_registry_type_check
+        CHECK(package_type IN ('FOUNDATION','APPLICATION','BUNDLE')) NOT VALID;
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
+DO $$ BEGIN
+    ALTER TABLE package_registry ADD CONSTRAINT package_registry_publication_check
+        CHECK(publication_state IN ('DRAFT','PUBLISHED','RETIRED')) NOT VALID;
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
+ALTER TABLE package_dependencies
+    ADD COLUMN IF NOT EXISTS min_version VARCHAR(40),
+    ADD COLUMN IF NOT EXISTS max_version VARCHAR(40);
+ALTER TABLE company_package_installations
+    ADD COLUMN IF NOT EXISTS installation_type VARCHAR(30) NOT NULL DEFAULT 'DIRECT',
+    ADD COLUMN IF NOT EXISTS available_version VARCHAR(40),
+    ADD COLUMN IF NOT EXISTS last_upgrade_at TIMESTAMPTZ,
+    ADD COLUMN IF NOT EXISTS last_upgrade_state VARCHAR(20) NOT NULL DEFAULT 'READY',
+    ADD COLUMN IF NOT EXISTS suspended_by_entitlement BOOLEAN NOT NULL DEFAULT FALSE,
+    ADD COLUMN IF NOT EXISTS deactivated_by_user BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE platform_objects
+    ADD COLUMN IF NOT EXISTS source_package_version VARCHAR(40),
+    ADD COLUMN IF NOT EXISTS managed BOOLEAN NOT NULL DEFAULT FALSE,
+    ADD COLUMN IF NOT EXISTS package_required BOOLEAN NOT NULL DEFAULT FALSE,
+    ADD COLUMN IF NOT EXISTS user_modified BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE platform_fields
+    ADD COLUMN IF NOT EXISTS source_package_id UUID REFERENCES package_registry(id) ON DELETE SET NULL,
+    ADD COLUMN IF NOT EXISTS source_package_version VARCHAR(40),
+    ADD COLUMN IF NOT EXISTS managed BOOLEAN NOT NULL DEFAULT FALSE,
+    ADD COLUMN IF NOT EXISTS package_required BOOLEAN NOT NULL DEFAULT FALSE,
+    ADD COLUMN IF NOT EXISTS user_modified BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE platform_relationships
+    ADD COLUMN IF NOT EXISTS source_package_id UUID REFERENCES package_registry(id) ON DELETE SET NULL,
+    ADD COLUMN IF NOT EXISTS source_package_version VARCHAR(40),
+    ADD COLUMN IF NOT EXISTS managed BOOLEAN NOT NULL DEFAULT FALSE,
+    ADD COLUMN IF NOT EXISTS package_required BOOLEAN NOT NULL DEFAULT FALSE,
+    ADD COLUMN IF NOT EXISTS user_modified BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE platform_layouts
+    ADD COLUMN IF NOT EXISTS source_package_id UUID REFERENCES package_registry(id) ON DELETE SET NULL,
+    ADD COLUMN IF NOT EXISTS source_package_version VARCHAR(40),
+    ADD COLUMN IF NOT EXISTS managed BOOLEAN NOT NULL DEFAULT FALSE,
+    ADD COLUMN IF NOT EXISTS package_required BOOLEAN NOT NULL DEFAULT FALSE,
+    ADD COLUMN IF NOT EXISTS user_modified BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE platform_rules
+    ADD COLUMN IF NOT EXISTS source_package_id UUID REFERENCES package_registry(id) ON DELETE SET NULL,
+    ADD COLUMN IF NOT EXISTS source_package_version VARCHAR(40),
+    ADD COLUMN IF NOT EXISTS managed BOOLEAN NOT NULL DEFAULT FALSE,
+    ADD COLUMN IF NOT EXISTS package_required BOOLEAN NOT NULL DEFAULT FALSE,
+    ADD COLUMN IF NOT EXISTS user_modified BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE platform_reports
+    ADD COLUMN IF NOT EXISTS source_package_id UUID REFERENCES package_registry(id) ON DELETE SET NULL,
+    ADD COLUMN IF NOT EXISTS source_package_version VARCHAR(40),
+    ADD COLUMN IF NOT EXISTS managed BOOLEAN NOT NULL DEFAULT FALSE,
+    ADD COLUMN IF NOT EXISTS package_required BOOLEAN NOT NULL DEFAULT FALSE,
+    ADD COLUMN IF NOT EXISTS user_modified BOOLEAN NOT NULL DEFAULT FALSE;
+CREATE TABLE IF NOT EXISTS package_metadata_ownership (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    package_id UUID NOT NULL REFERENCES package_registry(id) ON DELETE RESTRICT,
+    package_version VARCHAR(40) NOT NULL,
+    metadata_type VARCHAR(50) NOT NULL,
+    metadata_id UUID NOT NULL,
+    managed BOOLEAN NOT NULL DEFAULT TRUE,
+    package_required BOOLEAN NOT NULL DEFAULT FALSE,
+    user_modified BOOLEAN NOT NULL DEFAULT FALSE,
+    default_snapshot JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(package_id, metadata_type, metadata_id)
+);
+CREATE TABLE IF NOT EXISTS package_upgrade_history (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+    package_id UUID NOT NULL REFERENCES package_registry(id) ON DELETE RESTRICT,
+    from_version VARCHAR(40),
+    to_version VARCHAR(40) NOT NULL,
+    status VARCHAR(20) NOT NULL CHECK(status IN ('RUNNING','COMPLETED','FAILED')),
+    migration_key VARCHAR(200),
+    error_text TEXT,
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+    started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    completed_at TIMESTAMPTZ,
+    created_by UUID REFERENCES users(id) ON DELETE SET NULL
+);
+CREATE INDEX IF NOT EXISTS idx_package_upgrade_history_company
+    ON package_upgrade_history(company_id, package_id, started_at DESC);
+CREATE TABLE IF NOT EXISTS licence_packages (
+    licence_id UUID NOT NULL REFERENCES licences(id) ON DELETE CASCADE,
+    package_id UUID NOT NULL REFERENCES package_registry(id) ON DELETE CASCADE,
+    enabled BOOLEAN NOT NULL DEFAULT TRUE,
+    optional BOOLEAN NOT NULL DEFAULT FALSE,
+    version_range VARCHAR(80),
+    PRIMARY KEY(licence_id, package_id)
+);
+CREATE TABLE IF NOT EXISTS licence_bundles (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    bundle_key VARCHAR(100) NOT NULL UNIQUE,
+    name VARCHAR(200) NOT NULL,
+    description TEXT,
+    active BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE TABLE IF NOT EXISTS licence_bundle_packages (
+    bundle_id UUID NOT NULL REFERENCES licence_bundles(id) ON DELETE CASCADE,
+    package_id UUID NOT NULL REFERENCES package_registry(id) ON DELETE CASCADE,
+    entitlement_type VARCHAR(20) NOT NULL DEFAULT 'COMMERCIAL'
+        CHECK(entitlement_type IN ('COMMERCIAL','REQUIRED_DEPENDENCY','OPTIONAL')),
+    version_range VARCHAR(80),
+    PRIMARY KEY(bundle_id, package_id)
+);
+CREATE TABLE IF NOT EXISTS licence_bundle_entitlements (
+    bundle_id UUID NOT NULL REFERENCES licence_bundles(id) ON DELETE CASCADE,
+    entitlement_key VARCHAR(100) NOT NULL,
+    enabled BOOLEAN NOT NULL DEFAULT TRUE,
+    PRIMARY KEY(bundle_id, entitlement_key)
+);
+CREATE TABLE IF NOT EXISTS company_bundle_assignments (
+    company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+    bundle_id UUID NOT NULL REFERENCES licence_bundles(id) ON DELETE RESTRICT,
+    active BOOLEAN NOT NULL DEFAULT TRUE,
+    starts_at TIMESTAMPTZ,
+    expires_at TIMESTAMPTZ,
+    assigned_by UUID REFERENCES users(id) ON DELETE SET NULL,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY(company_id, bundle_id)
+);
+ALTER TABLE licence_bundles
+    ADD COLUMN IF NOT EXISTS visible BOOLEAN NOT NULL DEFAULT FALSE,
+    ADD COLUMN IF NOT EXISTS installable BOOLEAN NOT NULL DEFAULT FALSE,
+    ADD COLUMN IF NOT EXISTS display_order INTEGER NOT NULL DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS allowed_companies UUID[] NOT NULL DEFAULT '{}',
+    ADD COLUMN IF NOT EXISTS available_tiers TEXT[] NOT NULL DEFAULT '{}';
+CREATE TABLE IF NOT EXISTS licence_tiers (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tier_key VARCHAR(100) NOT NULL UNIQUE,
+    name VARCHAR(200) NOT NULL,
+    description TEXT,
+    active BOOLEAN NOT NULL DEFAULT TRUE,
+    visible BOOLEAN NOT NULL DEFAULT FALSE,
+    installable BOOLEAN NOT NULL DEFAULT FALSE,
+    display_order INTEGER NOT NULL DEFAULT 0,
+    allowed_companies UUID[] NOT NULL DEFAULT '{}',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE TABLE IF NOT EXISTS licence_tier_packages (
+    tier_id UUID NOT NULL REFERENCES licence_tiers(id) ON DELETE CASCADE,
+    package_id UUID NOT NULL REFERENCES package_registry(id) ON DELETE CASCADE,
+    entitlement_type VARCHAR(20) NOT NULL DEFAULT 'COMMERCIAL'
+        CHECK(entitlement_type IN ('COMMERCIAL','REQUIRED_DEPENDENCY','OPTIONAL')),
+    version_range VARCHAR(80),
+    PRIMARY KEY(tier_id, package_id)
+);
+CREATE TABLE IF NOT EXISTS licence_tier_entitlements (
+    tier_id UUID NOT NULL REFERENCES licence_tiers(id) ON DELETE CASCADE,
+    entitlement_key VARCHAR(100) NOT NULL,
+    enabled BOOLEAN NOT NULL DEFAULT TRUE,
+    PRIMARY KEY(tier_id, entitlement_key)
+);
+CREATE TABLE IF NOT EXISTS company_tier_assignments (
+    company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+    tier_id UUID NOT NULL REFERENCES licence_tiers(id) ON DELETE RESTRICT,
+    active BOOLEAN NOT NULL DEFAULT TRUE,
+    starts_at TIMESTAMPTZ,
+    expires_at TIMESTAMPTZ,
+    assigned_by UUID REFERENCES users(id) ON DELETE SET NULL,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY(company_id, tier_id)
+);
+CREATE TABLE IF NOT EXISTS company_package_entitlement_sources (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+    package_id UUID NOT NULL REFERENCES package_registry(id) ON DELETE CASCADE,
+    source_type VARCHAR(30) NOT NULL CHECK(source_type IN (
+        'DIRECT_LICENCE','DIRECT_INSTALL','BUNDLE','TIER','REQUIRED_DEPENDENCY',
+        'OPTIONAL_DEPENDENCY','PLATFORM_DEFAULT','SUPERADMIN_ASSIGNMENT'
+    )),
+    source_key VARCHAR(200) NOT NULL,
+    parent_package_id UUID REFERENCES package_registry(id) ON DELETE SET NULL,
+    active BOOLEAN NOT NULL DEFAULT TRUE,
+    starts_at TIMESTAMPTZ,
+    expires_at TIMESTAMPTZ,
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(company_id, package_id, source_type, source_key)
+);
+CREATE INDEX IF NOT EXISTS idx_company_package_entitlements_effective
+    ON company_package_entitlement_sources(company_id, package_id, active, expires_at);
+CREATE TABLE IF NOT EXISTS platform_list_views (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    object_id UUID NOT NULL REFERENCES platform_objects(id) ON DELETE CASCADE,
+    company_id UUID REFERENCES companies(id) ON DELETE CASCADE,
+    view_key VARCHAR(100) NOT NULL,
+    label VARCHAR(200) NOT NULL,
+    description TEXT,
+    active BOOLEAN NOT NULL DEFAULT TRUE,
+    columns JSONB NOT NULL DEFAULT '[]'::jsonb,
+    filters JSONB NOT NULL DEFAULT '{}'::jsonb,
+    sort JSONB NOT NULL DEFAULT '{"field":null,"direction":"asc"}'::jsonb,
+    page_size INTEGER NOT NULL DEFAULT 50,
+    is_default BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(object_id, company_id, view_key)
+);
+CREATE TABLE IF NOT EXISTS platform_registered_actions (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    company_id UUID REFERENCES companies(id) ON DELETE CASCADE,
+    object_id UUID REFERENCES platform_objects(id) ON DELETE CASCADE,
+    action_key VARCHAR(140) NOT NULL,
+    label VARCHAR(200) NOT NULL,
+    description TEXT,
+    handler_key VARCHAR(140) NOT NULL,
+    required_permission VARCHAR(140),
+    config JSONB NOT NULL DEFAULT '{}'::jsonb,
+    active BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE TABLE IF NOT EXISTS platform_buttons (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    company_id UUID REFERENCES companies(id) ON DELETE CASCADE,
+    object_id UUID REFERENCES platform_objects(id) ON DELETE CASCADE,
+    button_key VARCHAR(140) NOT NULL,
+    label VARCHAR(200) NOT NULL,
+    icon VARCHAR(100),
+    action_key VARCHAR(140),
+    placement VARCHAR(80) NOT NULL DEFAULT 'record',
+    visibility_rule JSONB NOT NULL DEFAULT '{}'::jsonb,
+    config JSONB NOT NULL DEFAULT '{}'::jsonb,
+    active BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+ALTER TABLE platform_field_security ADD COLUMN IF NOT EXISTS id UUID NOT NULL DEFAULT gen_random_uuid();
+CREATE UNIQUE INDEX IF NOT EXISTS uq_platform_field_security_id ON platform_field_security(id);
+ALTER TABLE platform_field_security
+    ADD COLUMN IF NOT EXISTS source_package_id UUID REFERENCES package_registry(id) ON DELETE SET NULL,
+    ADD COLUMN IF NOT EXISTS source_package_version VARCHAR(40),
+    ADD COLUMN IF NOT EXISTS managed BOOLEAN NOT NULL DEFAULT FALSE,
+    ADD COLUMN IF NOT EXISTS package_required BOOLEAN NOT NULL DEFAULT FALSE,
+    ADD COLUMN IF NOT EXISTS user_modified BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE platform_object_permissions ADD COLUMN IF NOT EXISTS id UUID NOT NULL DEFAULT gen_random_uuid();
+CREATE UNIQUE INDEX IF NOT EXISTS uq_platform_object_permissions_id ON platform_object_permissions(id);
+ALTER TABLE platform_object_permissions
+    ADD COLUMN IF NOT EXISTS source_package_id UUID REFERENCES package_registry(id) ON DELETE SET NULL,
+    ADD COLUMN IF NOT EXISTS source_package_version VARCHAR(40),
+    ADD COLUMN IF NOT EXISTS managed BOOLEAN NOT NULL DEFAULT FALSE,
+    ADD COLUMN IF NOT EXISTS package_required BOOLEAN NOT NULL DEFAULT FALSE,
+    ADD COLUMN IF NOT EXISTS user_modified BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE platform_list_views
+    ADD COLUMN IF NOT EXISTS source_package_id UUID REFERENCES package_registry(id) ON DELETE SET NULL,
+    ADD COLUMN IF NOT EXISTS source_package_version VARCHAR(40),
+    ADD COLUMN IF NOT EXISTS managed BOOLEAN NOT NULL DEFAULT FALSE,
+    ADD COLUMN IF NOT EXISTS package_required BOOLEAN NOT NULL DEFAULT FALSE,
+    ADD COLUMN IF NOT EXISTS user_modified BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE platform_registered_actions
+    ADD COLUMN IF NOT EXISTS source_package_id UUID REFERENCES package_registry(id) ON DELETE SET NULL,
+    ADD COLUMN IF NOT EXISTS source_package_version VARCHAR(40),
+    ADD COLUMN IF NOT EXISTS managed BOOLEAN NOT NULL DEFAULT FALSE,
+    ADD COLUMN IF NOT EXISTS package_required BOOLEAN NOT NULL DEFAULT FALSE,
+    ADD COLUMN IF NOT EXISTS user_modified BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE platform_buttons
+    ADD COLUMN IF NOT EXISTS source_package_id UUID REFERENCES package_registry(id) ON DELETE SET NULL,
+    ADD COLUMN IF NOT EXISTS source_package_version VARCHAR(40),
+    ADD COLUMN IF NOT EXISTS managed BOOLEAN NOT NULL DEFAULT FALSE,
+    ADD COLUMN IF NOT EXISTS package_required BOOLEAN NOT NULL DEFAULT FALSE,
+    ADD COLUMN IF NOT EXISTS user_modified BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE platform_message_templates
+    ADD COLUMN IF NOT EXISTS source_package_id UUID REFERENCES package_registry(id) ON DELETE SET NULL,
+    ADD COLUMN IF NOT EXISTS source_package_version VARCHAR(40),
+    ADD COLUMN IF NOT EXISTS managed BOOLEAN NOT NULL DEFAULT FALSE,
+    ADD COLUMN IF NOT EXISTS package_required BOOLEAN NOT NULL DEFAULT FALSE,
+    ADD COLUMN IF NOT EXISTS user_modified BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE platform_apps
+    ADD COLUMN IF NOT EXISTS source_package_id UUID REFERENCES package_registry(id) ON DELETE SET NULL,
+    ADD COLUMN IF NOT EXISTS source_package_version VARCHAR(40),
+    ADD COLUMN IF NOT EXISTS managed BOOLEAN NOT NULL DEFAULT FALSE,
+    ADD COLUMN IF NOT EXISTS package_required BOOLEAN NOT NULL DEFAULT FALSE,
+    ADD COLUMN IF NOT EXISTS user_modified BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE platform_pages
+    ADD COLUMN IF NOT EXISTS source_package_id UUID REFERENCES package_registry(id) ON DELETE SET NULL,
+    ADD COLUMN IF NOT EXISTS source_package_version VARCHAR(40),
+    ADD COLUMN IF NOT EXISTS managed BOOLEAN NOT NULL DEFAULT FALSE,
+    ADD COLUMN IF NOT EXISTS package_required BOOLEAN NOT NULL DEFAULT FALSE,
+    ADD COLUMN IF NOT EXISTS user_modified BOOLEAN NOT NULL DEFAULT FALSE;

@@ -17,6 +17,11 @@ import {
   validateTenantSchema,
 } from "../services/tenantDatabase.js";
 
+function validOptionalDate(value) {
+  return value === undefined || value === null ||
+    (typeof value === "string" && Number.isFinite(Date.parse(value)));
+}
+
 export default function createSuperadminRouter({ authenticate, db, pool, tenantDatabaseRouter, env = process.env }) {
   const router = express.Router();
   const requireSuperadmin = async (req, res, next) => {
@@ -113,7 +118,54 @@ export default function createSuperadminRouter({ authenticate, db, pool, tenantD
         await db("INSERT INTO licence_entitlements (licence_id,entitlement_key,enabled) VALUES ($1,$2,$3)", [req.params.id, key, enabled]);
       }
     }
+    const companies = await db("SELECT id FROM companies WHERE licence_id=$1", [req.params.id]);
+    for (const company of companies.rows) {
+      await reconcileCompanyPackageEntitlements(db, company.id);
+    }
     res.json({ success: true, data: result.rows[0] });
+  });
+
+  router.put("/superadmin/licences/:id/packages", async (req, res) => {
+    const packages = req.body?.packages;
+    if (!Array.isArray(packages) || packages.some((item) =>
+      !item || typeof item.package_id !== "string" ||
+      !["COMMERCIAL", "REQUIRED_DEPENDENCY", "OPTIONAL"].includes(item.entitlement_type || "COMMERCIAL") ||
+      (item.version_range !== undefined && item.version_range !== null &&
+        (typeof item.version_range !== "string" || item.version_range.length > 80))
+    )) {
+      return res.status(400).json({ success: false, message: "Invalid licence package composition" });
+    }
+    const licence = await db("SELECT id FROM licences WHERE id=$1", [req.params.id]);
+    if (!licence.rows.length) return res.status(404).json({ success: false, message: "Licence not found" });
+    const packageIds = [...new Set(packages.map((item) => item.package_id))];
+    const known = packageIds.length
+      ? await db("SELECT id FROM package_registry WHERE id=ANY($1::uuid[])", [packageIds])
+      : { rows: [] };
+    if (known.rows.length !== packageIds.length) return res.status(400).json({ success: false, message: "Licence contains an unknown package" });
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query("DELETE FROM licence_packages WHERE licence_id=$1", [req.params.id]);
+      for (const item of packages) {
+        await client.query(
+          `INSERT INTO licence_packages(licence_id,package_id,enabled,optional,version_range)
+           VALUES($1,$2,true,$3,$4)`,
+          [req.params.id, item.package_id, item.entitlement_type === "OPTIONAL", item.version_range || null]
+        );
+      }
+      const companies = await client.query("SELECT id FROM companies WHERE licence_id=$1", [req.params.id]);
+      for (const company of companies.rows) {
+        await reconcileCompanyPackageEntitlements((query, params) => client.query(query, params), company.id);
+      }
+      await client.query("COMMIT");
+      res.json({ success: true, data: { licenceId: req.params.id, packages } });
+    } catch (error) {
+      await client.query("ROLLBACK");
+      console.error("Licence package composition update error:", error);
+      res.status(500).json({ success: false, message: "Unable to update licence package composition" });
+    } finally {
+      client.release();
+    }
   });
 
   router.get("/superadmin/companies", async (req, res) => {
@@ -126,6 +178,7 @@ export default function createSuperadminRouter({ authenticate, db, pool, tenantD
     const result = await db(`UPDATE companies SET licence_id=$1,updated_at=NOW() WHERE id=$2 RETURNING id,name,licence_id`,
       [req.body?.licenceId || null, req.params.id]);
     if (!result.rows.length) return res.status(404).json({ success: false, message: "Company not found" });
+    await reconcileCompanyPackageEntitlements(db, result.rows[0].id);
     res.json({ success: true, data: result.rows[0] });
   });
 
@@ -415,7 +468,8 @@ export default function createSuperadminRouter({ authenticate, db, pool, tenantD
   router.get("/superadmin/packages", async (_req, res) => {
     const result = await db(
       `SELECT id,package_key,name,version,package_type,publisher,category,publication_state,
-              visible,installable,billable,system_only,display_order,available_tiers,manifest
+              active,visible,installable,billable,system_only,display_order,available_tiers,
+              allowed_bundles,allowed_companies,licence_mode,manifest
          FROM package_registry ORDER BY display_order,name`
     );
     res.json({ success: true, data: result.rows });
@@ -423,23 +477,39 @@ export default function createSuperadminRouter({ authenticate, db, pool, tenantD
 
   router.put("/superadmin/packages/:packageId/marketplace", async (req, res) => {
     const body = req.body || {};
-    const validBoolean = ["visible", "installable", "billable", "system_only"].every((key) => body[key] === undefined || typeof body[key] === "boolean");
+    const validBoolean = ["active", "visible", "installable", "billable", "system_only"].every((key) => body[key] === undefined || typeof body[key] === "boolean");
     const tiers = body.available_tiers;
-    if (!validBoolean || (tiers !== undefined && (!Array.isArray(tiers) || tiers.some((item) => typeof item !== "string" || !/^[a-z0-9_.-]{1,100}$/i.test(item))))) {
+    const bundles = body.allowed_bundles;
+    const companies = body.allowed_companies;
+    const validKeys = (items) => items === undefined || (Array.isArray(items) && items.every((item) => typeof item === "string" && /^[a-z0-9_.-]{1,100}$/i.test(item)));
+    const validCompanies = companies === undefined || (Array.isArray(companies) && companies.every((item) => typeof item === "string" && /^[0-9a-f-]{36}$/i.test(item)));
+    if (!validBoolean || !validKeys(tiers) || !validKeys(bundles) || !validCompanies) {
       return res.status(400).json({ success: false, message: "Invalid package visibility configuration" });
+    }
+    if (body.licence_mode !== undefined && !["COMMERCIAL", "TECHNICAL"].includes(body.licence_mode)) {
+      return res.status(400).json({ success: false, message: "Invalid package licence mode" });
+    }
+    if (body.category !== undefined && (typeof body.category !== "string" || body.category.length > 100)) {
+      return res.status(400).json({ success: false, message: "Invalid package category" });
     }
     if (body.publication_state !== undefined && !["DRAFT", "PUBLISHED", "RETIRED"].includes(body.publication_state)) {
       return res.status(400).json({ success: false, message: "Invalid publication state" });
     }
     const result = await db(
       `UPDATE package_registry SET
-         visible=COALESCE($1,visible),installable=COALESCE($2,installable),
-         billable=COALESCE($3,billable),system_only=COALESCE($4,system_only),
-         category=COALESCE($5,category),display_order=COALESCE($6,display_order),
-         available_tiers=COALESCE($7::jsonb,available_tiers),
-         publication_state=COALESCE($8,publication_state),updated_at=NOW()
-       WHERE id=$9 RETURNING id,package_key,visible,installable,billable,system_only,category,display_order,available_tiers,publication_state`,
+         active=COALESCE($1,active),
+         visible=COALESCE($2,visible),installable=COALESCE($3,installable),
+         billable=COALESCE($4,billable),system_only=COALESCE($5,system_only),
+         category=COALESCE(NULLIF($6,''),category),display_order=COALESCE($7,display_order),
+         available_tiers=COALESCE($8::jsonb,available_tiers),
+         publication_state=COALESCE($9,publication_state),
+         allowed_bundles=COALESCE($10::text[],allowed_bundles),
+         allowed_companies=COALESCE($11::uuid[],allowed_companies),
+         licence_mode=COALESCE($12,licence_mode),updated_at=NOW()
+       WHERE id=$13 RETURNING id,package_key,active,visible,installable,billable,system_only,
+         category,display_order,available_tiers,allowed_bundles,allowed_companies,licence_mode,publication_state`,
       [
+        body.active ?? null,
         body.visible ?? null,
         body.installable ?? null,
         body.billable ?? null,
@@ -448,6 +518,9 @@ export default function createSuperadminRouter({ authenticate, db, pool, tenantD
         Number.isInteger(body.display_order) ? body.display_order : null,
         tiers === undefined ? null : JSON.stringify(tiers),
         body.publication_state ?? null,
+        bundles === undefined ? null : bundles,
+        companies === undefined ? null : companies,
+        body.licence_mode ?? null,
         req.params.packageId,
       ]
     );
@@ -477,14 +550,48 @@ export default function createSuperadminRouter({ authenticate, db, pool, tenantD
     if (!/^[a-z][a-z0-9_.-]{1,99}$/i.test(key) || !name) {
       return res.status(400).json({ success: false, message: "A valid bundle key and name are required" });
     }
+    const allowedCompanies = req.body.allowed_companies ?? [];
+    const availableTiers = req.body.available_tiers ?? [];
+    if (!Array.isArray(allowedCompanies) || allowedCompanies.some((id) => typeof id !== "string" || !/^[0-9a-f-]{36}$/i.test(id)) ||
+        !Array.isArray(availableTiers) || availableTiers.some((item) => typeof item !== "string" || !/^[a-z0-9_.-]{1,100}$/i.test(item))) {
+      return res.status(400).json({ success: false, message: "Invalid bundle restrictions" });
+    }
     const result = await db(
-      `INSERT INTO licence_bundles(bundle_key,name,description,active)
-       VALUES($1,$2,$3,COALESCE($4,true))
-       ON CONFLICT(bundle_key) DO UPDATE SET name=EXCLUDED.name,description=EXCLUDED.description,active=EXCLUDED.active,updated_at=NOW()
+      `INSERT INTO licence_bundles
+       (bundle_key,name,description,active,visible,installable,display_order,allowed_companies,available_tiers)
+       VALUES($1,$2,$3,COALESCE($4,true),COALESCE($5,false),COALESCE($6,false),COALESCE($7,0),$8::uuid[],$9::text[])
+       ON CONFLICT(bundle_key) DO UPDATE SET name=EXCLUDED.name,description=EXCLUDED.description,
+         active=EXCLUDED.active,visible=EXCLUDED.visible,installable=EXCLUDED.installable,
+         display_order=EXCLUDED.display_order,allowed_companies=EXCLUDED.allowed_companies,
+         available_tiers=EXCLUDED.available_tiers,updated_at=NOW()
        RETURNING *`,
-      [key, name, req.body.description || null, req.body.active]
+      [key, name, req.body.description || null, req.body.active, req.body.visible, req.body.installable,
+        Number.isInteger(req.body.display_order) ? req.body.display_order : 0, allowedCompanies, availableTiers]
     );
     res.status(201).json({ success: true, data: result.rows[0] });
+  });
+
+  router.put("/superadmin/bundles/:bundleId/marketplace", async (req, res) => {
+    const body = req.body || {};
+    const booleans = ["active", "visible", "installable"].every((key) => body[key] === undefined || typeof body[key] === "boolean");
+    const validKeys = (items) => items === undefined || (Array.isArray(items) && items.every((item) => typeof item === "string" && /^[a-z0-9_.-]{1,100}$/i.test(item)));
+    const companies = body.allowed_companies;
+    if (!booleans || !validKeys(body.available_tiers) ||
+        (companies !== undefined && (!Array.isArray(companies) || companies.some((id) => typeof id !== "string" || !/^[0-9a-f-]{36}$/i.test(id))))) {
+      return res.status(400).json({ success: false, message: "Invalid bundle marketplace configuration" });
+    }
+    const result = await db(
+      `UPDATE licence_bundles SET active=COALESCE($1,active),visible=COALESCE($2,visible),
+         installable=COALESCE($3,installable),display_order=COALESCE($4,display_order),
+         available_tiers=COALESCE($5::text[],available_tiers),
+         allowed_companies=COALESCE($6::uuid[],allowed_companies),updated_at=NOW()
+       WHERE id=$7 RETURNING *`,
+      [body.active ?? null, body.visible ?? null, body.installable ?? null,
+        Number.isInteger(body.display_order) ? body.display_order : null,
+        body.available_tiers ?? null, companies ?? null, req.params.bundleId]
+    );
+    if (!result.rows.length) return res.status(404).json({ success: false, message: "Bundle not found" });
+    res.json({ success: true, data: result.rows[0] });
   });
 
   router.put("/superadmin/bundles/:bundleId/composition", async (req, res) => {
@@ -522,6 +629,16 @@ export default function createSuperadminRouter({ authenticate, db, pool, tenantD
           [req.params.bundleId, entitlementKey, enabled]
         );
       }
+      const assignedCompanies = await client.query(
+        "SELECT company_id FROM company_bundle_assignments WHERE bundle_id=$1 AND active=true",
+        [req.params.bundleId]
+      );
+      for (const assignment of assignedCompanies.rows) {
+        await reconcileCompanyPackageEntitlements(
+          (query, params) => client.query(query, params),
+          assignment.company_id
+        );
+      }
       await client.query("COMMIT");
       res.json({ success: true, data: { bundleId: req.params.bundleId, packages, entitlements: normalizedEntitlements } });
     } catch (error) {
@@ -533,27 +650,49 @@ export default function createSuperadminRouter({ authenticate, db, pool, tenantD
   });
 
   router.put("/superadmin/companies/:id/bundles", async (req, res) => {
-    const bundleIds = req.body?.bundleIds;
-    if (!Array.isArray(bundleIds) || bundleIds.some((id) => typeof id !== "string")) {
-      return res.status(400).json({ success: false, message: "bundleIds must be an array" });
+    const legacyIds = req.body?.bundleIds;
+    const input = req.body?.assignments ?? (Array.isArray(legacyIds) ? legacyIds.map((bundleId) => ({ bundleId })) : null);
+    if (!Array.isArray(input) || input.some((item) =>
+      !item || typeof item.bundleId !== "string" || !/^[0-9a-f-]{36}$/i.test(item.bundleId) ||
+      !validOptionalDate(item.startsAt) || !validOptionalDate(item.expiresAt) ||
+      (item.startsAt && item.expiresAt && Date.parse(item.expiresAt) <= Date.parse(item.startsAt))
+    )) {
+      return res.status(400).json({ success: false, message: "Provide bundleIds or valid bundle assignments" });
     }
     const company = await db("SELECT id FROM companies WHERE id=$1", [req.params.id]);
     if (!company.rows.length) return res.status(404).json({ success: false, message: "Company not found" });
-    const uniqueIds = [...new Set(bundleIds)];
+    const assignments = [...new Map(input.map((item) => [item.bundleId, item])).values()];
+    const uniqueIds = assignments.map((item) => item.bundleId);
     const bundles = uniqueIds.length
-      ? await db("SELECT id FROM licence_bundles WHERE id=ANY($1::uuid[]) AND active=true", [uniqueIds])
+      ? await db("SELECT id,allowed_companies,available_tiers FROM licence_bundles WHERE id=ANY($1::uuid[]) AND active=true", [uniqueIds])
       : { rows: [] };
     if (bundles.rows.length !== uniqueIds.length) return res.status(400).json({ success: false, message: "One or more bundles are unavailable" });
+    const assignedTiers = await db(
+      `SELECT t.tier_key FROM company_tier_assignments a
+       JOIN licence_tiers t ON t.id=a.tier_id
+       WHERE a.company_id=$1 AND a.active=true AND t.active=true
+         AND (a.starts_at IS NULL OR a.starts_at<=NOW())
+         AND (a.expires_at IS NULL OR a.expires_at>NOW())`,
+      [req.params.id]
+    );
+    const tierKeys = new Set(assignedTiers.rows.map((row) => row.tier_key));
+    if (bundles.rows.some((bundle) =>
+      (bundle.allowed_companies || []).length && !bundle.allowed_companies.includes(req.params.id) ||
+      (bundle.available_tiers || []).length && !(bundle.available_tiers || []).some((tierKey) => tierKeys.has(tierKey))
+    )) {
+      return res.status(400).json({ success: false, message: "One or more bundles are restricted for this company or tier" });
+    }
     const client = await pool.connect();
     try {
       await client.query("BEGIN");
       await client.query("UPDATE company_bundle_assignments SET active=false,updated_at=NOW() WHERE company_id=$1", [req.params.id]);
-      for (const bundleId of uniqueIds) {
+      for (const assignment of assignments) {
         await client.query(
-          `INSERT INTO company_bundle_assignments(company_id,bundle_id,active,assigned_by)
-           VALUES($1,$2,true,$3)
-           ON CONFLICT(company_id,bundle_id) DO UPDATE SET active=true,assigned_by=EXCLUDED.assigned_by,updated_at=NOW()`,
-          [req.params.id, bundleId, req.user.id]
+          `INSERT INTO company_bundle_assignments(company_id,bundle_id,active,starts_at,expires_at,assigned_by)
+           VALUES($1,$2,true,$3,$4,$5)
+           ON CONFLICT(company_id,bundle_id) DO UPDATE SET active=true,starts_at=EXCLUDED.starts_at,
+             expires_at=EXCLUDED.expires_at,assigned_by=EXCLUDED.assigned_by,updated_at=NOW()`,
+          [req.params.id, assignment.bundleId, assignment.startsAt || null, assignment.expiresAt || null, req.user.id]
         );
       }
       await reconcileCompanyPackageEntitlements((query, params) => client.query(query, params), req.params.id);
@@ -563,6 +702,214 @@ export default function createSuperadminRouter({ authenticate, db, pool, tenantD
       await client.query("ROLLBACK");
       console.error("Bundle assignment update error:", error);
       res.status(500).json({ success: false, message: "Unable to update company bundle assignments" });
+    } finally {
+      client.release();
+    }
+  });
+
+  router.get("/superadmin/tiers", async (_req, res) => {
+    const result = await db(
+      `SELECT t.*,
+              COALESCE(jsonb_agg(DISTINCT jsonb_build_object(
+                'package_id',p.id,'package_key',p.package_key,'entitlement_type',tp.entitlement_type,'version_range',tp.version_range
+              )) FILTER (WHERE p.id IS NOT NULL),'[]'::jsonb) AS packages,
+              COALESCE((SELECT jsonb_object_agg(te.entitlement_key,te.enabled)
+                         FROM licence_tier_entitlements te WHERE te.tier_id=t.id),'{}'::jsonb) AS entitlements
+         FROM licence_tiers t
+         LEFT JOIN licence_tier_packages tp ON tp.tier_id=t.id
+         LEFT JOIN package_registry p ON p.id=tp.package_id
+        GROUP BY t.id ORDER BY t.display_order,t.name`
+    );
+    res.json({ success: true, data: result.rows });
+  });
+
+  router.post("/superadmin/tiers", async (req, res) => {
+    const key = String(req.body?.tier_key || "").trim();
+    const name = String(req.body?.name || "").trim();
+    const allowedCompanies = req.body?.allowed_companies ?? [];
+    if (!/^[a-z][a-z0-9_.-]{1,99}$/i.test(key) || !name ||
+        !Array.isArray(allowedCompanies) || allowedCompanies.some((id) => typeof id !== "string" || !/^[0-9a-f-]{36}$/i.test(id))) {
+      return res.status(400).json({ success: false, message: "A valid tier key, name, and company restriction list are required" });
+    }
+    const result = await db(
+      `INSERT INTO licence_tiers(tier_key,name,description,active,visible,installable,display_order,allowed_companies)
+       VALUES($1,$2,$3,COALESCE($4,true),COALESCE($5,false),COALESCE($6,false),COALESCE($7,0),$8::uuid[])
+       ON CONFLICT(tier_key) DO UPDATE SET name=EXCLUDED.name,description=EXCLUDED.description,
+         active=EXCLUDED.active,visible=EXCLUDED.visible,installable=EXCLUDED.installable,
+         display_order=EXCLUDED.display_order,allowed_companies=EXCLUDED.allowed_companies,updated_at=NOW()
+       RETURNING *`,
+      [key, name, req.body.description || null, req.body.active, req.body.visible, req.body.installable,
+        Number.isInteger(req.body.display_order) ? req.body.display_order : 0, allowedCompanies]
+    );
+    res.status(201).json({ success: true, data: result.rows[0] });
+  });
+
+  router.put("/superadmin/tiers/:tierId/marketplace", async (req, res) => {
+    const body = req.body || {};
+    const booleans = ["active", "visible", "installable"].every((key) => body[key] === undefined || typeof body[key] === "boolean");
+    const companies = body.allowed_companies;
+    if (!booleans || (companies !== undefined && (!Array.isArray(companies) ||
+        companies.some((id) => typeof id !== "string" || !/^[0-9a-f-]{36}$/i.test(id))))) {
+      return res.status(400).json({ success: false, message: "Invalid tier marketplace configuration" });
+    }
+    const result = await db(
+      `UPDATE licence_tiers SET active=COALESCE($1,active),visible=COALESCE($2,visible),
+         installable=COALESCE($3,installable),display_order=COALESCE($4,display_order),
+         allowed_companies=COALESCE($5::uuid[],allowed_companies),updated_at=NOW()
+       WHERE id=$6 RETURNING *`,
+      [body.active ?? null, body.visible ?? null, body.installable ?? null,
+        Number.isInteger(body.display_order) ? body.display_order : null, companies ?? null, req.params.tierId]
+    );
+    if (!result.rows.length) return res.status(404).json({ success: false, message: "Tier not found" });
+    res.json({ success: true, data: result.rows[0] });
+  });
+
+  router.put("/superadmin/tiers/:tierId/composition", async (req, res) => {
+    const packages = req.body?.packages;
+    const entitlements = req.body?.entitlements || {};
+    if (!Array.isArray(packages) || !entitlements || typeof entitlements !== "object" || Array.isArray(entitlements)) {
+      return res.status(400).json({ success: false, message: "packages and entitlements are required" });
+    }
+    const tier = await db("SELECT id FROM licence_tiers WHERE id=$1", [req.params.tierId]);
+    if (!tier.rows.length) return res.status(404).json({ success: false, message: "Tier not found" });
+    const packageIds = [...new Set(packages.map((item) => String(item?.package_id || "")))];
+    const packageRows = packageIds.length
+      ? await db("SELECT id FROM package_registry WHERE id=ANY($1::uuid[])", [packageIds])
+      : { rows: [] };
+    if (packageRows.rows.length !== packageIds.length) {
+      return res.status(400).json({ success: false, message: "Tier contains an unknown package" });
+    }
+    const normalizedEntitlements = normaliseEntitlements(entitlements);
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query("DELETE FROM licence_tier_packages WHERE tier_id=$1", [req.params.tierId]);
+      await client.query("DELETE FROM licence_tier_entitlements WHERE tier_id=$1", [req.params.tierId]);
+      for (const item of packages) {
+        const type = item.entitlement_type || "COMMERCIAL";
+        if (!["COMMERCIAL", "REQUIRED_DEPENDENCY", "OPTIONAL"].includes(type)) throw new Error("Invalid tier package entitlement type");
+        await client.query(
+          "INSERT INTO licence_tier_packages(tier_id,package_id,entitlement_type,version_range) VALUES($1,$2,$3,$4)",
+          [req.params.tierId, item.package_id, type, item.version_range || null]
+        );
+      }
+      for (const [entitlementKey, enabled] of Object.entries(normalizedEntitlements)) {
+        await client.query(
+          "INSERT INTO licence_tier_entitlements(tier_id,entitlement_key,enabled) VALUES($1,$2,$3)",
+          [req.params.tierId, entitlementKey, enabled]
+        );
+      }
+      const assignedCompanies = await client.query(
+        "SELECT company_id FROM company_tier_assignments WHERE tier_id=$1 AND active=true",
+        [req.params.tierId]
+      );
+      for (const assignment of assignedCompanies.rows) {
+        await reconcileCompanyPackageEntitlements(
+          (query, params) => client.query(query, params),
+          assignment.company_id
+        );
+      }
+      await client.query("COMMIT");
+      res.json({ success: true, data: { tierId: req.params.tierId, packages, entitlements: normalizedEntitlements } });
+    } catch (error) {
+      await client.query("ROLLBACK");
+      console.error("Tier composition update error:", error);
+      res.status(400).json({ success: false, message: error.message || "Unable to update tier composition" });
+    } finally {
+      client.release();
+    }
+  });
+
+  router.put("/superadmin/companies/:id/tiers", async (req, res) => {
+    const legacyIds = req.body?.tierIds;
+    const input = req.body?.assignments ?? (Array.isArray(legacyIds) ? legacyIds.map((tierId) => ({ tierId })) : null);
+    if (!Array.isArray(input) || input.some((item) =>
+      !item || typeof item.tierId !== "string" || !/^[0-9a-f-]{36}$/i.test(item.tierId) ||
+      !validOptionalDate(item.startsAt) || !validOptionalDate(item.expiresAt) ||
+      (item.startsAt && item.expiresAt && Date.parse(item.expiresAt) <= Date.parse(item.startsAt))
+    )) {
+      return res.status(400).json({ success: false, message: "Provide tierIds or valid tier assignments" });
+    }
+    const company = await db("SELECT id FROM companies WHERE id=$1", [req.params.id]);
+    if (!company.rows.length) return res.status(404).json({ success: false, message: "Company not found" });
+    const assignments = [...new Map(input.map((item) => [item.tierId, item])).values()];
+    const uniqueIds = assignments.map((item) => item.tierId);
+    const tiers = uniqueIds.length
+      ? await db("SELECT id,allowed_companies FROM licence_tiers WHERE id=ANY($1::uuid[]) AND active=true", [uniqueIds])
+      : { rows: [] };
+    if (tiers.rows.length !== uniqueIds.length) return res.status(400).json({ success: false, message: "One or more tiers are unavailable" });
+    if (tiers.rows.some((tier) =>
+      (tier.allowed_companies || []).length && !tier.allowed_companies.includes(req.params.id)
+    )) {
+      return res.status(400).json({ success: false, message: "One or more tiers are restricted for this company" });
+    }
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query("UPDATE company_tier_assignments SET active=false,updated_at=NOW() WHERE company_id=$1", [req.params.id]);
+      for (const assignment of assignments) {
+        await client.query(
+          `INSERT INTO company_tier_assignments(company_id,tier_id,active,starts_at,expires_at,assigned_by)
+           VALUES($1,$2,true,$3,$4,$5)
+           ON CONFLICT(company_id,tier_id) DO UPDATE SET active=true,starts_at=EXCLUDED.starts_at,
+             expires_at=EXCLUDED.expires_at,assigned_by=EXCLUDED.assigned_by,updated_at=NOW()`,
+          [req.params.id, assignment.tierId, assignment.startsAt || null, assignment.expiresAt || null, req.user.id]
+        );
+      }
+      await reconcileCompanyPackageEntitlements((query, params) => client.query(query, params), req.params.id);
+      await client.query("COMMIT");
+      res.json({ success: true, data: { companyId: req.params.id, tierIds: uniqueIds } });
+    } catch (error) {
+      await client.query("ROLLBACK");
+      console.error("Tier assignment update error:", error);
+      res.status(500).json({ success: false, message: "Unable to update company tier assignments" });
+    } finally {
+      client.release();
+    }
+  });
+
+  router.put("/superadmin/companies/:id/packages/:packageKey/assignment", async (req, res) => {
+    if (typeof req.body?.active !== "boolean" ||
+        !validOptionalDate(req.body?.starts_at) || !validOptionalDate(req.body?.expires_at) ||
+        (req.body.starts_at && req.body.expires_at && Date.parse(req.body.expires_at) <= Date.parse(req.body.starts_at))) {
+      return res.status(400).json({ success: false, message: "active and a valid entitlement interval are required" });
+    }
+    const company = await db("SELECT id FROM companies WHERE id=$1", [req.params.id]);
+    if (!company.rows.length) return res.status(404).json({ success: false, message: "Company not found" });
+    const pkg = await db("SELECT id,package_key,allowed_companies FROM package_registry WHERE package_key=$1", [req.params.packageKey]);
+    if (!pkg.rows.length) return res.status(404).json({ success: false, message: "Package not found" });
+    if ((pkg.rows[0].allowed_companies || []).length && !pkg.rows[0].allowed_companies.includes(req.params.id)) {
+      return res.status(400).json({ success: false, message: "Package is restricted for this company" });
+    }
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const sourceKey = `superadmin:${pkg.rows[0].id}`;
+      if (req.body.active) {
+        await client.query(
+          `INSERT INTO company_package_entitlement_sources
+           (company_id,package_id,source_type,source_key,active,starts_at,expires_at,metadata)
+           VALUES($1,$2,'SUPERADMIN_ASSIGNMENT',$3,true,$4,$5,$6::jsonb)
+           ON CONFLICT(company_id,package_id,source_type,source_key)
+           DO UPDATE SET active=true,starts_at=EXCLUDED.starts_at,
+             expires_at=EXCLUDED.expires_at,metadata=EXCLUDED.metadata`,
+          [req.params.id, pkg.rows[0].id, sourceKey, req.body.starts_at || null,
+            req.body.expires_at || null, JSON.stringify({ assignedBy: req.user.id })]
+        );
+      } else {
+        await client.query(
+          `DELETE FROM company_package_entitlement_sources
+            WHERE company_id=$1 AND package_id=$2 AND source_type='SUPERADMIN_ASSIGNMENT' AND source_key=$3`,
+          [req.params.id, pkg.rows[0].id, sourceKey]
+        );
+      }
+      const effective = await reconcileCompanyPackageEntitlements((query, params) => client.query(query, params), req.params.id);
+      await client.query("COMMIT");
+      res.json({ success: true, data: { companyId: req.params.id, packageKey: pkg.rows[0].package_key, active: req.body.active, effective } });
+    } catch (error) {
+      await client.query("ROLLBACK");
+      console.error("Superadmin package assignment error:", error);
+      res.status(500).json({ success: false, message: "Unable to update package assignment" });
     } finally {
       client.release();
     }

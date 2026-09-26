@@ -17,6 +17,7 @@ export const PLATFORM_GROUPS = [
     items: [
       { key: "objects", label: "Objects", view: "objects" },
       { key: "value-sets", label: "Value Sets", view: "value-sets" },
+      { key: "component-registry", label: "Component Registry", view: "component-registry" },
     ],
   },
   {
@@ -64,6 +65,7 @@ export const PLATFORM_GROUPS = [
 export const SURFACE_KEY_BY_VIEW = {
   objects: "objects",
   "value-sets": "value-sets",
+  "component-registry": "component-registry",
   relationships: "all-relationships",
   layouts: "all-forms",
   rules: "all-rules",

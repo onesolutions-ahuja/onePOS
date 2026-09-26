@@ -1,7 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft, Copy, Eye, GripVertical, Monitor, Plus, Redo2, Smartphone, Tablet, Trash2, Undo2 } from "lucide-react";
 import { apiRequest } from "../../../services/api.js";
-import { FALLBACK_COMPONENT_REGISTRY } from "./componentRegistry.js";
+import {
+  componentByKey,
+  componentCategoryLabel,
+  componentIcon,
+  normalizedRegistry,
+  useComponentRegistry,
+} from "./componentRegistry.js";
 import CustomPageRenderer from "../../../components/platform/CustomPageRenderer.jsx";
 import ActionWorkflowPicker, { describeInteraction } from "./ActionWorkflowPicker.jsx";
 import { CONDITION_OPERATORS } from "./conditionOperators.js";
@@ -77,14 +83,24 @@ function newPageDraft() {
   };
 }
 
-/** Palette groups derived from the Component Registry response. */
+/**
+ * Palette groups derived from the ONE shared Component Registry view —
+ * grouped by the registry's own categories (friendly labels via the shared
+ * helper); no second hard-coded component list and no ad-hoc grouping.
+ */
 function paletteGroups(registry) {
-  const layout = registry.filter((component) => ["section", "container", "multi_container"].includes(component.key));
-  const rest = registry.filter((component) => !["section", "container", "multi_container", "table", "field"].includes(component.key) && component.category !== "field");
-  return [
-    { label: "Layout", items: layout },
-    { label: "Content & actions", items: rest },
-  ];
+  const components = normalizedRegistry(registry).filter((component) => !"section|table".split("|").includes(component.key) && component.category !== "field");
+  const groups = [];
+  for (const component of components) {
+    const label = componentCategoryLabel(component.category);
+    let group = groups.find((candidate) => candidate.label === label);
+    if (!group) {
+      group = { label, items: [] };
+      groups.push(group);
+    }
+    group.items.push(component);
+  }
+  return groups;
 }
 
 export default function CustomPageBuilder({ onMessage, onError }) {
@@ -94,7 +110,7 @@ export default function CustomPageBuilder({ onMessage, onError }) {
   const [pageId, setPageId] = useState("");
   const [page, setPage] = useState(null);
   const [draft, setDraft] = useState(() => newPageDraft());
-  const [registry, setRegistry] = useState(FALLBACK_COMPONENT_REGISTRY);
+  const registry = useComponentRegistry();
   const [objects, setObjects] = useState([]);
   const [selectedSectionId, setSelectedSectionId] = useState(null);
   const [selectedNodeId, setSelectedNodeId] = useState(null);
@@ -108,9 +124,6 @@ export default function CustomPageBuilder({ onMessage, onError }) {
 
   useEffect(() => {
     apiRequest("/api/platform/apps").then((response) => setApps(response.data || [])).catch((error) => onError?.(error.message));
-    apiRequest("/api/platform/component-registry").then((response) => {
-      if (Array.isArray(response?.data) && response.data.length) setRegistry(response.data);
-    }).catch(() => {});
     apiRequest("/api/platform/objects").then((response) => setObjects(Array.isArray(response?.data?.objects) ? response.data.objects : Array.isArray(response?.data) ? response.data : [])).catch(() => {});
   }, [onError]);
 
@@ -199,7 +212,7 @@ export default function CustomPageBuilder({ onMessage, onError }) {
     if (selectedSectionId === sectionId) { setSelectedSectionId(null); setSelectedNodeId(null); }
   };
 
-  const componentMeta = (componentKey) => registry.find((component) => component.key === componentKey) || { key: componentKey, label: nodeLabel({ componentKey }) };
+  const componentMeta = (componentKey) => componentByKey(registry, componentKey) || { key: componentKey, label: nodeLabel({ componentKey }) };
 
   const newNodeFor = (componentKey) => {
     const meta = componentMeta(componentKey);
@@ -652,7 +665,9 @@ const updateNode = (nodeId, changes) => {
             {paletteGroups(registry).map((group) => (
               <div key={group.label} className="space-y-1">
                 <p className="text-[10.5px] font-semibold uppercase tracking-wide text-slate-400">{group.label}</p>
-                {group.items.map((component) => (
+                {group.items.map((component) => {
+                  const Icon = componentIcon(component);
+                  return (
                   <button
                     key={component.key}
                     type="button"
@@ -669,9 +684,10 @@ const updateNode = (nodeId, changes) => {
                     }}
                     title={`Drag onto the canvas${component.key === "section" ? "" : " or into a Section"}`}
                   >
-                    <Plus size={12} className="text-slate-400" /> {component.label}
+                    <Icon size={12} className="shrink-0 text-slate-400" aria-hidden="true" /> {component.label}
                   </button>
-                ))}
+                  );
+                })}
               </div>
             ))}
             <div className="space-y-1 border-t border-slate-100 pt-2">

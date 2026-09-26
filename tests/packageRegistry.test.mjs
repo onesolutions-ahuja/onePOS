@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { packageDefinition, packageDefinitions, packageRegistrySchema, provisionDefaultCompanyPackages, provisionPackageMetadata, resolveFeaturePlan, resolvePackagePlan } from "../services/packageRegistry.js";
+import { packageDefinition, packageDefinitions, packageRegistrySchema, provisionDefaultCompanyPackages, provisionPackageMetadata, resolveFeaturePlan, resolvePackagePlan, satisfiesPackageVersion } from "../services/packageRegistry.js";
 import createPackagesRouter from "../routes/packages.js";
 import express from "express";
 
@@ -32,6 +32,44 @@ test("dependency plans are deterministic, dependency-first, and reject cycles", 
     () => resolvePackagePlan("one.app", [{ packageKey: "one.app", dependencies: ["one.app"] }]),
     /cycle/
   );
+});
+
+test("manifest captures install, licensing, visibility, dependency, and ownership policy", async () => {
+  const definition = packageDefinition({
+    key: "sample_app",
+    name: "Sample App",
+    dependencies: [{ packageKey: "customer_core", minVersion: "2.0.0", maxVersion: "3.0.0" }],
+    optionalDependencies: [{ packageKey: "analytics", versionRange: "^1.2.0" }],
+  });
+  assert.equal(definition.manifest.packageKey, "sample_app");
+  assert.equal(definition.manifest.version, "1.0.0");
+  assert.equal(definition.manifest.packageType, "APPLICATION");
+  assert.equal(definition.manifest.category, "Business");
+  assert.deepEqual(definition.manifest.optionalDependencies, [{ packageKey: "analytics", versionRange: "^1.2.0" }]);
+  assert.equal(definition.manifest.versionConstraints.customer_core.minVersion, "2.0.0");
+  assert.equal(definition.manifest.licenceMode, "COMMERCIAL");
+  assert.equal(definition.manifest.licenceRequired, true);
+  assert.equal(definition.manifest.billable, true);
+  assert.equal(definition.manifest.visibility, "PUBLIC");
+  assert.equal(definition.manifest.installable, true);
+  assert.equal(definition.manifest.lifecycleState, "PUBLISHED");
+  assert.equal(definition.manifest.metadataOwnership.preserveUserModified, true);
+  assert.equal(satisfiesPackageVersion("2.4.0", ">=2.0.0 <3.0.0"), true);
+  assert.equal(satisfiesPackageVersion("3.0.0", ">=2.0.0 <3.0.0"), false);
+  const fs = await import("node:fs");
+  const canonical = fs.readFileSync(new URL("../database/schema.sql", import.meta.url), "utf8");
+  const migration = fs.readFileSync(new URL("../database/baseFoundation.sql", import.meta.url), "utf8");
+  for (const fragment of [
+    "package_type", "publisher", "category", "required_platform_version", "publication_state",
+    "visible", "installable", "billable", "system_only", "display_order", "available_tiers",
+    "licence_mode", "allowed_bundles", "allowed_companies", "min_version", "max_version",
+    "suspended_by_entitlement", "deactivated_by_user", "package_metadata_ownership",
+    "licence_packages", "licence_bundle_packages", "licence_tier_packages",
+    "company_package_entitlement_sources", "DIRECT_INSTALL",
+  ]) {
+    assert.ok(canonical.includes(fragment), `canonical schema contains ${fragment}`);
+    assert.ok(migration.includes(fragment), `runtime migration contains ${fragment}`);
+  }
 });
 
 test("initial One-* definitions reuse canonical catalog module keys", () => {
@@ -199,12 +237,15 @@ test("Uber Eats metadata is idempotent, globally defined, and tenant-scoped", as
         objects.set(params[2], object);
         return { rows: [object] };
       }
-      if (sql.startsWith("SELECT id,company_id FROM platform_fields")) {
+      if (sql.startsWith("SELECT id,company_id,source_package_id FROM platform_fields")) {
         const field = fields.get(`${params[0]}:${params[1]}:${params[2] || "global"}`);
         return { rows: field ? [field] : [] };
       }
       if (sql.startsWith("INSERT INTO platform_fields")) {
-        fields.set(`${params[0]}:${params[1]}:${params[9] || "global"}`, { id: `${params[1]}-${params[9]}` });
+        fields.set(`${params[0]}:${params[1]}:${params[9] || "global"}`, {
+          id: `${params[1]}-${params[9]}`,
+          source_package_id: params[10],
+        });
         return { rows: [] };
       }
       if (sql.startsWith("INSERT INTO platform_apps")) return { rows: [{ id: "uber-app" }] };
@@ -215,12 +256,17 @@ test("Uber Eats metadata is idempotent, globally defined, and tenant-scoped", as
       if (sql.startsWith("SELECT id FROM platform_objects WHERE object_key=$1")) {
         return { rows: params[0] === "product" ? [{ id: "product-object" }] : [] };
       }
-      if (sql.startsWith("SELECT id,action FROM platform_rules")) {
+      if (sql.startsWith("SELECT id,source_package_id,user_modified FROM platform_rules")) {
         const rule = packageRules.get(`${params[1]}:${params[2]}`);
         return { rows: rule ? [rule] : [] };
       }
       if (sql.startsWith("INSERT INTO platform_rules")) {
-        packageRules.set(`${params[5]}:${params[1]}`, { id: `rule-${params[1]}`, action: JSON.parse(params[4]) });
+        packageRules.set(`${params[5]}:${params[1]}`, {
+          id: `rule-${params[1]}`,
+          source_package_id: params[6],
+          user_modified: false,
+          action: JSON.parse(params[4]),
+        });
         return { rows: [] };
       }
       if (sql.startsWith("INSERT INTO platform_registered_actions")) return { rows: [{ id: `action-${params[2]}` }] };
@@ -293,12 +339,15 @@ test("package catalog and Uber Eats installation preserve existing client config
         objects.set(params[2], object);
         return { rows: [object] };
       }
-      if (sql.startsWith("SELECT id,company_id FROM platform_fields")) {
+      if (sql.startsWith("SELECT id,company_id,source_package_id FROM platform_fields")) {
         const field = fields.get(`${params[0]}:${params[1]}:${params[2] || "global"}`);
         return { rows: field ? [field] : [] };
       }
       if (sql.startsWith("INSERT INTO platform_fields")) {
-        fields.set(`${params[0]}:${params[1]}:${params[9] || "global"}`, { id: `${params[1]}-${params[9]}` });
+        fields.set(`${params[0]}:${params[1]}:${params[9] || "global"}`, {
+          id: `${params[1]}-${params[9]}`,
+          source_package_id: params[10],
+        });
         return { rows: [] };
       }
       if (sql.startsWith("INSERT INTO platform_apps")) return { rows: [{ id: "uber-app" }] };
@@ -309,12 +358,17 @@ test("package catalog and Uber Eats installation preserve existing client config
       if (sql.startsWith("SELECT id FROM platform_objects WHERE object_key=$1")) {
         return { rows: params[0] === "product" ? [{ id: "product-object" }] : [] };
       }
-      if (sql.startsWith("SELECT id,action FROM platform_rules")) {
-        const rule = packageRules.get(params[2]);
+      if (sql.startsWith("SELECT id,source_package_id,user_modified FROM platform_rules")) {
+        const rule = packageRules.get(`${params[1]}:${params[2]}`);
         return { rows: rule ? [rule] : [] };
       }
       if (sql.startsWith("INSERT INTO platform_rules")) {
-        packageRules.set(params[1], { id: `rule-${params[1]}`, action: JSON.parse(params[4]) });
+        packageRules.set(`${params[5]}:${params[1]}`, {
+          id: `rule-${params[1]}`,
+          source_package_id: params[6],
+          user_modified: false,
+          action: JSON.parse(params[4]),
+        });
         return { rows: [] };
       }
       if (sql.startsWith("INSERT INTO platform_registered_actions")) {
@@ -374,7 +428,10 @@ test("package catalog and Uber Eats installation preserve existing client config
       client_secret: "encrypted-secret",
       store_location_id: "uber-store",
     });
-    assert.equal(calls.filter(({ sql }) => sql.startsWith("INSERT INTO platform_objects")).length, 1);
+    const expectedObjects = definitions
+      .filter((definition) => ["integrations", "online_orders", "uber_eats"].includes(definition.packageKey))
+      .reduce((count, definition) => count + (definition.manifest.objects?.length || 0), 0);
+    assert.equal(calls.filter(({ sql }) => sql.startsWith("INSERT INTO platform_objects")).length, expectedObjects);
     assert.equal(calls.filter(({ sql }) => /\b(?:INSERT\s+INTO|UPDATE|DELETE\s+FROM)\s+integrations\b/i.test(sql)).length, 0);
     assert.equal(calls.filter(({ sql }) => sql.startsWith("INSERT INTO platform_registered_actions")).length, 16);
     assert.equal(calls.filter(({ sql }) => sql.startsWith("INSERT INTO platform_buttons")).length, 6);
@@ -396,13 +453,15 @@ test("package catalog and Uber Eats installation preserve existing client config
     assert.equal(pages.get("company-a:uber_eats").forms.some(({ key }) => key === "client_secret"), true);
 });
 
-  test("package registry exposes uninstall metadata safety guards", async () => {
+  test("package registry uninstall preserves required and user-modified metadata", async () => {
     const source = await import("node:fs").then((fs) => fs.readFileSync(new URL("../routes/packages.js", import.meta.url), "utf8"));
-    assert.match(source, /PACKAGE_METADATA_REMAINS/);
+      assert.match(source, /removePackageMetadata/);
     assert.match(source, /PACKAGE_ACCESS_REMAINS/);
     assert.match(source, /platform_objects/);
     assert.match(source, /platform_module_access/);
-});
+      const registry = await import("node:fs").then((fs) => fs.readFileSync(new URL("../services/packageRegistry.js", import.meta.url), "utf8"));
+      assert.match(registry, /package_required=false AND user_modified=false/);
+  });
 
 test("fresh company provisioning installs only the declared default packages", async () => {
     const queries = [];
@@ -423,7 +482,7 @@ test("package installation supports company-validated store scope", async () => 
     const source = await import("node:fs").then((fs) => fs.readFileSync(new URL("../routes/packages.js", import.meta.url), "utf8"));
     assert.match(source, /Store is not available to this company/);
     assert.match(source, /store_id IS NOT DISTINCT FROM/);
-    assert.match(source, /selected_features\)/);
+    assert.match(source, /selected_features/);
 });
 
 test("package routes use a dedicated package permission with settings compatibility", async () => {

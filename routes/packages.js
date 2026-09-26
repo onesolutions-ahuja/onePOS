@@ -1,6 +1,7 @@
 import express from "express";
-import { comparePackageVersions, provisionPackageMetadata, resolveFeaturePlan, resolvePackagePlan } from "../services/packageRegistry.js";
+import { comparePackageVersions, provisionPackageMetadata, removePackageMetadata, resolveFeaturePlan, resolvePackagePlan } from "../services/packageRegistry.js";
 import { getCompanyEntitlements, isPackageLicensed } from "../services/licensing.js";
+import { packageVersionHasEntitlement, reconcileCompanyPackageEntitlements } from "../services/packageEntitlements.js";
 
 function operationKey(req) {
   const value = req.get("Idempotency-Key") || req.body?.idempotencyKey;
@@ -29,6 +30,13 @@ export default function createPackagesRouter({ authenticate, authorize, db, pool
       description: row.description,
       moduleKey: row.module_key,
       package_type: row.package_type,
+      visible: row.visible,
+      installable: row.installable,
+      system_only: row.system_only,
+      publication_state: row.publication_state,
+      available_tiers: row.available_tiers || [],
+      allowed_bundles: row.allowed_bundles || [],
+      allowed_companies: row.allowed_companies || [],
       dependencies: row.manifest?.dependencies || [],
       manifest: row.manifest || {},
     }));
@@ -49,8 +57,49 @@ export default function createPackagesRouter({ authenticate, authorize, db, pool
 
   async function ensureLicensed(req, packageEntries) {
     const entitlements = await getCompanyEntitlements(db, req.user.companyId);
-    return (Array.isArray(packageEntries) ? packageEntries : [packageEntries])
-      .every((entry) => isPackageLicensed(entitlements, entry));
+    const entries = Array.isArray(packageEntries) ? packageEntries : [packageEntries];
+    const root = entries[entries.length - 1];
+    return isPackageLicensed(entitlements, root);
+  }
+
+  async function isMarketplaceEligible(companyId, entry) {
+    const allowedCompanies = Array.isArray(entry.allowed_companies) ? entry.allowed_companies : [];
+    const allowedBundles = Array.isArray(entry.allowed_bundles) ? entry.allowed_bundles : [];
+    const availableTiers = Array.isArray(entry.available_tiers) ? entry.available_tiers : [];
+    if (allowedCompanies.length && !allowedCompanies.includes(companyId)) return false;
+    if (!allowedBundles.length && !availableTiers.length) return true;
+    const result = await db(
+      `SELECT
+         ($2::text[]='{}' OR EXISTS (
+           SELECT 1 FROM company_bundle_assignments a
+           JOIN licence_bundles b ON b.id=a.bundle_id
+           WHERE a.company_id=$1 AND a.active=true AND b.active=true AND b.bundle_key=ANY($2::text[])
+             AND (a.starts_at IS NULL OR a.starts_at<=NOW())
+             AND (a.expires_at IS NULL OR a.expires_at>NOW())
+         )) AS bundle_allowed,
+         ($3::text[]='{}' OR EXISTS (
+           SELECT 1 FROM company_bundle_assignments a
+           JOIN licence_bundles b ON b.id=a.bundle_id
+           WHERE a.company_id=$1 AND a.active=true AND b.active=true AND b.bundle_key=ANY($3::text[])
+             AND (a.starts_at IS NULL OR a.starts_at<=NOW())
+             AND (a.expires_at IS NULL OR a.expires_at>NOW())
+           UNION ALL
+           SELECT 1 FROM company_tier_assignments a
+           JOIN licence_tiers t ON t.id=a.tier_id
+           WHERE a.company_id=$1 AND a.active=true AND t.active=true AND t.tier_key=ANY($3::text[])
+             AND (a.starts_at IS NULL OR a.starts_at<=NOW())
+             AND (a.expires_at IS NULL OR a.expires_at>NOW())
+         )) AS tier_allowed`,
+      [companyId, allowedBundles, availableTiers]
+    );
+    return result.rows[0]?.bundle_allowed === true && result.rows[0]?.tier_allowed === true;
+  }
+
+  function packagePlanCompanyAllowed(companyId, plan) {
+    return plan.every((entry) => {
+      const allowed = Array.isArray(entry.allowed_companies) ? entry.allowed_companies : [];
+      return !allowed.length || allowed.includes(companyId);
+    });
   }
 
   async function replay(req, operation, packageKey) {
@@ -108,18 +157,82 @@ export default function createPackagesRouter({ authenticate, authorize, db, pool
          LEFT JOIN platform_modules m ON m.id=p.module_id
         WHERE p.active=true AND p.publication_state='PUBLISHED'
           AND p.visible=true AND p.installable=true AND p.system_only=false
-          AND (jsonb_array_length(p.available_tiers)=0 OR EXISTS (
+          AND (cardinality(p.allowed_companies)=0 OR $1=ANY(p.allowed_companies))
+          AND (cardinality(p.allowed_bundles)=0 OR EXISTS (
+            SELECT 1 FROM company_bundle_assignments a
+            JOIN licence_bundles b ON b.id=a.bundle_id
+            WHERE a.company_id=$1 AND a.active=true AND b.active=true
+              AND b.bundle_key=ANY(p.allowed_bundles)
+              AND (a.starts_at IS NULL OR a.starts_at<=NOW())
+              AND (a.expires_at IS NULL OR a.expires_at>NOW())
+          ))
+          AND (
+            jsonb_array_length(p.available_tiers)=0
+            OR EXISTS (
             SELECT 1 FROM company_bundle_assignments a
             JOIN licence_bundles b ON b.id=a.bundle_id
             WHERE a.company_id=$1 AND a.active=true AND b.active=true
               AND (a.starts_at IS NULL OR a.starts_at<=NOW())
               AND (a.expires_at IS NULL OR a.expires_at>NOW())
               AND p.available_tiers ? b.bundle_key
-          ))
+            )
+            OR EXISTS (
+              SELECT 1 FROM company_tier_assignments a
+              JOIN licence_tiers t ON t.id=a.tier_id
+              WHERE a.company_id=$1 AND a.active=true AND t.active=true
+                AND (a.starts_at IS NULL OR a.starts_at<=NOW())
+                AND (a.expires_at IS NULL OR a.expires_at>NOW())
+                AND p.available_tiers ? t.tier_key
+            )
+          )
         ORDER BY p.display_order,p.name`,
       [req.user.companyId]
     );
     res.json({ success: true, data: await packageState(result.rows, req.user.companyId) });
+  });
+
+  router.get(["/bundles/marketplace", "/marketplace/bundles"], authenticate, async (req, res) => {
+    const result = await db(
+      `SELECT b.*,
+              COALESCE(jsonb_agg(jsonb_build_object(
+                'packageKey',p.package_key,'name',p.name,'entitlementType',bp.entitlement_type,
+                'versionRange',bp.version_range
+              ) ORDER BY p.name) FILTER (WHERE p.id IS NOT NULL),'[]'::jsonb) AS packages
+         FROM licence_bundles b
+         LEFT JOIN licence_bundle_packages bp ON bp.bundle_id=b.id
+         LEFT JOIN package_registry p ON p.id=bp.package_id
+        WHERE b.active=true AND b.visible=true AND b.installable=true
+          AND (cardinality(b.allowed_companies)=0 OR $1=ANY(b.allowed_companies))
+          AND (cardinality(b.available_tiers)=0 OR EXISTS (
+            SELECT 1 FROM company_tier_assignments a
+            JOIN licence_tiers t ON t.id=a.tier_id
+            WHERE a.company_id=$1 AND a.active=true AND t.active=true
+              AND t.tier_key=ANY(b.available_tiers)
+              AND (a.starts_at IS NULL OR a.starts_at<=NOW())
+              AND (a.expires_at IS NULL OR a.expires_at>NOW())
+          ))
+        GROUP BY b.id ORDER BY b.display_order,b.name`,
+      [req.user.companyId]
+    );
+    res.json({ success: true, data: result.rows });
+  });
+
+  router.get(["/tiers/marketplace", "/marketplace/tiers"], authenticate, async (req, res) => {
+    const result = await db(
+      `SELECT t.*,
+              COALESCE(jsonb_agg(jsonb_build_object(
+                'packageKey',p.package_key,'name',p.name,'entitlementType',tp.entitlement_type,
+                'versionRange',tp.version_range
+              ) ORDER BY p.name) FILTER (WHERE p.id IS NOT NULL),'[]'::jsonb) AS packages
+         FROM licence_tiers t
+         LEFT JOIN licence_tier_packages tp ON tp.tier_id=t.id
+         LEFT JOIN package_registry p ON p.id=tp.package_id
+        WHERE t.active=true AND t.visible=true AND t.installable=true
+          AND (cardinality(t.allowed_companies)=0 OR $1=ANY(t.allowed_companies))
+        GROUP BY t.id ORDER BY t.display_order,t.name`,
+      [req.user.companyId]
+    );
+    res.json({ success: true, data: result.rows });
   });
 
   async function sendPlan(req, res, packageKey) {
@@ -128,6 +241,12 @@ export default function createPackagesRouter({ authenticate, authorize, db, pool
       const plan = await packagePlan(packageKey);
       const requestedFeatures = Array.isArray(req.body?.features) ? req.body.features : [];
       const root = plan[plan.length - 1];
+      if (!packagePlanCompanyAllowed(req.user.companyId, plan)) {
+        return res.status(403).json({ success: false, code: "PACKAGE_NOT_AVAILABLE", message: "A required package is not available to this company" });
+      }
+      if (!(await isMarketplaceEligible(req.user.companyId, root))) {
+        return res.status(403).json({ success: false, code: "PACKAGE_NOT_AVAILABLE", message: "This package is not available to this company" });
+      }
       const selectedFeatures = resolveFeaturePlan(root, requestedFeatures);
       if (!(await ensureLicensed(req, plan))) {
         return res.status(403).json({ success: false, code: "FEATURE_NOT_LICENSED", message: "This package is not licensed for this company" });
@@ -151,23 +270,30 @@ export default function createPackagesRouter({ authenticate, authorize, db, pool
     let failedUpgrade = null;
     try {
       const plan = await packagePlan(packageKey);
+      if (!packagePlanCompanyAllowed(req.user.companyId, plan)) {
+        return res.status(403).json({ success: false, code: "PACKAGE_NOT_AVAILABLE", message: "A required package is not available to this company" });
+      }
       if (!(await ensureLicensed(req, plan))) {
         return res.status(403).json({ success: false, code: "FEATURE_NOT_LICENSED", message: "This package is not licensed for this company" });
       }
       const results = await withTransaction(async (txDb) => {
+        await reconcileCompanyPackageEntitlements(txDb, req.user.companyId);
         const upgraded = [];
         for (const item of plan) {
           const packageResult = await txDb(
             `SELECT p.id,p.version,p.module_id,p.manifest,i.version AS installed_version,i.status
                FROM package_registry p
                LEFT JOIN company_package_installations i ON i.package_id=p.id AND i.company_id=$2
-              WHERE p.package_key=$1 AND p.active=true AND p.installable=true`,
+              WHERE p.package_key=$1 AND p.active=true`,
             [item.packageKey, req.user.companyId]
           );
           const entry = packageResult.rows[0];
           if (!entry) throw new Error(`Package dependency is unavailable or not installed: ${item.packageKey}`);
           if (!entry.installed_version || entry.status !== "active") {
             throw new Error(`Install required package dependency before upgrading: ${item.packageKey}`);
+          }
+          if (!(await packageVersionHasEntitlement(txDb, req.user.companyId, item.packageKey, entry.version))) {
+            throw new Error(`Package version is outside the active licence or bundle constraint: ${item.packageKey}`);
           }
           const comparison = comparePackageVersions(entry.version, entry.installed_version);
           if (comparison < 0) throw new Error(`Package version downgrade is not supported: ${item.packageKey}`);
@@ -213,6 +339,7 @@ export default function createPackagesRouter({ authenticate, authorize, db, pool
           );
           upgraded.push({ packageKey: item.packageKey, from: entry.installed_version, to: entry.version });
         }
+        await reconcileCompanyPackageEntitlements(txDb, req.user.companyId);
         await txDb(
           `INSERT INTO platform_events(company_id,event_type,payload,actor_user_id,idempotency_key)
            VALUES ($1,'package.upgraded',$2::jsonb,$3,$4) ON CONFLICT(company_id,idempotency_key) DO NOTHING`,
@@ -254,13 +381,20 @@ export default function createPackagesRouter({ authenticate, authorize, db, pool
         }
       }
       const root = plan[plan.length - 1];
+      if (!packagePlanCompanyAllowed(req.user.companyId, plan)) {
+        return res.status(403).json({ success: false, code: "PACKAGE_NOT_AVAILABLE", message: "A required package is not available to this company" });
+      }
+      if (!(await isMarketplaceEligible(req.user.companyId, root))) {
+        return res.status(403).json({ success: false, code: "PACKAGE_NOT_AVAILABLE", message: "This package is not available to this company" });
+      }
       const selectedFeatures = resolveFeaturePlan(root, requestedFeatures);
       if (!(await ensureLicensed(req, plan))) {
         return res.status(403).json({ success: false, code: "FEATURE_NOT_LICENSED", message: "This package is not licensed for this company" });
       }
       const response = await withTransaction(async (txDb) => {
+        await reconcileCompanyPackageEntitlements(txDb, req.user.companyId);
         const rootPackageResult = await txDb(
-          "SELECT id FROM package_registry WHERE package_key=$1 AND active=true",
+          "SELECT id,version FROM package_registry WHERE package_key=$1 AND active=true",
           [root.packageKey]
         );
         if (!rootPackageResult.rows.length) throw new Error(`Package not found: ${root.packageKey}`);
@@ -268,9 +402,19 @@ export default function createPackagesRouter({ authenticate, authorize, db, pool
         for (const item of plan) {
           const moduleResult = await txDb("SELECT id FROM platform_modules WHERE module_key=$1", [item.moduleKey]);
           if (!moduleResult.rows.length) throw new Error(`Package module is not registered: ${item.moduleKey}`);
-          const packageResult = await txDb("SELECT id,version,package_type,installable FROM package_registry WHERE package_key=$1 AND active=true", [item.packageKey]);
+          const packageResult = await txDb(
+            `SELECT id,version FROM package_registry WHERE package_key=$1 AND active=true`,
+            [item.packageKey]
+          );
           if (!packageResult.rows.length) throw new Error(`Package not found: ${item.packageKey}`);
-          if (packageResult.rows[0].installable === false) throw new Error(`Package is not installable: ${item.packageKey}`);
+          if (item.packageKey === root.packageKey &&
+            (item.installable === false || item.visible === false || item.system_only === true ||
+             (item.publication_state && item.publication_state !== "PUBLISHED"))) {
+            throw new Error(`Package is not available for direct installation: ${item.packageKey}`);
+          }
+          if (!(await packageVersionHasEntitlement(txDb, req.user.companyId, item.packageKey, packageResult.rows[0].version))) {
+            throw new Error(`Package version is outside the active licence or bundle constraint: ${item.packageKey}`);
+          }
           await provisionPackageMetadata(txDb, {
             packageId: packageResult.rows[0].id,
             moduleId: moduleResult.rows[0].id,
@@ -285,7 +429,8 @@ export default function createPackagesRouter({ authenticate, authorize, db, pool
              selected_features=CASE WHEN EXCLUDED.installation_type='DIRECT' THEN EXCLUDED.selected_features ELSE company_package_installations.selected_features END,
              installed_by=COALESCE(EXCLUDED.installed_by,company_package_installations.installed_by),
              installation_type=CASE WHEN EXCLUDED.installation_type='DIRECT' THEN 'DIRECT' ELSE company_package_installations.installation_type END,
-             available_version=EXCLUDED.available_version,updated_at=NOW()`,
+             available_version=EXCLUDED.available_version,suspended_by_entitlement=false,
+             deactivated_by_user=false,updated_at=NOW()`,
           [
             req.user.companyId,
             packageResult.rows[0].id,
@@ -304,7 +449,11 @@ export default function createPackagesRouter({ authenticate, authorize, db, pool
             [
               req.user.companyId,
               packageResult.rows[0].id,
-              item.packageKey === root.packageKey ? "DIRECT_LICENCE" : "REQUIRED_DEPENDENCY",
+              item.packageKey === root.packageKey
+                ? (item.manifest?.licenceMode === "TECHNICAL" || item.manifest?.packageType === "FOUNDATION"
+                  ? "DIRECT_INSTALL"
+                  : "DIRECT_LICENCE")
+                : "REQUIRED_DEPENDENCY",
               String(rootPackageId),
               item.packageKey === root.packageKey ? null : rootPackageId,
               JSON.stringify({ rootPackageKey: root.packageKey }),
@@ -341,6 +490,7 @@ export default function createPackagesRouter({ authenticate, authorize, db, pool
             );
           }
         }
+        await reconcileCompanyPackageEntitlements(txDb, req.user.companyId);
         return { success: true, data: { packageKey, storeId, installed: plan.map((item) => item.packageKey), features: selectedFeatures.map((feature) => feature.key) } };
       });
       await recordOperation(req, "install", packageKey, response);
@@ -361,7 +511,7 @@ export default function createPackagesRouter({ authenticate, authorize, db, pool
          JOIN package_dependencies d ON d.package_id=i.package_id
          JOIN package_registry p ON p.id=i.package_id
          JOIN package_registry target ON target.id=d.dependency_id
-         WHERE target.package_key=$1 AND i.company_id=$2 AND i.status='active'`,
+         WHERE target.package_key=$1 AND i.company_id=$2 AND i.status='active' AND d.optional=false`,
         [packageKey, req.user.companyId]
       );
       if (dependents.rows.length) {
@@ -372,29 +522,13 @@ export default function createPackagesRouter({ authenticate, authorize, db, pool
         });
       }
       const result = await db(
-        `UPDATE company_package_installations i SET status='inactive',updated_at=NOW()
+        `UPDATE company_package_installations i
+            SET status='inactive',deactivated_by_user=true,suspended_by_entitlement=false,updated_at=NOW()
          FROM package_registry p WHERE p.id=i.package_id AND p.package_key=$1 AND i.company_id=$2 RETURNING i.*`,
         [packageKey, req.user.companyId]
       );
       if (!result.rows.length) return res.status(404).json({ success: false, message: "Package is not installed for this company" });
-      await db(
-        `DELETE FROM company_package_entitlement_sources
-          WHERE company_id=$1 AND (
-            (package_id=$2 AND source_type IN ('DIRECT_LICENCE','SUPERADMIN_ASSIGNMENT') AND source_key=$2::text)
-            OR (parent_package_id=$2 AND source_type IN ('REQUIRED_DEPENDENCY','OPTIONAL_DEPENDENCY'))
-          )`,
-        [req.user.companyId, result.rows[0].package_id]
-      );
-      await db(
-        `UPDATE company_package_installations i SET status='inactive',updated_at=NOW()
-          WHERE i.company_id=$1 AND i.installation_type='DEPENDENCY' AND i.status='active'
-            AND NOT EXISTS (
-              SELECT 1 FROM company_package_entitlement_sources s
-               WHERE s.company_id=i.company_id AND s.package_id=i.package_id AND s.active=true
-                 AND (s.expires_at IS NULL OR s.expires_at>NOW())
-            )`,
-        [req.user.companyId]
-      );
+      await reconcileCompanyPackageEntitlements(db, req.user.companyId);
       await db(
         `UPDATE platform_module_access a SET enabled=false,updated_at=NOW()
          FROM package_registry p
@@ -406,6 +540,40 @@ export default function createPackagesRouter({ authenticate, authorize, db, pool
       res.json(response);
     } catch (error) {
       console.error("Package deactivation error:", error);
+      res.status(400).json({ success: false, message: error.message });
+    }
+  });
+
+  router.post(["/packages/:packageKey/reactivate", "/platform/packages/:packageKey/reactivate"], ...manage, async (req, res) => {
+    const packageKey = req.params.packageKey;
+    try {
+      const plan = await packagePlan(packageKey);
+      if (!packagePlanCompanyAllowed(req.user.companyId, plan)) {
+        return res.status(403).json({ success: false, code: "PACKAGE_NOT_AVAILABLE", message: "A required package is not available to this company" });
+      }
+      if (!(await ensureLicensed(req, plan))) {
+        return res.status(403).json({ success: false, code: "FEATURE_NOT_LICENSED", message: "This package is not licensed for this company" });
+      }
+      const result = await db(
+        `UPDATE company_package_installations i
+            SET status='active',deactivated_by_user=false,suspended_by_entitlement=false,updated_at=NOW()
+           FROM package_registry p
+          WHERE i.package_id=p.id AND p.package_key=$1 AND i.company_id=$2
+          RETURNING i.*`,
+        [packageKey, req.user.companyId]
+      );
+      if (!result.rows.length) return res.status(404).json({ success: false, message: "Package is not installed for this company" });
+      await reconcileCompanyPackageEntitlements(db, req.user.companyId);
+      await db(
+        `UPDATE platform_module_access a SET enabled=true,updated_at=NOW()
+           FROM package_registry p
+          WHERE p.package_key=$1 AND a.module_id=p.module_id
+            AND a.company_id=$2 AND a.store_id IS NULL`,
+        [packageKey, req.user.companyId]
+      );
+      res.json({ success: true, data: result.rows[0] });
+    } catch (error) {
+      console.error("Package reactivation error:", error);
       res.status(400).json({ success: false, message: error.message });
     }
   });
@@ -469,20 +637,6 @@ export default function createPackagesRouter({ authenticate, authorize, db, pool
           objects: nonEmptyObjects,
         });
       }
-      const ownedMetadata = await db(
-        `SELECT COUNT(*)::int AS count
-         FROM platform_objects
-         WHERE package_id=$1 AND (company_id IS NULL OR company_id=$2) AND active=true`,
-        [packageResult.rows[0].id, req.user.companyId]
-      );
-      if (Number(ownedMetadata.rows[0]?.count || 0) > 0) {
-        return res.status(409).json({
-          success: false,
-          code: "PACKAGE_METADATA_REMAINS",
-          message: "Package-owned Platform metadata must be deactivated or removed before uninstalling",
-          metadataCount: Number(ownedMetadata.rows[0].count),
-        });
-      }
       const crossPackageReferences = await db(
         `SELECT DISTINCT sourcePackage.package_key AS source_package_key
          FROM platform_relationships r
@@ -520,29 +674,24 @@ export default function createPackagesRouter({ authenticate, authorize, db, pool
         });
       }
       const result = await db(
-        `DELETE FROM company_package_installations i USING package_registry p
-         WHERE i.package_id=p.id AND p.package_key=$1 AND i.company_id=$2 RETURNING i.*`,
+        `UPDATE company_package_installations i
+            SET status='inactive',deactivated_by_user=true,suspended_by_entitlement=false,updated_at=NOW()
+           FROM package_registry p
+          WHERE i.package_id=p.id AND p.package_key=$1 AND i.company_id=$2
+          RETURNING i.*`,
         [packageKey, req.user.companyId]
       );
       if (!result.rows.length) return res.status(404).json({ success: false, message: "Package is not installed for this company" });
+      await removePackageMetadata(db, {
+        companyId: req.user.companyId,
+        packageId: result.rows[0].package_id,
+      });
       await db(
         `DELETE FROM company_package_entitlement_sources
-          WHERE company_id=$1 AND (
-            (package_id=$2 AND source_type IN ('DIRECT_LICENCE','SUPERADMIN_ASSIGNMENT') AND source_key=$2::text)
-            OR (parent_package_id=$2 AND source_type IN ('REQUIRED_DEPENDENCY','OPTIONAL_DEPENDENCY'))
-          )`,
+          WHERE company_id=$1 AND package_id=$2 AND source_type='DIRECT_INSTALL'`,
         [req.user.companyId, result.rows[0].package_id]
       );
-      await db(
-        `UPDATE company_package_installations i SET status='inactive',updated_at=NOW()
-          WHERE i.company_id=$1 AND i.installation_type='DEPENDENCY' AND i.status='active'
-            AND NOT EXISTS (
-              SELECT 1 FROM company_package_entitlement_sources s
-               WHERE s.company_id=i.company_id AND s.package_id=i.package_id AND s.active=true
-                 AND (s.expires_at IS NULL OR s.expires_at>NOW())
-            )`,
-        [req.user.companyId]
-      );
+      await reconcileCompanyPackageEntitlements(db, req.user.companyId);
       await db(
         `UPDATE platform_module_access a SET enabled=false,updated_at=NOW()
          FROM package_registry p

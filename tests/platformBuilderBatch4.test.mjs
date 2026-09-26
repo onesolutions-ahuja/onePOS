@@ -22,7 +22,11 @@ test("approval builder uses visual metadata criteria and registered outcome acti
 
 test("form and page builder share component registry and metadata resource picker", () => {
   const source = read("src/pages/settings/Platform/PageBuilder.jsx");
-  assert.match(source, /FALLBACK_COMPONENT_REGISTRY/);
+  /* Both builders consume the ONE shared registry hook, which owns the
+     fallback list and the single /component-registry fetch. */
+  assert.match(source, /useComponentRegistry/);
+  const registryModule = read("src/pages/settings/Platform/componentRegistry.js");
+  assert.match(registryModule, /FALLBACK_COMPONENT_REGISTRY/);
   assert.match(source, /MetadataResourcePicker/);
   assert.match(source, /presentation_mode/);
   assert.match(source, /draggable/);

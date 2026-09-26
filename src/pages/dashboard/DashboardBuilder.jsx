@@ -6,6 +6,7 @@ import DashboardComponentProperties from "../../components/dashboard/DashboardCo
 // exposes Data source, Metric field, Category / group field, Date range,
 // Format, Size, Maximum categories, Width and Height controls.
 import { DASHBOARD_COMPONENTS, DASHBOARD_SALES_FIELDS, applyLayout } from "../../components/dashboard/platformDashboard.js";
+import { componentIcon } from "../settings/Platform/componentRegistry.js";
 
 /*
  * The EXISTING Dashboard Builder, extended (not replaced). It offers the same
@@ -178,12 +179,17 @@ export default function DashboardBuilder() {
             onSelect={setSelectedId}
             onChange={(components) => setCurrent({ ...current, components })}
           />
+          {/* Component picker — the ONE registry visual language (shared icon
+              map), keeping this builder's pinned data-testid contract. */}
           <div className="flex flex-wrap gap-2 mt-4">
-            {DASHBOARD_COMPONENTS.map((spec) => (
-              <button key={spec.key} type="button" className="onepos-btn onepos-btn-sm" data-testid={`add-component-${spec.key}`} onClick={() => addComponent(spec.key)}>
-                + {spec.label}
-              </button>
-            ))}
+            {DASHBOARD_COMPONENTS.map((spec) => {
+              const Icon = componentIcon(spec.key);
+              return (
+                <button key={spec.key} type="button" className="onepos-btn onepos-btn-sm" data-testid={`add-component-${spec.key}`} onClick={() => addComponent(spec.key)}>
+                  <Icon size={13} className="shrink-0" aria-hidden="true" /> {spec.label}
+                </button>
+              );
+            })}
           </div>
           {!(current.components || []).length ? <p className="text-sm mt-3" style={{ color: "var(--onepos-text-muted)" }}>No components yet — add a Metric, Pie, Donut or Bar.</p> : null}
         </div>

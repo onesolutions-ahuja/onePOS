@@ -18,6 +18,7 @@ import RuleList from "./Platform/RuleList.jsx";
 import RuleEditor from "./Platform/RuleEditor.jsx";
 import ObjectPage from "./Platform/ObjectPage.jsx";
 import ValueSetList from "./Platform/ValueSetList.jsx";
+import ComponentRegistryAdmin from "./Platform/ComponentRegistryAdmin.jsx";
 import PlatformStudio from "./Platform/PlatformStudio.jsx";
 import WorkflowAdmin from "./Platform/WorkflowAdmin.jsx";
 import WorkflowRunsAdmin from "./Platform/WorkflowRunsAdmin.jsx";
@@ -535,6 +536,8 @@ export default function PlatformAdmin({ user, onMessage, onError }) {
       setView("rules");
     } else if (target === "value-sets") {
       setView("value-sets");
+    } else if (target === "component-registry") {
+      setView("component-registry");
     } else if (target === "studio") {
       setView("studio");
     } else if (target === "workflow") {
@@ -727,6 +730,10 @@ export default function PlatformAdmin({ user, onMessage, onError }) {
       "value-sets",
       <ValueSetList onBack={() => setView("objects")} onMessage={onMessage} onError={onError} />,
     );
+  }
+
+  if (view === "component-registry") {
+    return platformFrame("component-registry", <ComponentRegistryAdmin />);
   }
 
   if (view === "studio") {

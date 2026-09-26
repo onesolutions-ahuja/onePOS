@@ -23,7 +23,10 @@ test("Platform object configuration exposes all existing metadata tools", () => 
 });
 
 test("Object-scoped action and automation tabs reuse object rules", () => {
-  assert.match(editor, /tab === "actions" \|\| tab === "automation"/);
+  /* Batch 5 replaced the inline tab rail with ObjectManagerNav; both entries
+     still hand off to the existing object-scoped platform_rules editor. */
+  assert.match(editor, /if \(tab === "actions"\) \{[\s\S]{0,200}onNavigate\?\.\("rules"\)/);
+  assert.match(editor, /if \(tab === "automation"\) \{[\s\S]{0,200}onNavigate\?\.\("rules"\)/);
   assert.match(editor, /onNavigate\?\.\("rules"\)/);
 });
 

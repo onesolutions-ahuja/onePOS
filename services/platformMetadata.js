@@ -126,6 +126,7 @@ export const platformSchema = `
     UNIQUE (object_id, api_name)
   );
   CREATE TABLE IF NOT EXISTS platform_field_security (
+    id UUID NOT NULL DEFAULT gen_random_uuid(),
     field_id UUID NOT NULL REFERENCES platform_fields(id) ON DELETE CASCADE,
     role_id UUID NOT NULL REFERENCES roles(id) ON DELETE CASCADE,
     company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
@@ -133,6 +134,13 @@ export const platformSchema = `
     writable BOOLEAN NOT NULL DEFAULT FALSE,
     PRIMARY KEY (field_id, role_id, company_id)
   );
+  ALTER TABLE platform_field_security ADD COLUMN IF NOT EXISTS id UUID NOT NULL DEFAULT gen_random_uuid();
+  CREATE UNIQUE INDEX IF NOT EXISTS uq_platform_field_security_id ON platform_field_security(id);
+  ALTER TABLE platform_field_security ADD COLUMN IF NOT EXISTS source_package_id UUID REFERENCES package_registry(id) ON DELETE SET NULL;
+  ALTER TABLE platform_field_security ADD COLUMN IF NOT EXISTS source_package_version VARCHAR(40);
+  ALTER TABLE platform_field_security ADD COLUMN IF NOT EXISTS managed BOOLEAN NOT NULL DEFAULT FALSE;
+  ALTER TABLE platform_field_security ADD COLUMN IF NOT EXISTS package_required BOOLEAN NOT NULL DEFAULT FALSE;
+  ALTER TABLE platform_field_security ADD COLUMN IF NOT EXISTS user_modified BOOLEAN NOT NULL DEFAULT FALSE;
   CREATE TABLE IF NOT EXISTS platform_registered_actions (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     company_id UUID REFERENCES companies(id) ON DELETE CASCADE,
@@ -147,6 +155,11 @@ export const platformSchema = `
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
   );
+  ALTER TABLE platform_registered_actions ADD COLUMN IF NOT EXISTS source_package_id UUID REFERENCES package_registry(id) ON DELETE SET NULL;
+  ALTER TABLE platform_registered_actions ADD COLUMN IF NOT EXISTS source_package_version VARCHAR(40);
+  ALTER TABLE platform_registered_actions ADD COLUMN IF NOT EXISTS managed BOOLEAN NOT NULL DEFAULT FALSE;
+  ALTER TABLE platform_registered_actions ADD COLUMN IF NOT EXISTS package_required BOOLEAN NOT NULL DEFAULT FALSE;
+  ALTER TABLE platform_registered_actions ADD COLUMN IF NOT EXISTS user_modified BOOLEAN NOT NULL DEFAULT FALSE;
   CREATE UNIQUE INDEX IF NOT EXISTS uq_platform_registered_actions_global ON platform_registered_actions(action_key) WHERE company_id IS NULL;
   CREATE UNIQUE INDEX IF NOT EXISTS uq_platform_registered_actions_company ON platform_registered_actions(company_id, action_key) WHERE company_id IS NOT NULL;
   CREATE TABLE IF NOT EXISTS platform_buttons (
@@ -164,6 +177,11 @@ export const platformSchema = `
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
   );
+  ALTER TABLE platform_buttons ADD COLUMN IF NOT EXISTS source_package_id UUID REFERENCES package_registry(id) ON DELETE SET NULL;
+  ALTER TABLE platform_buttons ADD COLUMN IF NOT EXISTS source_package_version VARCHAR(40);
+  ALTER TABLE platform_buttons ADD COLUMN IF NOT EXISTS managed BOOLEAN NOT NULL DEFAULT FALSE;
+  ALTER TABLE platform_buttons ADD COLUMN IF NOT EXISTS package_required BOOLEAN NOT NULL DEFAULT FALSE;
+  ALTER TABLE platform_buttons ADD COLUMN IF NOT EXISTS user_modified BOOLEAN NOT NULL DEFAULT FALSE;
   ALTER TABLE platform_buttons ALTER COLUMN action_key DROP NOT NULL;
   ALTER TABLE platform_buttons ADD COLUMN IF NOT EXISTS target_type VARCHAR(20) NOT NULL DEFAULT 'action' CHECK (target_type IN ('action','workflow'));
   ALTER TABLE platform_buttons ADD COLUMN IF NOT EXISTS target_key VARCHAR(140);
@@ -188,6 +206,7 @@ export const platformSchema = `
   );
   CREATE INDEX IF NOT EXISTS idx_platform_action_bindings_event ON platform_action_bindings(company_id, object_id, event_key, active, execution_order);
   CREATE TABLE IF NOT EXISTS platform_object_permissions (
+    id UUID NOT NULL DEFAULT gen_random_uuid(),
     object_id UUID NOT NULL REFERENCES platform_objects(id) ON DELETE CASCADE,
     role_id UUID NOT NULL REFERENCES roles(id) ON DELETE CASCADE,
     company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
@@ -197,6 +216,13 @@ export const platformSchema = `
     can_delete BOOLEAN NOT NULL DEFAULT FALSE,
     PRIMARY KEY (object_id, role_id, company_id)
   );
+  ALTER TABLE platform_object_permissions ADD COLUMN IF NOT EXISTS id UUID NOT NULL DEFAULT gen_random_uuid();
+  CREATE UNIQUE INDEX IF NOT EXISTS uq_platform_object_permissions_id ON platform_object_permissions(id);
+  ALTER TABLE platform_object_permissions ADD COLUMN IF NOT EXISTS source_package_id UUID REFERENCES package_registry(id) ON DELETE SET NULL;
+  ALTER TABLE platform_object_permissions ADD COLUMN IF NOT EXISTS source_package_version VARCHAR(40);
+  ALTER TABLE platform_object_permissions ADD COLUMN IF NOT EXISTS managed BOOLEAN NOT NULL DEFAULT FALSE;
+  ALTER TABLE platform_object_permissions ADD COLUMN IF NOT EXISTS package_required BOOLEAN NOT NULL DEFAULT FALSE;
+  ALTER TABLE platform_object_permissions ADD COLUMN IF NOT EXISTS user_modified BOOLEAN NOT NULL DEFAULT FALSE;
   CREATE TABLE IF NOT EXISTS platform_record_history (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
@@ -338,6 +364,11 @@ export const platformSchema = `
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     UNIQUE (object_id, company_id, view_key)
   );
+  ALTER TABLE platform_list_views ADD COLUMN IF NOT EXISTS source_package_id UUID REFERENCES package_registry(id) ON DELETE SET NULL;
+  ALTER TABLE platform_list_views ADD COLUMN IF NOT EXISTS source_package_version VARCHAR(40);
+  ALTER TABLE platform_list_views ADD COLUMN IF NOT EXISTS managed BOOLEAN NOT NULL DEFAULT FALSE;
+  ALTER TABLE platform_list_views ADD COLUMN IF NOT EXISTS package_required BOOLEAN NOT NULL DEFAULT FALSE;
+  ALTER TABLE platform_list_views ADD COLUMN IF NOT EXISTS user_modified BOOLEAN NOT NULL DEFAULT FALSE;
   CREATE TABLE IF NOT EXISTS platform_reports (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     object_id UUID NOT NULL REFERENCES platform_objects(id) ON DELETE CASCADE,
@@ -376,6 +407,11 @@ export const platformSchema = `
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     UNIQUE (company_id, app_key)
   );
+  ALTER TABLE platform_apps ADD COLUMN IF NOT EXISTS source_package_id UUID REFERENCES package_registry(id) ON DELETE SET NULL;
+  ALTER TABLE platform_apps ADD COLUMN IF NOT EXISTS source_package_version VARCHAR(40);
+  ALTER TABLE platform_apps ADD COLUMN IF NOT EXISTS managed BOOLEAN NOT NULL DEFAULT FALSE;
+  ALTER TABLE platform_apps ADD COLUMN IF NOT EXISTS package_required BOOLEAN NOT NULL DEFAULT FALSE;
+  ALTER TABLE platform_apps ADD COLUMN IF NOT EXISTS user_modified BOOLEAN NOT NULL DEFAULT FALSE;
   CREATE TABLE IF NOT EXISTS platform_pages (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     app_id UUID NOT NULL REFERENCES platform_apps(id) ON DELETE CASCADE,
@@ -390,6 +426,11 @@ export const platformSchema = `
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     UNIQUE (app_id, company_id, page_key)
   );
+  ALTER TABLE platform_pages ADD COLUMN IF NOT EXISTS source_package_id UUID REFERENCES package_registry(id) ON DELETE SET NULL;
+  ALTER TABLE platform_pages ADD COLUMN IF NOT EXISTS source_package_version VARCHAR(40);
+  ALTER TABLE platform_pages ADD COLUMN IF NOT EXISTS managed BOOLEAN NOT NULL DEFAULT FALSE;
+  ALTER TABLE platform_pages ADD COLUMN IF NOT EXISTS package_required BOOLEAN NOT NULL DEFAULT FALSE;
+  ALTER TABLE platform_pages ADD COLUMN IF NOT EXISTS user_modified BOOLEAN NOT NULL DEFAULT FALSE;
   CREATE TABLE IF NOT EXISTS platform_rules (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     object_id UUID REFERENCES platform_objects(id) ON DELETE CASCADE,

@@ -6,7 +6,7 @@ import PlatformFieldPicker from "./PlatformFieldPicker.jsx";
 import MetadataResourcePicker from "./MetadataResourcePicker.jsx";
 import FormRenderer from "./FormRenderer.jsx";
 import { diagnoseFormDefinition } from "./formDefinition.js";
-import { FALLBACK_COMPONENT_REGISTRY, componentKeyForFieldType, paletteComponents } from "./componentRegistry.js";
+import { componentIcon, componentKeyForFieldType, paletteComponents, useComponentRegistry } from "./componentRegistry.js";
 
 const PAGE_TYPES = [
   { value: "list", label: "List" },
@@ -180,7 +180,7 @@ export default function LayoutEditor({
   const [fields, setFields] = useState([]);
   const [relationships, setRelationships] = useState([]);
   const [relatedFieldsByRelationship, setRelatedFieldsByRelationship] = useState({});
-  const [componentRegistry, setComponentRegistry] = useState(FALLBACK_COMPONENT_REGISTRY);
+  const componentRegistry = useComponentRegistry();
   const [buttonVariants, setButtonVariants] = useState([{ key: "primary", label: "Primary" }, { key: "secondary", label: "Secondary" }, { key: "outline", label: "Outline" }, { key: "destructive", label: "Destructive" }, { key: "icon", label: "Icon" }, { key: "icon_label", label: "Icon + Label" }]);
   const [registeredActions, setRegisteredActions] = useState([]);
   const [workflows, setWorkflows] = useState([]);
@@ -254,11 +254,6 @@ export default function LayoutEditor({
 
   useEffect(() => {
     let cancelled = false;
-    apiRequest("/api/platform/component-registry")
-      .then((result) => {
-        if (!cancelled && Array.isArray(result?.data) && result.data.length) setComponentRegistry(result.data);
-      })
-      .catch(() => { /* fallback registry is intentionally retained */ });
     apiRequest("/api/platform/button-variants")
       .then((result) => { if (!cancelled && Array.isArray(result?.data) && result.data.length) setButtonVariants(result.data); })
       .catch(() => {});
@@ -743,6 +738,7 @@ export default function LayoutEditor({
               addComponent({ type: item.key || item.type, label: item.label, text: "", visible: true }, targetSectionId);
             }}
           >
+            {(() => { const Icon = componentIcon(item); return <Icon size={13} className="pfb-palette-icon" aria-hidden="true" />; })()}
             <span className="pfb-check pfb-check-empty" aria-hidden="true" />
             <span className="pfb-palette-label">{item.label}</span>
           </button>
@@ -1804,6 +1800,7 @@ export default function LayoutEditor({
         .pfb-palette-item:hover:not(:disabled) { background: var(--muted-background); }
         .pfb-palette-item:disabled { color: var(--text-secondary); cursor: default; }
         .pfb-palette-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .pfb-palette-icon { flex-shrink: 0; color: var(--text-secondary); }
         .pfb-palette-hint { margin-left: auto; font-size: 10px; color: var(--text-secondary); white-space: nowrap; }
         .pfb-check {
           width: 13px; height: 13px; flex-shrink: 0;

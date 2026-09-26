@@ -99,10 +99,18 @@ test("object configuration uses a compact header with type and API name", () => 
   assert.match(objectEditor, /onepos-card pobj-detail-header/);
 });
 
-test("object configuration exposes a tab rail of configuration and existing tools", () => {
-  assert.match(objectEditor, /role="tab"[\s\S]{0,200}aria-selected=\{activeTab === tab\.key\}/);
-  assert.match(objectEditor, /onepos-tab/);
-  assert.match(objectEditor, /onepos-tab-active/);
+test("object configuration exposes an object-scoped navigation rail of configuration and existing tools", () => {
+  /* Batch 5 replaced the inline TOOL_TABS tab rail with the shared
+     ObjectManagerNav rail (grouped desktop rail + mobile select). */
+  const navSource = readFileSync(
+    new URL("../src/pages/settings/Platform/ObjectManagerNav.jsx", import.meta.url),
+    "utf8"
+  );
+  assert.match(navSource, /object-manager-nav-item/);
+  assert.match(navSource, /aria-current=\{activeKey === item\.key \? "page" : undefined\}/);
+  assert.match(navSource, /aria-label="Object configuration"/);
+  assert.match(objectEditor, /<ObjectManagerNav/);
+  assert.match(objectEditor, /activeKey=\{activeTab\}/);
 
   // Configuration that genuinely lives on this screen.
   assert.match(objectEditor, /key: "details", label: "Details"/);

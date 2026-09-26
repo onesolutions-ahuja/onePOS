@@ -2,7 +2,13 @@ import MetadataResourcePicker from "./MetadataResourcePicker.jsx";
 import { useEffect, useMemo, useState } from "react";
 import { GripVertical, Plus, Trash2 } from "lucide-react";
 import { apiRequest } from "../../../services/api.js";
-import { FALLBACK_COMPONENT_REGISTRY } from "./componentRegistry.js";
+import {
+  componentByKey,
+  componentCategoryLabel,
+  componentIcon,
+  paletteComponents,
+  useComponentRegistry,
+} from "./componentRegistry.js";
 
 const uid = (prefix = "cmp") => `${prefix}_${Date.now()}_${Math.random().toString(16).slice(2)}`;
 const fresh = () => ({
@@ -38,20 +44,21 @@ function normalizeDefinition(definition) {
 
 export default function PageBuilder({ onMessage, onError }) {
   const [apps, setApps] = useState([]), [appId, setAppId] = useState(""), [pages, setPages] = useState([]), [page, setPage] = useState(null);
-  const [definition, setDefinition] = useState(fresh()), [registry, setRegistry] = useState(FALLBACK_COMPONENT_REGISTRY);
+  const [definition, setDefinition] = useState(fresh());
+  const registry = useComponentRegistry();
   const [selected, setSelected] = useState(""), [preview, setPreview] = useState(false);
 
   useEffect(() => { apiRequest("/api/platform/apps").then((r) => setApps(r.data || [])).catch((e) => onError?.(e.message)); }, []);
-  useEffect(() => { apiRequest("/api/platform/component-registry").then((r) => Array.isArray(r.data) && r.data.length && setRegistry(r.data)).catch(() => {}); }, []);
   useEffect(() => { if (!appId) return setPages([]); apiRequest(`/api/platform/apps/${appId}/pages`).then((r) => setPages(r.data || [])).catch((e) => onError?.(e.message)); }, [appId]);
 
-  const palette = useMemo(() => registry.filter((c) => ["layout", "content", "action", "field", "record"].includes(c.category) && c.key !== "section"), [registry]);
+  /* Palette = the ONE shared registry view, ready-to-place components only. */
+  const palette = useMemo(() => paletteComponents(registry).filter((c) => c.category !== "layout" || !"section|container|multi_container".split("|").includes(c.key)), [registry]);
   const current = definition.components.find((c) => c.id === selected);
   const selectPage = (next) => { setPage(next); setDefinition(normalizeDefinition(next?.definition)); setSelected(""); };
   const patch = (fn) => setDefinition((value) => fn(value));
   const addSection = () => patch((d) => ({ ...d, sections: [...d.sections, { id: uid("section"), label: `Section ${d.sections.length + 1}`, order: d.sections.length, columns: 1, visible: true }] }));
   const addComponent = (sectionId, componentKey) => {
-    const meta = registry.find((c) => c.key === componentKey) || { key: componentKey, label: componentKey };
+    const meta = componentByKey(registry, componentKey) || { key: componentKey, label: componentKey };
     const id = uid(componentKey);
     patch((d) => ({ ...d, components: [...d.components, { id, component_key: meta.key, type: meta.kind || meta.category, label: meta.label, section_id: sectionId, order: d.components.length, width: "full", visible: true, props: {} }] }));
     setSelected(id);
@@ -86,7 +93,7 @@ export default function PageBuilder({ onMessage, onError }) {
     {!appId ? <div className="onepos-empty"><span className="onepos-empty-title">{apps.length ? "Select an app, then a page to compose." : "No apps available yet — create one under Apps first."}</span></div>
       : appId && !page ? <div className="onepos-empty"><span className="onepos-empty-title">{pages.length ? "Select a page to compose." : "This app has no pages yet — create one in Objects → Page Layouts / Record Pages."}</span></div>
       : <div className="grid gap-4 min-w-0 lg:grid-cols-[190px_minmax(0,1fr)] xl:grid-cols-[210px_minmax(0,1fr)_250px]">
-      {!preview && <aside className="rounded border bg-white p-3 min-w-0"><div className="mb-2 font-semibold">Components</div><div className="space-y-2">{palette.map((item) => <button key={item.key} draggable onDragStart={(e) => e.dataTransfer.setData("application/x-onepos-component", item.key)} onClick={() => addComponent(definition.sections[0]?.id, item.key)} className="block w-full rounded border px-3 py-2 text-left text-sm">{item.label}</button>)}</div><button className="mt-3 flex items-center gap-1 text-sm" onClick={addSection}><Plus size={14}/> Add section</button></aside>}
+      {!preview && <aside className="rounded border bg-white p-3 min-w-0"><div className="mb-2 font-semibold">Components</div><div className="space-y-2">{palette.map((item) => { const Icon = componentIcon(item); return <button key={item.key} draggable title={`${item.label} — ${componentCategoryLabel(item.category)}`} onDragStart={(e) => e.dataTransfer.setData("application/x-onepos-component", item.key)} onClick={() => addComponent(definition.sections[0]?.id, item.key)} className="block w-full rounded border px-3 py-2 text-left text-sm"><span className="flex items-center gap-2"><Icon size={14} className="shrink-0 text-slate-400" aria-hidden="true" />{item.label}</span></button>; })}</div><button className="mt-3 flex items-center gap-1 text-sm" onClick={addSection}><Plus size={14}/> Add section</button></aside>}
       <main className={`rounded border bg-slate-50 p-4 min-w-0 ${definition.device === "mobile" ? "mx-auto w-full max-w-sm" : definition.device === "tablet" ? "mx-auto w-full max-w-3xl" : ""}`}>
         <div className="mb-3 flex flex-wrap gap-2">{["desktop", "tablet", "mobile"].map((x) => <button key={x} aria-pressed={definition.device === x} className={`rounded px-2 py-1 text-xs ${definition.device === x ? "bg-blue-600 text-white" : "onepos-btn onepos-btn-secondary"}`} onClick={() => patch((d) => ({ ...d, device: x }))}>{x}</button>)}</div>
         {definition.sections.map((section, sectionIndex) => {

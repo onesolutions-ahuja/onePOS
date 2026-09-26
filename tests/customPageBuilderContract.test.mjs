@@ -57,11 +57,13 @@ test("builder and runtime render the same shared component renderer", () => {
   assert.match(runtime, /<CustomPageRenderer/);
 });
 
-/* Registry-driven palette — no second hard-coded component list. */
+/* Registry-driven palette — no second hard-coded component list. The ONE * shared hook (useComponentRegistry) fetches /platform/component-registry and * starts from FALLBACK_COMPONENT_REGISTRY on failure. */
 test("palette is populated from the component registry", () => {
   const builder = read("src/pages/settings/Platform/CustomPageBuilder.jsx");
-  assert.match(builder, /component-registry/);
-  assert.match(builder, /FALLBACK_COMPONENT_REGISTRY/);
+  assert.match(builder, /useComponentRegistry/);
+  const registryModule = read("src/pages/settings/Platform/componentRegistry.js");
+  assert.match(registryModule, /component-registry/);
+  assert.match(registryModule, /FALLBACK_COMPONENT_REGISTRY/);
 });
 
 /* MultiContainer + Container exist in the canonical registry. */

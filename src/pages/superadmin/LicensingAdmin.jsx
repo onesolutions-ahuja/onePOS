@@ -7,6 +7,9 @@ const DEFAULT_KEYS = ["pos", "inventory", "purchasing", "customers", "reports", 
 export default function LicensingAdmin() {
   const [licences, setLicences] = useState([]);
   const [companies, setCompanies] = useState([]);
+  const [marketplacePackages, setMarketplacePackages] = useState([]);
+  const [marketplaceBundles, setMarketplaceBundles] = useState([]);
+  const [marketplaceTiers, setMarketplaceTiers] = useState([]);
   const [name, setName] = useState("");
   const [selectedCompany, setSelectedCompany] = useState("");
   const [selectedLicence, setSelectedLicence] = useState("");
@@ -29,19 +32,88 @@ export default function LicensingAdmin() {
 
   const load = async () => {
     try {
-      const [licenceData, companyData] = await Promise.all([
+      const [licenceData, companyData, packageData, bundleData, tierData] = await Promise.all([
         apiRequest("/api/superadmin/licences"),
         apiRequest("/api/superadmin/companies"),
+        apiRequest("/api/superadmin/packages"),
+        apiRequest("/api/superadmin/bundles"),
+        apiRequest("/api/superadmin/tiers"),
       ]);
-      if (!licenceData.success || !companyData.success) throw new Error("Unable to load licensing data");
+      if (!licenceData.success || !companyData.success || !packageData.success || !bundleData.success || !tierData.success) {
+        throw new Error("Unable to load licensing and marketplace data");
+      }
       setLicences(licenceData.data || []);
       setCompanies(companyData.data || []);
+      setMarketplacePackages(packageData.data || []);
+      setMarketplaceBundles(bundleData.data || []);
+      setMarketplaceTiers(tierData.data || []);
     } catch (err) {
       setError(err.message || "Unable to load licensing data");
     }
   };
 
   useEffect(() => { load(); }, []);
+
+  const updateMarketplaceItem = (setter, id, field, value) => {
+    setter((items) => items.map((item) => item.id === id ? { ...item, [field]: value } : item));
+  };
+
+  const csvList = (value) => value.split(",").map((item) => item.trim()).filter(Boolean);
+
+  const saveMarketplaceSettings = async (path, payload, successMessage) => {
+    setError(""); setMessage("");
+    try {
+      const result = await apiRequest(path, { method: "PUT", body: JSON.stringify(payload) });
+      if (!result.success) throw new Error(result.message || "Unable to save marketplace settings");
+      setMessage(successMessage);
+      await load();
+    } catch (err) {
+      setError(err.message || "Unable to save marketplace settings");
+    }
+  };
+
+  const savePackageSettings = (item) => saveMarketplaceSettings(
+    `/api/superadmin/packages/${item.id}/marketplace`,
+    {
+      active: item.active,
+      visible: item.visible,
+      installable: item.installable,
+      billable: item.billable,
+      system_only: item.system_only,
+      category: item.category || "",
+      display_order: Number(item.display_order) || 0,
+      licence_mode: item.licence_mode,
+      allowed_bundles: item.allowed_bundles || [],
+      allowed_companies: item.allowed_companies || [],
+      available_tiers: item.available_tiers || [],
+    },
+    `${item.name} marketplace settings saved.`
+  );
+
+  const saveBundleSettings = (item) => saveMarketplaceSettings(
+    `/api/superadmin/bundles/${item.id}/marketplace`,
+    {
+      active: item.active,
+      visible: item.visible,
+      installable: item.installable,
+      display_order: Number(item.display_order) || 0,
+      allowed_companies: item.allowed_companies || [],
+      available_tiers: item.available_tiers || [],
+    },
+    `${item.name} marketplace settings saved.`
+  );
+
+  const saveTierSettings = (item) => saveMarketplaceSettings(
+    `/api/superadmin/tiers/${item.id}/marketplace`,
+    {
+      active: item.active,
+      visible: item.visible,
+      installable: item.installable,
+      display_order: Number(item.display_order) || 0,
+      allowed_companies: item.allowed_companies || [],
+    },
+    `${item.name} marketplace settings saved.`
+  );
 
   const createLicence = async () => {
     setError(""); setMessage("");
@@ -173,6 +245,77 @@ export default function LicensingAdmin() {
         </div>
       </section>
       <section className="onepos-card overflow-hidden"><table className="onepos-table"><thead><tr><th>Licence</th><th>Status</th><th>Companies</th></tr></thead><tbody>{licences.map((licence) => <tr key={licence.id}><td className="font-medium">{licence.name}</td><td>{licence.active ? <span className="onepos-badge onepos-badge-success">Active</span> : <span className="onepos-badge onepos-badge-neutral">Inactive</span>}</td><td>{licence.company_count}</td></tr>)}</tbody></table></section>
+      <section className="onepos-card onepos-card-body space-y-4">
+        <div>
+          <h2 className="onepos-card-title">OneApps marketplace packages</h2>
+          <p className="text-sm text-slate-600 mt-1">Control package availability and commercial treatment independently from installation state.</p>
+        </div>
+        {marketplacePackages.map((item) => (
+          <div className="border-t border-slate-200 pt-4 space-y-3" key={item.id}>
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div><strong>{item.name}</strong><span className="ml-2 text-sm text-slate-500">{item.package_key}</span></div>
+              <button type="button" className="onepos-btn onepos-btn-secondary" onClick={() => savePackageSettings(item)}>Save package policy</button>
+            </div>
+            <div className="flex flex-wrap gap-4">
+              {[
+                ["active", "Active"], ["visible", "Visible"], ["installable", "Installable"],
+                ["billable", "Billable"], ["system_only", "Internal/system-only"],
+              ].map(([field, label]) => (
+                <label className="text-sm flex gap-2 items-center" key={field}>
+                  <input type="checkbox" checked={item[field] === true} onChange={(event) => updateMarketplaceItem(setMarketplacePackages, item.id, field, event.target.checked)} />{label}
+                </label>
+              ))}
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+              <label className="text-sm">Category<input className="onepos-input mt-1 w-full" value={item.category || ""} onChange={(event) => updateMarketplaceItem(setMarketplacePackages, item.id, "category", event.target.value)} /></label>
+              <label className="text-sm">Display order<input type="number" className="onepos-input mt-1 w-full" value={item.display_order ?? 0} onChange={(event) => updateMarketplaceItem(setMarketplacePackages, item.id, "display_order", event.target.value)} /></label>
+              <label className="text-sm">Licence mode<select className="onepos-input mt-1 w-full" value={item.licence_mode || "COMMERCIAL"} onChange={(event) => updateMarketplaceItem(setMarketplacePackages, item.id, "licence_mode", event.target.value)}><option value="COMMERCIAL">Commercial</option><option value="TECHNICAL">Technical</option></select></label>
+              {[
+                ["allowed_bundles", "Allowed bundle keys"],
+                ["available_tiers", "Allowed tier keys"],
+                ["allowed_companies", "Allowed company IDs"],
+              ].map(([field, label]) => (
+                <label className="text-sm" key={field}>{label}
+                  <input className="onepos-input mt-1 w-full" value={(item[field] || []).join(", ")} onChange={(event) => updateMarketplaceItem(setMarketplacePackages, item.id, field, csvList(event.target.value))} />
+                </label>
+              ))}
+            </div>
+          </div>
+        ))}
+      </section>
+      <section className="onepos-card onepos-card-body space-y-4">
+        <div><h2 className="onepos-card-title">Bundle marketplace visibility</h2><p className="text-sm text-slate-600 mt-1">Bundle assignment and entitlement calculation continue through the shared reconciliation service.</p></div>
+        {marketplaceBundles.map((item) => (
+          <div className="border-t border-slate-200 pt-4 space-y-3" key={item.id}>
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <strong>{item.name} <span className="text-sm text-slate-500">{item.bundle_key}</span></strong>
+              <button type="button" className="onepos-btn onepos-btn-secondary" onClick={() => saveBundleSettings(item)}>Save bundle policy</button>
+            </div>
+            <div className="flex flex-wrap gap-4">
+              {["active", "visible", "installable"].map((field) => <label className="text-sm flex gap-2 items-center" key={field}><input type="checkbox" checked={item[field] === true} onChange={(event) => updateMarketplaceItem(setMarketplaceBundles, item.id, field, event.target.checked)} />{field}</label>)}
+              <label className="text-sm">Display order<input type="number" className="onepos-input ml-2 w-24" value={item.display_order ?? 0} onChange={(event) => updateMarketplaceItem(setMarketplaceBundles, item.id, "display_order", event.target.value)} /></label>
+            </div>
+            <label className="text-sm block">Allowed company IDs<input className="onepos-input mt-1 w-full" value={(item.allowed_companies || []).join(", ")} onChange={(event) => updateMarketplaceItem(setMarketplaceBundles, item.id, "allowed_companies", csvList(event.target.value))} /></label>
+            <label className="text-sm block">Allowed tier keys<input className="onepos-input mt-1 w-full" value={(item.available_tiers || []).join(", ")} onChange={(event) => updateMarketplaceItem(setMarketplaceBundles, item.id, "available_tiers", csvList(event.target.value))} /></label>
+          </div>
+        ))}
+      </section>
+      <section className="onepos-card onepos-card-body space-y-4">
+        <div><h2 className="onepos-card-title">Tier marketplace visibility</h2><p className="text-sm text-slate-600 mt-1">Tier assignments reconcile package and feature entitlements using the same source-aware service.</p></div>
+        {marketplaceTiers.map((item) => (
+          <div className="border-t border-slate-200 pt-4 space-y-3" key={item.id}>
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <strong>{item.name} <span className="text-sm text-slate-500">{item.tier_key}</span></strong>
+              <button type="button" className="onepos-btn onepos-btn-secondary" onClick={() => saveTierSettings(item)}>Save tier policy</button>
+            </div>
+            <div className="flex flex-wrap gap-4">
+              {["active", "visible", "installable"].map((field) => <label className="text-sm flex gap-2 items-center" key={field}><input type="checkbox" checked={item[field] === true} onChange={(event) => updateMarketplaceItem(setMarketplaceTiers, item.id, field, event.target.checked)} />{field}</label>)}
+              <label className="text-sm">Display order<input type="number" className="onepos-input ml-2 w-24" value={item.display_order ?? 0} onChange={(event) => updateMarketplaceItem(setMarketplaceTiers, item.id, "display_order", event.target.value)} /></label>
+            </div>
+            <label className="text-sm block">Allowed company IDs<input className="onepos-input mt-1 w-full" value={(item.allowed_companies || []).join(", ")} onChange={(event) => updateMarketplaceItem(setMarketplaceTiers, item.id, "allowed_companies", csvList(event.target.value))} /></label>
+          </div>
+        ))}
+      </section>
       <section className="onepos-card onepos-card-body space-y-4">
         <div>
           <h2 className="onepos-card-title">Company database routing</h2>

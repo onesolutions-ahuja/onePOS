@@ -152,7 +152,7 @@ async function syncLayoutButtons(db, req, layout, { deactivateExisting = true } 
   ].filter((component) => component?.type === "button");
   if (deactivateExisting) {
     await db(
-      "UPDATE platform_buttons SET active=false,updated_at=NOW() WHERE company_id=$1 AND object_id=$2 AND config->>'layoutId'=$3",
+      "UPDATE platform_buttons SET active=false,user_modified=true,updated_at=NOW() WHERE company_id=$1 AND object_id=$2 AND config->>'layoutId'=$3",
       [req.user.companyId, layout.object_id, String(layout.id)]
     );
   }
@@ -1012,7 +1012,7 @@ export default function createPlatformRouter({ authenticate, authorize, db, pool
       const target = await resolveButtonTarget(req, button);
       if (target.error) return res.status(400).json({ success: false, code: "UNREGISTERED_BUTTON_TARGET", message: target.error });
       const result = await db(
-        `UPDATE platform_buttons SET button_key=$1,label=$2,icon=$3,action_key=$4,target_type=$5,target_key=$6,variant=$7,
+        `UPDATE platform_buttons SET button_key=$1,label=$2,icon=$3,action_key=$4,target_type=$5,target_key=$6,variant=$7,user_modified=true,
          placement=$8,required_permission=$9,visibility_rule=$10::jsonb,input_mappings=$11::jsonb,config=$12::jsonb,updated_at=NOW()
          WHERE id=$13 AND object_id=$14 AND company_id=$15 RETURNING *`,
         [button.buttonKey, button.label, button.icon, button.targetType === "action" ? button.targetKey : null,
@@ -1027,7 +1027,7 @@ export default function createPlatformRouter({ authenticate, authorize, db, pool
   });
 
   router.delete("/platform/objects/:objectId/buttons/:buttonId", ...manage, async (req, res) => {
-    const result = await db("UPDATE platform_buttons SET active=false,updated_at=NOW() WHERE id=$1 AND object_id=$2 AND company_id=$3 RETURNING *", [req.params.buttonId, req.params.objectId, req.user.companyId]);
+    const result = await db("UPDATE platform_buttons SET active=false,user_modified=true,updated_at=NOW() WHERE id=$1 AND object_id=$2 AND company_id=$3 RETURNING *", [req.params.buttonId, req.params.objectId, req.user.companyId]);
     if (!result.rows.length) return res.status(404).json({ success: false, message: "Button not found" });
     res.json({ success: true, data: result.rows[0] });
   });
@@ -1122,7 +1122,7 @@ export default function createPlatformRouter({ authenticate, authorize, db, pool
         const blockers = await objectDeactivationBlockers(db, object, req.user.companyId);
         if (blockers.length) return res.status(409).json({ success: false, code: "OBJECT_IN_USE", message: `Object cannot be deactivated while active dependencies remain: ${blockers.join(", ")}` });
       }
-      const result = await db("UPDATE platform_objects SET object_key=COALESCE($1,object_key), api_name=COALESCE($2,api_name), label=COALESCE($3,label), plural_label=COALESCE($4,plural_label), description=COALESCE($5,description), source_table=$6, active=COALESCE($7,active), updated_at=NOW() WHERE id=$8 AND (company_id=$9 OR (company_id IS NULL AND $10=true)) RETURNING *", [req.body.objectKey, req.body.apiName, req.body.label, req.body.pluralLabel, req.body.description, req.body.sourceTable === undefined ? object.source_table : req.body.sourceTable, req.body.active, object.id, req.user.companyId, canManageGlobal(req)]);
+      const result = await db("UPDATE platform_objects SET object_key=COALESCE($1,object_key), api_name=COALESCE($2,api_name), label=COALESCE($3,label), plural_label=COALESCE($4,plural_label), description=COALESCE($5,description), source_table=$6, active=COALESCE($7,active), user_modified=true,updated_at=NOW() WHERE id=$8 AND (company_id=$9 OR (company_id IS NULL AND $10=true)) RETURNING *", [req.body.objectKey, req.body.apiName, req.body.label, req.body.pluralLabel, req.body.description, req.body.sourceTable === undefined ? object.source_table : req.body.sourceTable, req.body.active, object.id, req.user.companyId, canManageGlobal(req)]);
       res.json({ success: true, data: result.rows[0] });
     } catch (error) {
       if (error.code === "23505") return res.status(409).json({ success: false, message: "An object with this key already exists" });
@@ -1237,7 +1237,7 @@ export default function createPlatformRouter({ authenticate, authorize, db, pool
           });
         }
       }
-      const updated = await db("UPDATE platform_fields SET api_name=COALESCE($1,api_name), label=COALESCE($2,label), field_type=COALESCE($3,field_type), source_column=$4, required=COALESCE($5,required), readable=COALESCE($6,readable), writable=COALESCE($7,writable), options=COALESCE($8::jsonb,options), config=COALESCE($9::jsonb,config), display_order=COALESCE($10,display_order), active=COALESCE($11,active) WHERE id=$12 RETURNING *", [req.body.apiName, req.body.label, req.body.fieldType, req.body.sourceColumn === undefined ? field.source_column : req.body.sourceColumn, req.body.required, req.body.readable, req.body.writable, req.body.options === undefined ? null : JSON.stringify(req.body.options), req.body.config === undefined ? null : JSON.stringify(req.body.config), req.body.displayOrder, req.body.active, field.id]);
+      const updated = await db("UPDATE platform_fields SET api_name=COALESCE($1,api_name), label=COALESCE($2,label), field_type=COALESCE($3,field_type), source_column=$4, required=COALESCE($5,required), readable=COALESCE($6,readable), writable=COALESCE($7,writable), options=COALESCE($8::jsonb,options), config=COALESCE($9::jsonb,config), display_order=COALESCE($10,display_order), active=COALESCE($11,active),user_modified=true WHERE id=$12 RETURNING *", [req.body.apiName, req.body.label, req.body.fieldType, req.body.sourceColumn === undefined ? field.source_column : req.body.sourceColumn, req.body.required, req.body.readable, req.body.writable, req.body.options === undefined ? null : JSON.stringify(req.body.options), req.body.config === undefined ? null : JSON.stringify(req.body.config), req.body.displayOrder, req.body.active, field.id]);
       res.json({ success: true, data: updated.rows[0] });
     } catch (error) {
       if (error instanceof FormulaError || error instanceof ConditionError) return res.status(400).json({ success: false, code: error.code, message: error.message });
@@ -1374,12 +1374,12 @@ export default function createPlatformRouter({ authenticate, authorize, db, pool
     const onDelete = req.body.onDelete || relationship.on_delete;
     const onUpdate = req.body.onUpdate || relationship.on_update;
     if (!RELATIONSHIP_TYPES.has(relationshipType) || !RELATIONSHIP_POLICIES.has(onDelete) || !RELATIONSHIP_POLICIES.has(onUpdate)) return res.status(400).json({ success: false, message: "Invalid relationship type or policy" });
-    const updated = await db("UPDATE platform_relationships SET parent_object_id=$1,child_object_id=$2,relationship_key=COALESCE($3,relationship_key),relationship_type=$4,child_field_id=$5,on_delete=$6,on_update=$7,active=COALESCE($8,active) WHERE id=$9 RETURNING *", [parentId, childId, req.body.relationshipKey, relationshipType, childFieldId, onDelete, onUpdate, req.body.active, relationship.id]);
+    const updated = await db("UPDATE platform_relationships SET parent_object_id=$1,child_object_id=$2,relationship_key=COALESCE($3,relationship_key),relationship_type=$4,child_field_id=$5,on_delete=$6,on_update=$7,active=COALESCE($8,active),user_modified=true WHERE id=$9 RETURNING *", [parentId, childId, req.body.relationshipKey, relationshipType, childFieldId, onDelete, onUpdate, req.body.active, relationship.id]);
     res.json({ success: true, data: updated.rows[0] });
   });
 
   router.delete("/platform/relationships/:relationshipId", ...manage, async (req, res) => {
-    const result = await db("UPDATE platform_relationships r SET active=false WHERE r.id=$1 AND EXISTS (SELECT 1 FROM platform_objects o WHERE o.id=r.parent_object_id AND (o.company_id=$2 OR (o.company_id IS NULL AND $3=true))) RETURNING r.*", [req.params.relationshipId, req.user.companyId, canManageGlobal(req)]);
+    const result = await db("UPDATE platform_relationships r SET active=false,user_modified=true WHERE r.id=$1 AND EXISTS (SELECT 1 FROM platform_objects o WHERE o.id=r.parent_object_id AND (o.company_id=$2 OR (o.company_id IS NULL AND $3=true))) RETURNING r.*", [req.params.relationshipId, req.user.companyId, canManageGlobal(req)]);
     if (!result.rows.length) return res.status(404).json({ success: false, message: "Relationship not found or not editable" });
     res.json({ success: true, data: result.rows[0] });
   });
@@ -1425,7 +1425,7 @@ export default function createPlatformRouter({ authenticate, authorize, db, pool
     if (req.body.viewKey !== undefined && !isSafeIdentifier(req.body.viewKey)) return res.status(400).json({ success: false, message: "viewKey must be a safe identifier" });
     try {
       const result = await db(
-        "UPDATE platform_list_views SET view_key=COALESCE($1,view_key), label=COALESCE($2,label), description=COALESCE($3,description), active=COALESCE($4,active), columns=COALESCE($5::jsonb,columns), filters=COALESCE($6::jsonb,filters), sort=COALESCE($7::jsonb,sort), page_size=COALESCE($8,page_size), is_default=COALESCE($9,is_default), updated_at=NOW() WHERE id=$10 RETURNING *",
+        "UPDATE platform_list_views SET view_key=COALESCE($1,view_key), label=COALESCE($2,label), description=COALESCE($3,description), active=COALESCE($4,active), columns=COALESCE($5::jsonb,columns), filters=COALESCE($6::jsonb,filters), sort=COALESCE($7::jsonb,sort), page_size=COALESCE($8,page_size), is_default=COALESCE($9,is_default), user_modified=true,updated_at=NOW() WHERE id=$10 RETURNING *",
         [req.body.viewKey, req.body.label, req.body.description, req.body.active, req.body.columns === undefined ? null : JSON.stringify(columns), req.body.filters === undefined ? null : JSON.stringify(req.body.filters || {}), req.body.sort === undefined ? null : JSON.stringify(normalizeListViewSort(req.body.sort)), req.body.pageSize === undefined ? null : Number(req.body.pageSize), req.body.isDefault, view.id]
       );
       res.json({ success: true, data: result.rows[0] });
@@ -1437,7 +1437,7 @@ export default function createPlatformRouter({ authenticate, authorize, db, pool
   });
 
   router.delete("/platform/list-views/:listViewId", ...manage, async (req, res) => {
-    const result = await db("UPDATE platform_list_views SET active=false WHERE id=$1 AND company_id=$2 RETURNING *", [req.params.listViewId, req.user.companyId]);
+    const result = await db("UPDATE platform_list_views SET active=false,user_modified=true WHERE id=$1 AND company_id=$2 RETURNING *", [req.params.listViewId, req.user.companyId]);
     if (!result.rows.length) return res.status(404).json({ success: false, message: "List view not found or not editable" });
     res.json({ success: true, data: result.rows[0] });
   });
@@ -1561,14 +1561,14 @@ export default function createPlatformRouter({ authenticate, authorize, db, pool
     if (!report) return res.status(404).json({ success: false, message: "Report not found or not editable" });
     const nextConfig = req.body?.config === undefined ? report.config : normalizeReportConfig(req.body.config);
     const result = await db(
-      "UPDATE platform_reports SET label=COALESCE($1,label), description=COALESCE($2,description), active=COALESCE($3,active), config=COALESCE($4::jsonb,config), updated_at=NOW() WHERE id=$5 RETURNING *",
+      "UPDATE platform_reports SET label=COALESCE($1,label), description=COALESCE($2,description), active=COALESCE($3,active), config=COALESCE($4::jsonb,config), user_modified=true,updated_at=NOW() WHERE id=$5 RETURNING *",
       [req.body?.label, req.body?.description, req.body?.active, JSON.stringify(nextConfig), report.id]
     );
     res.json({ success: true, data: result.rows[0] });
   });
 
   router.delete("/platform/reports/:reportId", ...manage, async (req, res) => {
-    const result = await db("UPDATE platform_reports SET active=false WHERE id=$1 AND company_id=$2 RETURNING *", [req.params.reportId, req.user.companyId]);
+    const result = await db("UPDATE platform_reports SET active=false,user_modified=true WHERE id=$1 AND company_id=$2 RETURNING *", [req.params.reportId, req.user.companyId]);
     if (!result.rows.length) return res.status(404).json({ success: false, message: "Report not found or not editable" });
     res.json({ success: true, data: result.rows[0] });
   });
@@ -2342,8 +2342,8 @@ router.get("/platform/runtime/apps", authenticate, async (req, res) => {
     if (!(await validateLayoutRole(db, req.body.roleId, req))) return res.status(400).json({ success: false, message: "Role does not belong to this company" });
     try {
       const result = recordTypeId
-        ? await db("UPDATE platform_layouts SET page_type=$1,role_id=$2,record_type_id=$3,name=$4,definition=$5::jsonb,active=COALESCE($6,active),is_default=CASE WHEN COALESCE($6,active)=false THEN false ELSE COALESCE($7,is_default) END,updated_at=NOW() WHERE id=$8 RETURNING *", [pageType, req.body.roleId || null, recordTypeId, req.body.name.trim(), JSON.stringify(req.body.definition), req.body.active, req.body.isDefault, req.params.layoutId])
-        : await db("UPDATE platform_layouts SET page_type=$1,role_id=$2,name=$3,definition=$4::jsonb,active=COALESCE($5,active),is_default=CASE WHEN COALESCE($5,active)=false THEN false ELSE COALESCE($6,is_default) END,updated_at=NOW() WHERE id=$7 RETURNING *", [pageType, req.body.roleId || null, req.body.name.trim(), JSON.stringify(req.body.definition), req.body.active, req.body.isDefault, req.params.layoutId]);
+        ? await db("UPDATE platform_layouts SET page_type=$1,role_id=$2,record_type_id=$3,name=$4,definition=$5::jsonb,active=COALESCE($6,active),is_default=CASE WHEN COALESCE($6,active)=false THEN false ELSE COALESCE($7,is_default) END,user_modified=true,updated_at=NOW() WHERE id=$8 RETURNING *", [pageType, req.body.roleId || null, recordTypeId, req.body.name.trim(), JSON.stringify(req.body.definition), req.body.active, req.body.isDefault, req.params.layoutId])
+        : await db("UPDATE platform_layouts SET page_type=$1,role_id=$2,name=$3,definition=$4::jsonb,active=COALESCE($5,active),is_default=CASE WHEN COALESCE($5,active)=false THEN false ELSE COALESCE($6,is_default) END,user_modified=true,updated_at=NOW() WHERE id=$7 RETURNING *", [pageType, req.body.roleId || null, req.body.name.trim(), JSON.stringify(req.body.definition), req.body.active, req.body.isDefault, req.params.layoutId]);
       await syncLayoutButtons(db, req, result.rows[0]);
       if (req.body.isDefault === true) {
         await db("UPDATE platform_layouts SET is_default=false WHERE object_id=$1 AND page_type=$2 AND id<>$3 AND (company_id IS NULL OR company_id=$4)", [result.rows[0].object_id, result.rows[0].page_type, result.rows[0].id, req.user.companyId]);
@@ -2363,7 +2363,7 @@ router.get("/platform/runtime/apps", authenticate, async (req, res) => {
     const layout = existing.rows[0];
     try {
       await db("UPDATE platform_layouts SET is_default=false, updated_at=NOW() WHERE object_id=$1 AND page_type=$2 AND (company_id IS NULL OR company_id=$3)", [layout.object_id, layout.page_type, req.user.companyId]);
-      const result = await db("UPDATE platform_layouts SET is_default=true, updated_at=NOW() WHERE id=$1 RETURNING *", [req.params.layoutId]);
+      const result = await db("UPDATE platform_layouts SET is_default=true,user_modified=true,updated_at=NOW() WHERE id=$1 RETURNING *", [req.params.layoutId]);
       res.json({ success: true, data: result.rows[0] });
     } catch (error) {
       console.error("Platform layout default error:", error);
@@ -2372,13 +2372,13 @@ router.get("/platform/runtime/apps", authenticate, async (req, res) => {
   });
 
   router.delete("/platform/layouts/:layoutId", ...manage, async (req, res) => {
-    const result = await db("UPDATE platform_layouts SET active=false,is_default=false WHERE id=$1 AND (company_id=$2 OR (company_id IS NULL AND $3=true)) RETURNING *", [req.params.layoutId, req.user.companyId, canManageGlobal(req)]);
+    const result = await db("UPDATE platform_layouts SET active=false,is_default=false,user_modified=true WHERE id=$1 AND (company_id=$2 OR (company_id IS NULL AND $3=true)) RETURNING *", [req.params.layoutId, req.user.companyId, canManageGlobal(req)]);
     if (!result.rows.length) return res.status(404).json({ success: false, message: "Layout not found or not editable" });
     res.json({ success: true, data: result.rows[0] });
   });
 
   router.post("/platform/layouts/:layoutId/activate", ...manage, async (req, res) => {
-    const result = await db("UPDATE platform_layouts SET active=true,updated_at=NOW() WHERE id=$1 AND (company_id=$2 OR (company_id IS NULL AND $3=true)) RETURNING *", [req.params.layoutId, req.user.companyId, canManageGlobal(req)]);
+    const result = await db("UPDATE platform_layouts SET active=true,user_modified=true,updated_at=NOW() WHERE id=$1 AND (company_id=$2 OR (company_id IS NULL AND $3=true)) RETURNING *", [req.params.layoutId, req.user.companyId, canManageGlobal(req)]);
     if (!result.rows.length) return res.status(404).json({ success: false, message: "Layout not found or not editable" });
     res.json({ success: true, data: result.rows[0] });
   });
@@ -2511,7 +2511,7 @@ router.get("/platform/runtime/apps", authenticate, async (req, res) => {
       const deactivateOnly = req.body.active === false && Object.keys(req.body).length === 1;
       const ruleError = deactivateOnly ? null : await checkRule(req, next);
       if (ruleError) return res.status(400).json({ success: false, message: ruleError });
-      const result = await db("UPDATE platform_rules SET object_id=COALESCE($1,object_id),name=COALESCE($2,name),trigger_key=COALESCE($3,trigger_key),conditions=COALESCE($4::jsonb,conditions),action=COALESCE($5::jsonb,action),active=COALESCE($6,active),updated_at=NOW() WHERE id=$7 RETURNING *", [req.body.objectId, req.body.name, req.body.triggerKey, req.body.conditions === undefined ? null : JSON.stringify(req.body.conditions), req.body.action === undefined ? null : JSON.stringify(req.body.action), req.body.active, rule.id]);
+      const result = await db("UPDATE platform_rules SET object_id=COALESCE($1,object_id),name=COALESCE($2,name),trigger_key=COALESCE($3,trigger_key),conditions=COALESCE($4::jsonb,conditions),action=COALESCE($5::jsonb,action),active=COALESCE($6,active),user_modified=true,updated_at=NOW() WHERE id=$7 RETURNING *", [req.body.objectId, req.body.name, req.body.triggerKey, req.body.conditions === undefined ? null : JSON.stringify(req.body.conditions), req.body.action === undefined ? null : JSON.stringify(req.body.action), req.body.active, rule.id]);
       res.json({ success: true, data: result.rows[0] });
     } catch (error) {
       if (["22P02", "23503"].includes(error.code)) return res.status(400).json({ success: false, message: "Invalid rule reference" });
@@ -2521,7 +2521,7 @@ router.get("/platform/runtime/apps", authenticate, async (req, res) => {
   });
 
   router.delete("/platform/rules/:ruleId", ...manage, async (req, res) => {
-    const result = await db("UPDATE platform_rules SET active=false WHERE id=$1 AND company_id=$2 RETURNING *", [req.params.ruleId, req.user.companyId]);
+    const result = await db("UPDATE platform_rules SET active=false,user_modified=true WHERE id=$1 AND company_id=$2 RETURNING *", [req.params.ruleId, req.user.companyId]);
     if (!result.rows.length) return res.status(404).json({ success: false, message: "Rule not found or not editable" });
     res.json({ success: true, data: result.rows[0] });
   });

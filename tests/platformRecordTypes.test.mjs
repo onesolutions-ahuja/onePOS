@@ -32,6 +32,8 @@ test("record type administration and generic create form are wired to the select
   assert.match(objectEditor, /<RecordTypeEditor object=\{\{ id: objectId \}\}/);
   assert.match(recordTypeEditor, /\/record-types/);
   assert.match(recordTypeEditor, /picklistRestrictions/);
-  assert.match(objectPage, /creating\?\.fields/);
-  assert.match(objectPage, /recordTypeId: creating\?\.childKey \? null : selectedRecordTypeId/);
+  /* The generic create flow carries the selected object's record type: the
+     modal holds the fields/initialValues, createRecord stamps the type. */
+  assert.match(objectPage, /recordModal\.fields \|\| activeFields/);
+  assert.match(objectPage, /recordTypeId: creating\?\.childKey \? null : selectedRecordTypeId \|\| null/);
 });

@@ -23,7 +23,7 @@ export default function ModuleInstaller({
     setError("");
 
     try {
-      const data = await apiRequest("/api/platform/packages");
+      const data = await apiRequest("/api/packages/marketplace");
 
       const loaded = data?.data?.packages || data?.data || [];
 
@@ -199,6 +199,8 @@ export default function ModuleInstaller({
       if (action === "activate") {
         if (onActivate) {
           await onActivate(module);
+        } else {
+          await apiRequest(`/api/platform/packages/${encodeURIComponent(key)}/reactivate`, { method: "POST", body: JSON.stringify({}) });
         }
       }
 
@@ -260,14 +262,13 @@ export default function ModuleInstaller({
       <div className="platform-module-header">
         <div>
           <div className="platform-eyebrow">
-            PLATFORM / MODULES
+            ONEAPPS / MARKETPLACE
           </div>
 
           <h2>Modules</h2>
 
           <p>
-            Manage the predefined applications installed
-            in this onePOS environment.
+            Browse installable applications available to this company.
           </p>
         </div>
 
@@ -450,6 +451,10 @@ export default function ModuleInstaller({
                     <span>
                       <strong>API Key</strong>
                       {key || "-"}
+                    </span>
+                    <span>
+                      <strong>Category</strong>
+                      {module.category || "Uncategorised"}
                     </span>
                   </div>
 
