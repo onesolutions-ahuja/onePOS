@@ -62,6 +62,7 @@ function makeState() {
     orders: [],
     orderItems: [],
     orderEvents: [],
+    platformEvents: [],
     // Pre-seed store-level stock so the real createInventoryMovement ONLINE_RESERVE
     // (which requires an existing non-negative store position) succeeds.
     pss: [
@@ -96,6 +97,20 @@ function makeHarness(state) {
 
     // transactions / noop
     if (/^(BEGIN|COMMIT|ROLLBACK)$/.test(s)) return { rows: [], rowCount: 0 };
+
+    if (match(/^INSERT INTO platform_events\(/)) {
+      const event = {
+        id: `pe-${state.platformEvents.length + 1}`,
+        company_id: P[0],
+        event_type: P[1],
+        payload: JSON.parse(P[2]),
+        actor_user_id: P[3],
+        idempotency_key: P[4],
+      };
+      state.platformEvents.push(event);
+      return { rows: [event], rowCount: 1 };
+    }
+    if (match(/^INSERT INTO platform_webhook_deliveries\(/)) return { rows: [], rowCount: 0 };
 
     // stores
     if (match(/^SELECT id FROM stores WHERE id = \$1 AND company_id = \$2 AND active = true$/)) {
@@ -174,23 +189,24 @@ function makeHarness(state) {
         id: orderId(n),
         company_id: P[0],
         store_id: P[1] || null,
+        customer_id: P[2] || null,
         platform: "direct",
-        external_order_id: P[2],
-        external_reference: P[3],
+        external_order_id: P[3],
+        external_reference: P[4],
         status: "RECEIVED",
-        fulfilment_type: P[4],
-        customer_name: P[5],
-        customer_phone: P[6],
-        customer_email: P[7],
-        delivery_address: P[8],
-        customer_data: P[9],
+        fulfilment_type: P[5],
+        customer_name: P[6],
+        customer_phone: P[7],
+        customer_email: P[8],
+        delivery_address: P[9],
+        customer_data: P[10],
         currency: "GBP",
-        subtotal: P[10],
-        tax: P[11],
-        total: P[12],
-        notes: P[13],
-        payment_method: P[14] || null,
-        payment_status: P[15] || "pending",
+        subtotal: P[11],
+        tax: P[12],
+        total: P[13],
+        notes: P[14],
+        payment_method: P[15] || null,
+        payment_status: P[16] || "pending",
         inventory_reserved: false,
         inventory_released: false,
         created_at: new Date().toISOString(),

@@ -9,6 +9,10 @@ import { getPlatformService } from "./onlineOrders/index.js";
 import { loadPlatformConfig } from "./onlineOrders/platformConfig.js";
 import { resolveUberMenuProducts, UberMenuMappingError } from "./onlineOrders/uberMenuMapping.js";
 import { createConnectorActionExecutor } from "./connectorFramework.js";
+import { transitionGenericOrder } from "./onlineOrders/genericOrderService.js";
+import { createInventoryMovement } from "./inventory.js";
+import { createSaleForCompletedOrder } from "./onlineOrders/saleCreator.js";
+import { publishPlatformEvent } from "./platformEvents.js";
 
 import { PLATFORM_FUNCTIONS, PLATFORM_FUNCTION_MAP } from "./platformFunctionRegistry.js";
 const IRREVERSIBLE_ACTIONS = new Set(["SEND_EMAIL", "SEND_SMS", "SEND_WHATSAPP", "CALL_WEBHOOK", "HTTP_REQUEST", "WEBHOOK"]);
@@ -335,7 +339,96 @@ async function loadRecordRelationship({ db, action, object }) {
   return { relationship, field: fieldResult.rows[0] || null };
 }
 
+const ONLINE_ORDER_TRANSITION_TARGETS = new Set([
+  "PREPARING",
+  "REJECTED",
+  "AUTO_READY",
+  "READY_FOR_PICKUP",
+  "READY_FOR_DELIVERY",
+  "COLLECTED",
+  "COMPLETED",
+  "CANCELLED",
+]);
+
+async function executeOnlineOrderTransition({ db, pool, action, req, record, recordId, companyId, userId }) {
+  const tenantId = companyId || req?.user?.companyId;
+  const orderId = action?.orderId || record?.id || recordId;
+  if (!tenantId || !orderId || typeof db !== "function" || typeof pool?.connect !== "function") {
+    throw new Error("Online order actions require a company-scoped record and database pool");
+  }
+  if (req?.user?.companyId && String(req.user.companyId) !== String(tenantId)) {
+    throw new Error("Online order action company context is invalid");
+  }
+  const result = await db(
+    "SELECT id,company_id,store_id,platform,fulfilment_type,status FROM online_orders WHERE id=$1 AND company_id=$2 LIMIT 1",
+    [orderId, tenantId]
+  );
+  const order = result.rows[0];
+  if (!order) throw Object.assign(new Error("Online order not found"), { status: 404 });
+  if (req?.user?.storeId && String(req.user.storeId) !== String(order.store_id || "")) {
+    throw Object.assign(new Error("Online order is outside the current store scope"), { status: 403 });
+  }
+  if (order.platform !== "direct") {
+    throw Object.assign(new Error("Provider-specific order actions must be executed by the provider integration"), { status: 409 });
+  }
+
+  let toStatus = String(action.toStatus || "").toUpperCase();
+  if (toStatus === "AUTO_READY") {
+    toStatus = order.fulfilment_type === "SELF_PICKUP"
+      ? "READY_FOR_PICKUP"
+      : order.fulfilment_type === "DELIVERY"
+        ? "READY_FOR_DELIVERY"
+        : "READY";
+  }
+  if (!ONLINE_ORDER_TRANSITION_TARGETS.has(String(action.toStatus || "").toUpperCase())) {
+    throw new Error("Online order action requires a supported lifecycle target");
+  }
+  if (toStatus === "READY_FOR_PICKUP" && order.fulfilment_type !== "SELF_PICKUP") {
+    throw new Error("Only self-pickup orders can be marked ready for pickup");
+  }
+  if (toStatus === "READY_FOR_DELIVERY" && order.fulfilment_type !== "DELIVERY") {
+    throw new Error("Only delivery orders can be marked ready for delivery");
+  }
+
+  const transition = await transitionGenericOrder({
+    pool,
+    companyId: tenantId,
+    orderId,
+    userId: userId || req?.user?.id || null,
+    toStatus,
+    reason: action.reason || null,
+    createSale: createSaleForCompletedOrder,
+    createInventoryMovement,
+    publishEvent: ({ client, eventType, payload, actorUserId }) => publishPlatformEvent({
+      db: client.query.bind(client),
+      companyId: tenantId,
+      eventType,
+      payload,
+      actorUserId,
+    }),
+  });
+  if (!transition.success) {
+    throw Object.assign(new Error(transition.error || "Online order transition failed"), {
+      status: transition.error === "Order not found" ? 404 : 409,
+    });
+  }
+  return transition;
+}
+
 export const WORKFLOW_ACTION_REGISTRY = Object.freeze([
+  {
+    key: "ONLINE_ORDER_TRANSITION",
+    displayName: "Online Order Lifecycle Transition",
+    description: "Apply a provider-neutral direct online order lifecycle transition using the canonical service.",
+    validation: (action) => {
+      if (!ONLINE_ORDER_TRANSITION_TARGETS.has(String(action?.toStatus || "").toUpperCase())) {
+        throw new Error("Online Order Lifecycle Transition requires a supported lifecycle target");
+      }
+    },
+    async: false,
+    requiredPermissions: ["online_orders.manage"],
+    executor: executeOnlineOrderTransition,
+  },
   {
     key: "SEND_PASSWORD_RESET_EMAIL",
     displayName: "Send Password Reset Email",

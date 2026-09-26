@@ -151,12 +151,13 @@ function makeCtx() {
       if (/^INSERT INTO online_orders \(/.test(s)) {
         const order = {
           id: ORDER_ID, company_id: params[0], store_id: params[1] || null,
-          platform: "direct", external_order_id: params[2], external_reference: params[3],
-          status: "RECEIVED", fulfilment_type: params[4],
-          customer_name: params[5], customer_phone: params[6], customer_email: params[7],
-          delivery_address: params[8], customer_data: params[9],
-          currency: "GBP", subtotal: params[10], tax: params[11], total: params[12],
-          notes: params[13], inventory_reserved: false,
+          customer_id: params[2] || null, platform: "direct",
+          external_order_id: params[3], external_reference: params[4],
+          status: "RECEIVED", fulfilment_type: params[5],
+          customer_name: params[6], customer_phone: params[7], customer_email: params[8],
+          delivery_address: params[9], customer_data: params[10],
+          currency: "GBP", subtotal: params[11], tax: params[12], total: params[13],
+          notes: params[14], inventory_reserved: false,
           created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
         };
         state.orders.push(order);
@@ -297,6 +298,7 @@ describe("generic order types", () => {
     assert.equal(GENERIC_ORDER_STATUSES.READY_FOR_DELIVERY, "READY_FOR_DELIVERY");
     assert.equal(GENERIC_ORDER_STATUSES.COLLECTED, "COLLECTED");
     assert.equal(GENERIC_ORDER_STATUSES.COMPLETED, "COMPLETED");
+    assert.equal(GENERIC_ORDER_STATUSES.REJECTED, "REJECTED");
     assert.equal(GENERIC_ORDER_STATUSES.CANCELLED, "CANCELLED");
   });
 
@@ -307,6 +309,7 @@ describe("generic order types", () => {
 
   test("canTransition allows valid transitions", () => {
     assert.equal(canTransition(FULFILMENT_TYPES.DELIVERY, "RECEIVED", "PREPARING"), true);
+    assert.equal(canTransition(FULFILMENT_TYPES.DELIVERY, "RECEIVED", "REJECTED"), true);
     assert.equal(canTransition(FULFILMENT_TYPES.SELF_PICKUP, "READY_FOR_PICKUP", "COLLECTED"), true);
   });
 
@@ -342,6 +345,7 @@ describe("createGenericOrder", () => {
     assert.equal(result.order.subtotal, "3.00");
     assert.equal(result.order.tax, "0.60");
     assert.equal(result.order.total, "3.60");
+    assert.equal(result.order.customer_id, null);
     assert.equal(result.order.customer_name, "Alice");
     assert.equal(result.items.length, 1);
     assert.equal(result.items[0].unitPrice, 1.5);
@@ -357,6 +361,7 @@ describe("createGenericOrder", () => {
       externalOrderId: "EXT-002", fulfilmentType: FULFILMENT_TYPES.SELF_PICKUP,
       items, payment: {},
     });
+
     assert.equal(result.duplicate, false);
     assert.equal(result.order.status, "RECEIVED");
     assert.equal(result.order.store_id, STORE_A);
@@ -365,6 +370,19 @@ describe("createGenericOrder", () => {
     assert.equal(ps.quantity, 23);
     assert.ok(state.movements.length > 0);
     assert.equal(state.movements[0].movement_type, "ONLINE_RESERVE");
+  });
+
+  test("persists an existing Customer Core reference without creating a customer", async () => {
+    const { db, pool } = makeCtx();
+    const customerId = " cust-1";
+    const result = await createGenericOrder({
+      db, pool, companyId: COMPANY, userId: USER, storeId: null,
+      externalOrderId: "EXT-CUSTOMER", fulfilmentType: FULFILMENT_TYPES.DELIVERY,
+      items: [{ productId: PRODUCT_A, quantity: 1 }],
+      customer: { id: customerId, name: "Alice" },
+    });
+    assert.equal(result.order.customer_id, customerId);
+    assert.equal(JSON.parse(result.order.customer_data).id, customerId);
   });
 
   test("rejects missing externalOrderId", async () => {
@@ -833,6 +851,30 @@ describe("generic order inventory / sale integration", () => {
     assert.equal(r2.success, true);
     assert.equal(r2.inventoryReleased, false);
     assert.equal(state.movements.length, 0);
+  });
+
+  test("rejecting a reserved order releases stock", async () => {
+    const { db, pool, state } = makeCtx();
+    state.inventory = new Map();
+    state.sales = [];
+    state.saleCalls = 0;
+    const movement = makeMovement(state);
+
+    await createGenericOrder({
+      db, pool, companyId: COMPANY, userId: USER, storeId: STORE_A,
+      externalOrderId: "EXT-REJECT", fulfilmentType: FULFILMENT_TYPES.DELIVERY,
+      items: [{ productId: PRODUCT_A, quantity: 2 }], payment: {}, createInventoryMovement: movement,
+    });
+    const result = await transitionGenericOrder({
+      pool, companyId: COMPANY, orderId: ORDER_ID, userId: USER,
+      toStatus: "REJECTED", createInventoryMovement: movement,
+    });
+
+    assert.equal(result.success, true);
+    assert.equal(result.inventoryReleased, true);
+    assert.equal(state.orders[0].inventory_released, true);
+    assert.equal(state.inventory.get(`${COMPANY}:${PRODUCT_A}:${STORE_A}`), 0);
+    assert.equal(state.movements.filter((movementEntry) => movementEntry.movement_type === "ONLINE_RELEASE").length, 1);
   });
 
   test("a sale-creation failure rolls the completion back", async () => {

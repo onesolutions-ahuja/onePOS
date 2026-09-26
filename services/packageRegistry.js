@@ -116,6 +116,7 @@ export function packageDefinition(entry) {
     customer_credit: ["customers", "retail_pos"],
     reports: [],
     platform: [],
+    online_orders: ["products", "inventory", { packageKey: "customers", optional: true }],
     uber_eats: ["integrations", "online_orders"],
   };
   const packageType = entry.packageType === "FOUNDATION" || entry.technical === true
@@ -150,6 +151,196 @@ export function packageDefinition(entry) {
       dependencies: Array.isArray(entry.dependencies) ? entry.dependencies : (dependencies[entry.key] || []),
       optionalFeatures: Array.isArray(entry.optionalFeatures) ? entry.optionalFeatures : [],
       capabilities: Array.isArray(entry.capabilities) ? entry.capabilities : [entry.key],
+      ...(entry.key === "online_orders" ? {
+        metadataOwnership: {
+          objects: ["online_order", "online_order_line"],
+          relationships: ["order_lines", "product", "customer", "store"],
+          layouts: ["online_order_detail"],
+          forms: ["online_order_create", "online_order_edit"],
+          listViews: ["all"],
+          validations: ["online_order_line_quantity_positive"],
+          permissions: ["online_orders.view", "online_orders.manage", "online_orders.status_update", "online_orders.cancel"],
+          actions: [
+            "online_order.accept",
+            "online_order.reject",
+            "online_order.prepare",
+            "online_order.mark_ready",
+            "online_order.mark_ready_for_pickup",
+            "online_order.mark_ready_for_delivery",
+            "online_order.collect",
+            "online_order.complete",
+            "online_order.cancel",
+          ],
+          events: [
+            "online_order.created",
+            "online_order.accepted",
+            "online_order.status_changed",
+            "online_order.cancelled",
+            "online_order.completed",
+          ],
+        },
+        upgrade: {
+          migrationKey: "online_orders_core_1_0_0",
+          strategy: "additive",
+          preservesRecordIds: true,
+          idempotentMetadataProvisioning: true,
+        },
+        objects: [
+          {
+            objectKey: "online_order",
+            metadataScope: "global",
+            label: "Online Order",
+            pluralLabel: "Online Orders",
+            description: "Canonical provider-neutral online order record.",
+            sourceTable: "online_orders",
+            required: true,
+            fields: [
+              { apiName: "external_reference", sourceColumn: "external_reference", label: "Order Reference", fieldType: "text", writable: false },
+              { apiName: "external_order_id", sourceColumn: "external_order_id", label: "External Provider Order ID", fieldType: "text", required: true, writable: false },
+              { apiName: "platform", sourceColumn: "platform", label: "Provider / Channel", fieldType: "text", required: true, writable: false, config: { normalizedProviderKey: true, allowFutureProviders: true } },
+              { apiName: "company_id", sourceColumn: "company_id", label: "Company", fieldType: "lookup", required: true, writable: false },
+              { apiName: "store_id", sourceColumn: "store_id", label: "Store", fieldType: "lookup", writable: false },
+              { apiName: "customer_id", sourceColumn: "customer_id", label: "Customer", fieldType: "lookup", writable: false },
+              { apiName: "customer_name", sourceColumn: "customer_name", label: "Customer Name", fieldType: "text", writable: false },
+              { apiName: "customer_phone", sourceColumn: "customer_phone", label: "Customer Phone", fieldType: "phone", writable: false },
+              { apiName: "customer_email", sourceColumn: "customer_email", label: "Customer Email", fieldType: "email", writable: false },
+              { apiName: "fulfilment_type", sourceColumn: "fulfilment_type", label: "Fulfilment", fieldType: "picklist", required: true, writable: false, options: ["SELF_PICKUP", "DELIVERY"] },
+              { apiName: "status", sourceColumn: "status", label: "Status", fieldType: "picklist", required: true, writable: false, options: ["RECEIVED", "ACCEPTED", "PREPARING", "READY", "READY_FOR_PICKUP", "READY_FOR_DELIVERY", "COLLECTED", "COMPLETED", "REJECTED", "CANCELLED"] },
+              { apiName: "subtotal", sourceColumn: "subtotal", label: "Subtotal", fieldType: "currency", writable: false },
+              { apiName: "tax", sourceColumn: "tax", label: "Tax", fieldType: "currency", writable: false },
+              { apiName: "total", sourceColumn: "total", label: "Total", fieldType: "currency", writable: false },
+              { apiName: "notes", sourceColumn: "notes", label: "Notes", fieldType: "text", writable: false },
+              { apiName: "delivery_address", sourceColumn: "delivery_address", label: "Delivery Address", fieldType: "text", writable: false },
+              { apiName: "created_at", sourceColumn: "created_at", label: "Created", fieldType: "datetime", writable: false },
+              { apiName: "updated_at", sourceColumn: "updated_at", label: "Updated", fieldType: "datetime", writable: false },
+            ],
+          },
+          {
+            objectKey: "online_order_line",
+            metadataScope: "global",
+            label: "Online Order Line",
+            pluralLabel: "Online Order Lines",
+            description: "Existing online order item rows and Product Core references.",
+            sourceTable: "online_order_items",
+            required: true,
+            fields: [
+              { apiName: "order_id", sourceColumn: "order_id", label: "Online Order", fieldType: "lookup", required: true, writable: false },
+              { apiName: "product_id", sourceColumn: "product_id", label: "Product", fieldType: "lookup", writable: false },
+              { apiName: "product_name", sourceColumn: "product_name", label: "Product Name", fieldType: "text", required: true, writable: false },
+              { apiName: "external_item_id", sourceColumn: "external_item_id", label: "External Item ID", fieldType: "text", writable: false },
+              { apiName: "quantity", sourceColumn: "quantity", label: "Quantity", fieldType: "decimal", required: true, writable: false, config: { minimum: 0.001 } },
+              { apiName: "unit_price", sourceColumn: "unit_price", label: "Unit Price", fieldType: "currency", required: true, writable: false },
+              { apiName: "tax", sourceColumn: "tax", label: "Tax", fieldType: "currency", writable: false },
+              { apiName: "total", sourceColumn: "total", label: "Line Total", fieldType: "currency", required: true, writable: false },
+              { apiName: "mapping_status", sourceColumn: "mapping_status", label: "Product Mapping", fieldType: "picklist", required: true, writable: false, options: ["MAPPED", "UNMAPPED"] },
+              { apiName: "platform_data", sourceColumn: "platform_data", label: "Provider Item Data", fieldType: "json", writable: false },
+              { apiName: "created_at", sourceColumn: "created_at", label: "Created", fieldType: "datetime", writable: false },
+            ],
+          },
+        ],
+        relationships: [
+          { parentObjectKey: "online_order", childObjectKey: "online_order_line", relationshipKey: "order_lines", relationshipType: "one_to_many", childFieldApiName: "order_id", required: true },
+          { parentObjectKey: "online_order_line", childObjectKey: "product", relationshipKey: "product", relationshipType: "lookup", childFieldApiName: "product_id" },
+          { parentObjectKey: "customer", childObjectKey: "online_order", relationshipKey: "online_orders", relationshipType: "one_to_many", childFieldApiName: "customer_id" },
+          { parentObjectKey: "store", childObjectKey: "online_order", relationshipKey: "online_orders", relationshipType: "one_to_many", childFieldApiName: "store_id" },
+        ],
+        listViews: [
+          {
+            objectKey: "online_order",
+            viewKey: "all",
+            label: "All Online Orders",
+            columns: ["external_reference", "external_order_id", "platform", "store_id", "fulfilment_type", "status", "total", "created_at"],
+            sort: { field: "created_at", direction: "desc" },
+            pageSize: 50,
+            isDefault: true,
+          },
+        ],
+        layouts: [
+          {
+            objectKey: "online_order",
+            layoutKey: "online_order_detail",
+            pageType: "detail",
+            name: "Online Order Details",
+            isDefault: true,
+            required: true,
+            definition: {
+              sections: [{ id: "order-details", label: "Order Details", order: 0, columns: 2, visible: true }],
+              components: [
+                ...["external_reference", "external_order_id", "platform", "store_id", "customer_id", "customer_name", "fulfilment_type", "status", "subtotal", "tax", "total", "created_at"].map((fieldKey, order) => ({
+                  id: `field-${fieldKey}`,
+                  type: "field",
+                  field_key: fieldKey,
+                  section_id: "order-details",
+                  order,
+                  width: "1/2",
+                  visible: true,
+                  readOnly: true,
+                })),
+                { id: "related-order-lines", type: "related_list", relationship_key: "order_lines", label: "Order Lines", visible: true },
+              ],
+            },
+          },
+        ],
+        forms: [
+          {
+            objectKey: "online_order",
+            formKey: "online_order_create",
+            pageType: "create",
+            name: "Online Order Create",
+            fields: ["external_order_id", "platform", "store_id", "customer_id", "fulfilment_type", "status"],
+          },
+          {
+            objectKey: "online_order",
+            formKey: "online_order_edit",
+            pageType: "edit",
+            name: "Online Order Edit",
+            fields: ["external_reference", "external_order_id", "platform", "store_id", "customer_id", "fulfilment_type", "status", "notes"],
+          },
+        ],
+        validationRules: [
+          {
+            objectKey: "online_order_line",
+            name: "online_order_line_quantity_positive",
+            triggerKey: "before_create",
+            conditions: [{ field: "quantity", operator: "less_than", value: 0.001 }],
+            action: { message: "Order line quantity must be greater than zero." },
+            required: true,
+          },
+        ],
+        permissionDeclarations: [
+          { key: "online_order_read", permission: "online_orders.view", access: "read" },
+          { key: "online_order_lifecycle", permission: "online_orders.manage", access: "execute" },
+        ],
+        actions: [
+          { actionKey: "online_order.accept", objectKey: "online_order", label: "Accept Order", handlerKey: "ONLINE_ORDER_TRANSITION", requiredPermission: "online_orders.manage", config: { toStatus: "PREPARING" } },
+          { actionKey: "online_order.reject", objectKey: "online_order", label: "Reject Order", handlerKey: "ONLINE_ORDER_TRANSITION", requiredPermission: "online_orders.manage", config: { toStatus: "REJECTED" } },
+          { actionKey: "online_order.prepare", objectKey: "online_order", label: "Prepare Order", handlerKey: "ONLINE_ORDER_TRANSITION", requiredPermission: "online_orders.manage", config: { toStatus: "PREPARING" } },
+          { actionKey: "online_order.mark_ready", objectKey: "online_order", label: "Mark Ready", handlerKey: "ONLINE_ORDER_TRANSITION", requiredPermission: "online_orders.manage", config: { toStatus: "AUTO_READY" } },
+          { actionKey: "online_order.mark_ready_for_pickup", objectKey: "online_order", label: "Mark Ready for Pickup", handlerKey: "ONLINE_ORDER_TRANSITION", requiredPermission: "online_orders.manage", config: { toStatus: "READY_FOR_PICKUP" } },
+          { actionKey: "online_order.mark_ready_for_delivery", objectKey: "online_order", label: "Mark Ready for Delivery", handlerKey: "ONLINE_ORDER_TRANSITION", requiredPermission: "online_orders.manage", config: { toStatus: "READY_FOR_DELIVERY" } },
+          { actionKey: "online_order.collect", objectKey: "online_order", label: "Collect Order", handlerKey: "ONLINE_ORDER_TRANSITION", requiredPermission: "online_orders.manage", config: { toStatus: "COLLECTED" } },
+          { actionKey: "online_order.complete", objectKey: "online_order", label: "Complete Order", handlerKey: "ONLINE_ORDER_TRANSITION", requiredPermission: "online_orders.manage", config: { toStatus: "COMPLETED" } },
+          { actionKey: "online_order.cancel", objectKey: "online_order", label: "Cancel Order", handlerKey: "ONLINE_ORDER_TRANSITION", requiredPermission: "online_orders.manage", config: { toStatus: "CANCELLED" } },
+        ],
+        buttons: [
+          { buttonKey: "online_order_accept", objectKey: "online_order", label: "Accept", actionKey: "online_order.accept", requiredPermission: "online_orders.manage", variant: "primary" },
+          { buttonKey: "online_order_reject", objectKey: "online_order", label: "Reject", actionKey: "online_order.reject", requiredPermission: "online_orders.manage", variant: "danger" },
+          { buttonKey: "online_order_prepare", objectKey: "online_order", label: "Prepare", actionKey: "online_order.prepare", requiredPermission: "online_orders.manage", variant: "secondary" },
+          { buttonKey: "online_order_ready", objectKey: "online_order", label: "Mark Ready", actionKey: "online_order.mark_ready", requiredPermission: "online_orders.manage", variant: "secondary" },
+          { buttonKey: "online_order_ready_pickup", objectKey: "online_order", label: "Ready for Pickup", actionKey: "online_order.mark_ready_for_pickup", requiredPermission: "online_orders.manage", variant: "secondary" },
+          { buttonKey: "online_order_ready_delivery", objectKey: "online_order", label: "Ready for Delivery", actionKey: "online_order.mark_ready_for_delivery", requiredPermission: "online_orders.manage", variant: "secondary" },
+          { buttonKey: "online_order_collect", objectKey: "online_order", label: "Collect", actionKey: "online_order.collect", requiredPermission: "online_orders.manage", variant: "secondary" },
+          { buttonKey: "online_order_complete", objectKey: "online_order", label: "Complete", actionKey: "online_order.complete", requiredPermission: "online_orders.manage", variant: "secondary" },
+          { buttonKey: "online_order_cancel", objectKey: "online_order", label: "Cancel", actionKey: "online_order.cancel", requiredPermission: "online_orders.manage", variant: "danger" },
+        ],
+        events: [
+          { eventType: "online_order.created", description: "A canonical online order was created." },
+          { eventType: "online_order.accepted", description: "A canonical online order was accepted." },
+          { eventType: "online_order.status_changed", description: "A canonical online order status changed." },
+          { eventType: "online_order.cancelled", description: "A canonical online order was cancelled." },
+          { eventType: "online_order.completed", description: "A canonical online order was completed." },
+        ],
+      } : {}),
       ...(entry.key === "batch_expiry" ? {
         objects: [
           {
@@ -626,15 +817,15 @@ export async function provisionPackageMetadata(db, { packageId, moduleId, compan
           throw new Error(`Platform field belongs to another company: ${objectKey}.${apiName}`);
         }
         await db(
-          "UPDATE platform_fields SET label=CASE WHEN user_modified THEN label ELSE $1 END,field_type=CASE WHEN user_modified THEN field_type ELSE $2 END,required=$3,readable=CASE WHEN user_modified THEN readable ELSE $4 END,writable=CASE WHEN user_modified THEN writable ELSE $5 END,options=CASE WHEN user_modified THEN options ELSE $6::jsonb END,config=CASE WHEN user_modified THEN config ELSE $7::jsonb END,source_package_id=$9,source_package_version=$10,managed=true,package_required=$11,active=true WHERE id=$8",
-          [field.label.trim(), field.fieldType || field.field_type || "text", field.required === true, field.readable !== false, field.writable === true, JSON.stringify(field.options || []), JSON.stringify({ ...(field.config || {}), packageContract: field.required === true ? "required" : "default", packageOwned: true, packageId }), existingField.rows[0].id, packageId, packageVersion, field.required === true]
+          "UPDATE platform_fields SET label=CASE WHEN user_modified THEN label ELSE $1 END,field_type=CASE WHEN user_modified THEN field_type ELSE $2 END,required=$3,readable=CASE WHEN user_modified THEN readable ELSE $4 END,writable=CASE WHEN user_modified THEN writable ELSE $5 END,options=CASE WHEN user_modified THEN options ELSE $6::jsonb END,config=CASE WHEN user_modified THEN config ELSE $7::jsonb END,source_package_id=$9,source_package_version=$10,managed=true,package_required=$11,active=true,source_column=CASE WHEN user_modified THEN source_column ELSE $12 END WHERE id=$8",
+          [field.label.trim(), field.fieldType || field.field_type || "text", field.required === true, field.readable !== false, field.writable === true, JSON.stringify(field.options || []), JSON.stringify({ ...(field.config || {}), packageContract: field.required === true ? "required" : "default", packageOwned: true, packageId }), existingField.rows[0].id, packageId, packageVersion, field.required === true, field.sourceColumn || field.source_column || apiName]
         );
       } else {
         await db(
           `INSERT INTO platform_fields
-           (object_id,api_name,label,field_type,required,readable,writable,options,config,company_id,source_package_id,source_package_version,managed,package_required)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9::jsonb,$10,$11,$12,true,$13)`,
-          [object.id, apiName, field.label.trim(), field.fieldType || field.field_type || "text", field.required === true, field.readable !== false, field.writable === true, JSON.stringify(field.options || []), JSON.stringify({ ...(field.config || {}), packageContract: field.required === true ? "required" : "default", packageOwned: true, packageId }), companyId || null, packageId, packageVersion, field.required === true]
+           (object_id,api_name,label,field_type,required,readable,writable,options,config,company_id,source_package_id,source_package_version,managed,package_required,source_column)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9::jsonb,$10,$11,$12,true,$13,$14)`,
+          [object.id, apiName, field.label.trim(), field.fieldType || field.field_type || "text", field.required === true, field.readable !== false, field.writable === true, JSON.stringify(field.options || []), JSON.stringify({ ...(field.config || {}), packageContract: field.required === true ? "required" : "default", packageOwned: true, packageId }), companyId || null, packageId, packageVersion, field.required === true, field.sourceColumn || field.source_column || apiName]
         );
       }
     }
@@ -705,6 +896,61 @@ export async function provisionPackageMetadata(db, { packageId, moduleId, compan
     );
   }
 
+  const layouts = [
+    ...(Array.isArray(manifest.layouts) ? manifest.layouts : []),
+    ...(Array.isArray(manifest.forms) ? manifest.forms.filter((form) =>
+      (form.objectKey || form.object_key) &&
+      (form.pageType || form.page_type || ["create", "edit", "quick_create"].includes(form.mode))
+    ).map((form) => ({
+      ...form,
+      layoutKey: form.layoutKey || form.layout_key || form.formKey || form.form_key,
+      pageType: form.pageType || form.page_type || form.mode,
+      definition: form.definition || {
+        sections: [{ id: "form-details", label: form.label || form.name || "Details", order: 0, columns: 2, visible: true }],
+        components: (form.fields || []).map((field, index) => {
+          const fieldKey = typeof field === "string" ? field : field.key || field.apiName || field.api_name;
+          return {
+            id: `field-${fieldKey}`,
+            type: "field",
+            field_key: fieldKey,
+            section_id: "form-details",
+            order: index,
+            width: "1/2",
+            visible: true,
+            readOnly: typeof field === "object" && field.readOnly === true,
+          };
+        }),
+      },
+    })) : []),
+  ];
+  for (const layout of layouts) {
+    const objectId = objectIds.get(layout.objectKey || layout.object_key);
+    const layoutKey = layout.layoutKey || layout.layout_key;
+    const pageType = layout.pageType || layout.page_type;
+    if (!objectId || !safeMetadataKey(layoutKey) || !["list", "detail", "view", "create", "edit", "quick_create"].includes(pageType)) {
+      throw new Error("Package layouts and forms require a declared object, safe key and supported page type");
+    }
+    if (layout.isDefault === true) {
+      await db(
+        "UPDATE platform_layouts SET is_default=false WHERE object_id=$1 AND page_type=$2 AND role_id IS NULL AND company_id IS NULL AND layout_key<>$3",
+        [objectId, pageType, layoutKey]
+      );
+    }
+    const saved = await db(
+      `INSERT INTO platform_layouts
+       (object_id,page_type,role_id,company_id,name,layout_key,definition,active,is_default,source_package_id,source_package_version,managed,package_required)
+       VALUES ($1,$2,NULL,NULL,$3,$4,$5::jsonb,true,$6,$7,$8,true,$9)
+       ON CONFLICT (object_id,page_type,layout_key) WHERE layout_key <> ''
+       DO UPDATE SET name=EXCLUDED.name,definition=EXCLUDED.definition,active=true,is_default=EXCLUDED.is_default,
+         source_package_id=EXCLUDED.source_package_id,source_package_version=EXCLUDED.source_package_version,
+         managed=true,package_required=EXCLUDED.package_required,updated_at=NOW()
+       WHERE platform_layouts.source_package_id IS NULL OR platform_layouts.source_package_id=EXCLUDED.source_package_id
+       RETURNING id`,
+      [objectId, pageType, layout.name || layout.label || layoutKey, layoutKey, JSON.stringify(layout.definition || { components: [] }), layout.isDefault === true, packageId, packageVersion, layout.required === true]
+    );
+    if (!saved.rows.length) throw new Error(`Package layout key is owned by another declaration: ${layoutKey}`);
+  }
+
   for (const page of Array.isArray(manifest.pages) ? manifest.pages : []) {
     const pageKey = page.pageKey || page.page_key;
     if (!safeMetadataKey(pageKey) || typeof page.label !== "string" || !page.label.trim()) {
@@ -745,7 +991,7 @@ export async function provisionPackageMetadata(db, { packageId, moduleId, compan
        WHERE platform_registered_actions.config->>'packageOwned'='true'
          AND platform_registered_actions.config->>'packageId'=EXCLUDED.config->>'packageId'
        RETURNING id`,
-      [companyId || null, objectId, actionKey, action.label.trim(), action.description || null, handlerKey, action.requiredPermission || action.required_permission || null, JSON.stringify({ packageOwned: true, packageId })]
+      [companyId || null, objectId, actionKey, action.label.trim(), action.description || null, handlerKey, action.requiredPermission || action.required_permission || null, JSON.stringify({ ...(action.config || {}), packageOwned: true, packageId })]
     );
     if (!registered.rows.length) throw new Error(`Package action key is owned by another declaration: ${actionKey}`);
   }
@@ -776,6 +1022,11 @@ export async function provisionPackageMetadata(db, { packageId, moduleId, compan
 
   const packageRules = [
     ...(Array.isArray(manifest.rules) ? manifest.rules : []),
+    ...(Array.isArray(manifest.validationRules) ? manifest.validationRules.map((rule) => ({
+      ...rule,
+      action: { type: "validation", ...(rule.action || {}) },
+      active: true,
+    })) : []),
     ...(Array.isArray(manifest.workflows) ? manifest.workflows.map((workflow) => ({
       ...workflow,
       name: workflow.name || workflow.label,
@@ -809,17 +1060,57 @@ export async function provisionPackageMetadata(db, { packageId, moduleId, compan
     }
     await db(
       `INSERT INTO platform_rules
-       (object_id,name,trigger_key,conditions,action,active,company_id,lifecycle_status)
-       VALUES ($1,$2,$3,$4::jsonb,$5::jsonb,false,$6,'INACTIVE')`,
+       (object_id,name,trigger_key,conditions,action,active,company_id,lifecycle_status,source_package_id,source_package_version,managed,package_required)
+       VALUES ($1,$2,$3,$4::jsonb,$5::jsonb,$6,$7,$8,$9,$10,true,$11)`,
       [
         objectId,
         rule.name.trim(),
         rule.triggerKey || rule.trigger_key,
         JSON.stringify(rule.conditions || []),
         JSON.stringify(ruleAction),
+        rule.active === true,
         companyId || null,
+        rule.active === true ? "ACTIVE" : "INACTIVE",
+        packageId,
+        packageVersion,
+        rule.required === true,
       ]
     );
+  }
+
+  for (const event of Array.isArray(manifest.events) ? manifest.events : []) {
+    const eventType = String(event.eventType || event.event_type || "").trim();
+    if (!eventType || eventType.length > 200) throw new Error("Package events require an event type of 1 to 200 characters");
+    const registered = await db(
+      `INSERT INTO platform_event_types(event_type,description,source_package_id,active)
+       VALUES($1,$2,$3,TRUE)
+       ON CONFLICT(event_type) DO UPDATE SET description=EXCLUDED.description,source_package_id=EXCLUDED.source_package_id,active=TRUE
+       WHERE platform_event_types.source_package_id IS NULL OR platform_event_types.source_package_id=EXCLUDED.source_package_id
+       RETURNING event_type`,
+      [eventType, event.description || null, packageId]
+    );
+    if (!registered.rows.length) throw new Error(`Package event type is owned by another declaration: ${eventType}`);
+  }
+
+  const ownedPermissionCodes = manifest.metadataOwnership?.permissions;
+  if (Array.isArray(ownedPermissionCodes) && ownedPermissionCodes.length) {
+    const permissions = await db(
+      "SELECT id,code FROM permissions WHERE code=ANY($1::text[])",
+      [ownedPermissionCodes]
+    );
+    const permissionsByCode = new Map(permissions.rows.map((permission) => [permission.code, permission]));
+    for (const code of ownedPermissionCodes) {
+      const permission = permissionsByCode.get(code);
+      if (!permission) throw new Error(`Package permission is not seeded: ${code}`);
+      await db(
+        `INSERT INTO package_metadata_ownership
+         (package_id,package_version,metadata_type,metadata_id,managed,package_required,default_snapshot)
+         VALUES ($1,$2,'permission',$3,true,true,$4::jsonb)
+         ON CONFLICT(package_id,metadata_type,metadata_id) DO UPDATE SET
+           package_version=EXCLUDED.package_version,managed=true,package_required=true,updated_at=NOW()`,
+        [packageId, packageVersion, permission.id, JSON.stringify({ code })]
+      );
+    }
   }
 
   const ownedMetadata = await db(
@@ -834,6 +1125,9 @@ export async function provisionPackageMetadata(db, { packageId, moduleId, compan
        SELECT 'layout',id FROM platform_layouts WHERE source_package_id=$1
        UNION ALL
        SELECT 'workflow',id FROM platform_rules WHERE source_package_id=$1
+       UNION ALL
+       SELECT 'list_view',id FROM platform_list_views
+        WHERE object_id IN (SELECT id FROM platform_objects WHERE package_id=$1)
        UNION ALL
        SELECT 'report',id FROM platform_reports WHERE source_package_id=$1
        UNION ALL

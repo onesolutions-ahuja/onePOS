@@ -279,8 +279,8 @@ export default function createPackagesRouter({ authenticate, authorize, db, pool
             packageVersion: packageResult.rows[0].version,
           });
           await txDb(
-          `INSERT INTO company_package_installations (company_id,package_id,version,status,installed_by,selected_features,installation_type,available_version)
-           VALUES ($1,$2,$3,'active',$4,$5::jsonb,$6,$3)
+          `INSERT INTO company_package_installations (company_id,package_id,version,status,installed_by,installation_type,available_version,selected_features)
+           VALUES ($1,$2,$3,'active',$4,$6,$3,$5::jsonb)
            ON CONFLICT (company_id,package_id) DO UPDATE SET status='active',
              selected_features=CASE WHEN EXCLUDED.installation_type='DIRECT' THEN EXCLUDED.selected_features ELSE company_package_installations.selected_features END,
              installed_by=COALESCE(EXCLUDED.installed_by,company_package_installations.installed_by),

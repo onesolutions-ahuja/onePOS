@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { packageDefinition, packageDefinitions, packageRegistrySchema, provisionDefaultCompanyPackages, provisionPackageMetadata, resolveFeaturePlan, resolvePackagePlan } from "../services/packageRegistry.js";
 import createPackagesRouter from "../routes/packages.js";
 import express from "express";
+import { getWorkflowActionDefinition } from "../services/platformWorkflow.js";
 
 test("package registry schema is additive and company scoped", () => {
   assert.match(packageRegistrySchema, /CREATE TABLE IF NOT EXISTS package_registry/);
@@ -79,6 +80,64 @@ test("Uber Eats is declared as a licensed package with dependencies and safe met
   assert.equal(definition.manifest.mappingSchema.find(({ key }) => key === "product").override, "preserve-explicit-product-item-id");
   assert.ok(definition.manifest.forms[0].fields.find(({ key }) => key === "client_secret").sensitive);
   assert.ok(definition.manifest.pages[0].definition.forms.length);
+});
+
+test("Online Orders Core declares provider-neutral, package-owned canonical metadata", () => {
+  const definition = packageDefinitions().find((pkg) => pkg.packageKey === "online_orders");
+  assert.ok(definition);
+  assert.equal(definition.version, "1.0.0");
+  assert.equal(definition.manifest.packageType, "FOUNDATION");
+  assert.equal(definition.manifest.billable, false);
+  assert.equal(definition.manifest.systemOnly, true);
+  assert.equal(definition.manifest.visibility, "HIDDEN");
+  assert.deepEqual(definition.dependencies, [
+    "products",
+    "inventory",
+    { packageKey: "customers", optional: true },
+  ]);
+  assert.equal(definition.dependencies.some((dependency) => ["uber_eats", "deliveroo", "just_eat"].includes(dependency)), false);
+  assert.deepEqual(
+    definition.manifest.objects.map(({ objectKey, sourceTable }) => [objectKey, sourceTable]),
+    [["online_order", "online_orders"], ["online_order_line", "online_order_items"]]
+  );
+  const order = definition.manifest.objects.find(({ objectKey }) => objectKey === "online_order");
+  assert.deepEqual(
+    order.fields.filter(({ apiName }) => ["platform", "external_order_id", "company_id", "store_id", "customer_id", "fulfilment_type", "status", "subtotal", "tax", "total"].includes(apiName))
+      .map(({ apiName }) => apiName)
+      .sort(),
+    ["company_id", "customer_id", "external_order_id", "fulfilment_type", "platform", "status", "store_id", "subtotal", "tax", "total"].sort()
+  );
+  assert.deepEqual(
+    definition.manifest.relationships.map(({ parentObjectKey, childObjectKey, relationshipKey }) => [parentObjectKey, childObjectKey, relationshipKey]),
+    [
+      ["online_order", "online_order_line", "order_lines"],
+      ["online_order_line", "product", "product"],
+      ["customer", "online_order", "online_orders"],
+      ["store", "online_order", "online_orders"],
+    ]
+  );
+  assert.equal(definition.manifest.listViews[0].objectKey, "online_order");
+  assert.equal(definition.manifest.layouts[0].pageType, "detail");
+  assert.deepEqual(definition.manifest.forms.map(({ pageType }) => pageType), ["create", "edit"]);
+  assert.equal(definition.manifest.validationRules[0].action.message, "Order line quantity must be greater than zero.");
+  assert.equal(definition.manifest.actions.length, 9);
+  assert.ok(definition.manifest.actions.every(({ handlerKey }) => handlerKey === "ONLINE_ORDER_TRANSITION"));
+  assert.ok(getWorkflowActionDefinition("ONLINE_ORDER_TRANSITION"));
+  assert.deepEqual(definition.manifest.metadataOwnership.objects, ["online_order", "online_order_line"]);
+  assert.deepEqual(definition.manifest.metadataOwnership.permissions, [
+    "online_orders.view", "online_orders.manage", "online_orders.status_update", "online_orders.cancel",
+  ]);
+  assert.equal(definition.manifest.upgrade.preservesRecordIds, true);
+  assert.equal(definition.manifest.events[0].eventType, "online_order.created");
+});
+
+test("Online Orders Core schema accepts future normalized channels and upgrades customer links additively", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const schema = await readFile(new URL("../database/schema.sql", import.meta.url), "utf8");
+  assert.match(schema, /platform ~ '\^\[a-z\]\[a-z0-9_\]\{0,19\}\$'/);
+  assert.match(schema, /ADD COLUMN IF NOT EXISTS customer_id UUID REFERENCES customers\(id\) ON DELETE SET NULL/);
+  assert.match(schema, /UPDATE online_orders AS o[\s\S]*c\.company_id = o\.company_id/);
+  assert.doesNotMatch(schema, /DROP TABLE\s+online_orders/i);
 });
 
 test("optional feature plans validate and include feature dependencies", () => {
@@ -203,11 +262,15 @@ test("Uber Eats metadata is idempotent, globally defined, and tenant-scoped", as
         const field = fields.get(`${params[0]}:${params[1]}:${params[2] || "global"}`);
         return { rows: field ? [field] : [] };
       }
+      if (sql.startsWith("SELECT id FROM platform_fields")) return { rows: [{ id: `field-${params[1]}` }] };
       if (sql.startsWith("INSERT INTO platform_fields")) {
         fields.set(`${params[0]}:${params[1]}:${params[9] || "global"}`, { id: `${params[1]}-${params[9]}` });
         return { rows: [] };
       }
       if (sql.startsWith("INSERT INTO platform_apps")) return { rows: [{ id: "uber-app" }] };
+      if (sql.startsWith("UPDATE platform_layouts")) return { rows: [] };
+      if (sql.startsWith("INSERT INTO platform_layouts")) return { rows: [{ id: `layout-${params[3]}` }] };
+      if (sql.startsWith("INSERT INTO platform_event_types")) return { rows: [{ event_type: params[0] }] };
       if (sql.startsWith("INSERT INTO platform_list_views")) {
         views.add(`${params[0]}:${params[1]}:${params[2]}`);
         return { rows: [] };
@@ -220,7 +283,7 @@ test("Uber Eats metadata is idempotent, globally defined, and tenant-scoped", as
         return { rows: rule ? [rule] : [] };
       }
       if (sql.startsWith("INSERT INTO platform_rules")) {
-        packageRules.set(`${params[5]}:${params[1]}`, { id: `rule-${params[1]}`, action: JSON.parse(params[4]) });
+        packageRules.set(`${params[6]}:${params[1]}`, { id: `rule-${params[1]}`, action: JSON.parse(params[4]) });
         return { rows: [] };
       }
       if (sql.startsWith("INSERT INTO platform_registered_actions")) return { rows: [{ id: `action-${params[2]}` }] };
@@ -240,9 +303,8 @@ test("Uber Eats metadata is idempotent, globally defined, and tenant-scoped", as
     assert.equal(objects.size, 1);
     assert.equal(objects.get("uber_eats_connection").company_id, null);
     assert.equal(fields.size, definition.manifest.objects[0].fields.length * 2);
-    assert.equal(views.size, 2);
-    assert.equal(packageRules.size, 2);
     assert.deepEqual([...views].map((key) => key.split(":")[1]).sort(), ["company-a", "company-b"]);
+    assert.equal(packageRules.size, 2);
     assert.equal(calls.filter(({ sql }) => sql.startsWith("INSERT INTO platform_objects")).length, 1);
     assert.equal(calls.filter(({ sql }) => sql.startsWith("INSERT INTO platform_fields")).length, definition.manifest.objects[0].fields.length * 2);
     assert.ok(calls.filter(({ sql }) => sql.startsWith("INSERT INTO platform_fields")).every(({ params }) => ["company-a", "company-b"].includes(params[9])));
@@ -284,6 +346,14 @@ test("package catalog and Uber Eats installation preserve existing client config
         const pkg = packages.find((item) => item.package_key === params[0]);
         return { rows: pkg ? [{ id: pkg.id, version: pkg.version }] : [] };
       }
+      if (sql.startsWith("SELECT id FROM package_registry WHERE package_key=$1 AND active=true")) {
+        const pkg = packages.find((item) => item.package_key === params[0]);
+        return { rows: pkg ? [{ id: pkg.id }] : [] };
+      }
+      if (sql.startsWith("SELECT id,version,package_type,installable FROM package_registry WHERE package_key=$1 AND active=true")) {
+        const pkg = packages.find((item) => item.package_key === params[0]);
+        return { rows: pkg ? [{ id: pkg.id, version: pkg.version, package_type: pkg.manifest.packageType, installable: true }] : [] };
+      }
       if (sql.startsWith("SELECT id,package_id,module_id,company_id FROM platform_objects")) {
         const object = objects.get(params[0]);
         return { rows: object ? [object] : [] };
@@ -297,18 +367,30 @@ test("package catalog and Uber Eats installation preserve existing client config
         const field = fields.get(`${params[0]}:${params[1]}:${params[2] || "global"}`);
         return { rows: field ? [field] : [] };
       }
+      if (sql.startsWith("SELECT id FROM platform_fields")) return { rows: [{ id: `field-${params[1]}` }] };
       if (sql.startsWith("INSERT INTO platform_fields")) {
         fields.set(`${params[0]}:${params[1]}:${params[9] || "global"}`, { id: `${params[1]}-${params[9]}` });
         return { rows: [] };
       }
       if (sql.startsWith("INSERT INTO platform_apps")) return { rows: [{ id: "uber-app" }] };
+      if (sql.startsWith("UPDATE platform_layouts")) return { rows: [] };
+      if (sql.startsWith("INSERT INTO platform_layouts")) return { rows: [{ id: `layout-${params[3]}` }] };
       if (sql.startsWith("INSERT INTO platform_pages")) {
         pages.set(`${params[1]}:${params[2]}`, JSON.parse(params[5]));
         return { rows: [] };
       }
       if (sql.startsWith("SELECT id FROM platform_objects WHERE object_key=$1")) {
-        return { rows: params[0] === "product" ? [{ id: "product-object" }] : [] };
+        const ids = { product: "product-object", customer: "customer-object", store: "store-object" };
+        return { rows: ids[params[0]] ? [{ id: ids[params[0]] }] : [] };
       }
+      if (sql.startsWith("SELECT id,object_key FROM platform_objects")) {
+        return { rows: [{ id: "product-object", object_key: "product" }, { id: "customer-object", object_key: "customer" }, { id: "store-object", object_key: "store" }] };
+      }
+      if (sql.startsWith("SELECT id,code FROM permissions")) {
+        return { rows: params[0].map((code) => ({ id: `permission-${code}`, code })) };
+      }
+      if (sql.startsWith("INSERT INTO package_metadata_ownership")) return { rows: [] };
+      if (sql.startsWith("INSERT INTO platform_event_types")) return { rows: [{ event_type: params[0] }] };
       if (sql.startsWith("SELECT id,action FROM platform_rules")) {
         const rule = packageRules.get(params[2]);
         return { rows: rule ? [rule] : [] };
@@ -365,7 +447,7 @@ test("package catalog and Uber Eats installation preserve existing client config
       const installResponse = await fetch(`${baseUrl}/packages/uber_eats/install`, { method: "POST" });
       assert.equal(installResponse.status, 200);
       const installed = await installResponse.json();
-      assert.deepEqual(installed.data.installed, ["integrations", "online_orders", "uber_eats"]);
+      assert.deepEqual(installed.data.installed, ["integrations", "products", "inventory", "online_orders", "uber_eats"]);
     }
 
     assert.deepEqual(clientConfiguration, {
@@ -374,11 +456,14 @@ test("package catalog and Uber Eats installation preserve existing client config
       client_secret: "encrypted-secret",
       store_location_id: "uber-store",
     });
-    assert.equal(calls.filter(({ sql }) => sql.startsWith("INSERT INTO platform_objects")).length, 1);
+    assert.equal(calls.filter(({ sql }) => sql.startsWith("INSERT INTO platform_objects")).length, 3);
     assert.equal(calls.filter(({ sql }) => /\b(?:INSERT\s+INTO|UPDATE|DELETE\s+FROM)\s+integrations\b/i.test(sql)).length, 0);
-    assert.equal(calls.filter(({ sql }) => sql.startsWith("INSERT INTO platform_registered_actions")).length, 16);
-    assert.equal(calls.filter(({ sql }) => sql.startsWith("INSERT INTO platform_buttons")).length, 6);
-    assert.equal(calls.filter(({ sql }) => sql.startsWith("INSERT INTO platform_rules")).length, 1);
+    assert.equal(calls.filter(({ sql }) => sql.startsWith("INSERT INTO platform_registered_actions")).length, 34);
+    assert.equal(calls.filter(({ sql }) => sql.startsWith("INSERT INTO platform_buttons")).length, 24);
+    assert.equal(calls.filter(({ sql }) => sql.startsWith("INSERT INTO platform_rules")).length, 2);
+    assert.ok(calls.some(({ sql }) => sql.startsWith("INSERT INTO platform_layouts")));
+    assert.ok(calls.some(({ sql }) => sql.startsWith("INSERT INTO platform_event_types")));
+    assert.ok(calls.some(({ sql }) => sql.startsWith("INSERT INTO package_metadata_ownership")));
     assert.equal(calls.filter(({ sql }) => sql.startsWith("UPDATE platform_rules SET")).length, 0);
     assert.ok(calls.filter(({ sql }) => sql.startsWith("INSERT INTO platform_registered_actions")).every(({ params }) =>
       params[0] === "company-a"
@@ -386,12 +471,12 @@ test("package catalog and Uber Eats installation preserve existing client config
         && JSON.parse(params[7]).packageOwned
     ));
     assert.ok(calls.filter(({ sql }) => sql.startsWith("INSERT INTO platform_buttons")).every(({ params }) =>
-      params[0] === "company-a" && params[9] === "online_orders.configure"
+      params[0] === "company-a" && ["online_orders.configure", "online_orders.manage"].includes(params[9])
     ));
-    assert.equal(registeredActions.size, 8);
-    assert.equal(buttons.size, 3);
-    assert.equal(packageRules.size, 1);
-    assert.equal([...packageRules.values()][0].action.packageKey, "uber_eats");
+    assert.equal(registeredActions.size, 17);
+    assert.equal(buttons.size, 12);
+    assert.equal(packageRules.size, 2);
+    assert.ok([...packageRules.values()].some(({ action }) => action.packageKey === "uber_eats"));
     assert.equal(pages.get("company-a:uber_eats").form_key, "uber_eats_connection");
     assert.equal(pages.get("company-a:uber_eats").forms.some(({ key }) => key === "client_secret"), true);
 });
