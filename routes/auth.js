@@ -160,7 +160,7 @@ export default function createAuthRouter(pool) {
         ]
       );
 
-      await provisionDefaultCompanyPackages(client, {
+      await provisionDefaultCompanyPackages((sql, params = []) => client.query(sql, params), {
         companyId: company.id,
         installedBy: userResult.rows[0].id,
       });

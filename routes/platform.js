@@ -3657,6 +3657,16 @@ router.get("/platform/runtime/apps", authenticate, async (req, res) => {
       }
       current = existing.rows[0];
     }
+    const selfReference = values.find(({ field, value }) =>
+      field.config?.preventSelfReference === true && recordId && String(value) === String(recordId)
+    );
+    if (selfReference) {
+      return {
+        status: 422,
+        code: "SELF_REFERENCE_NOT_ALLOWED",
+        message: `${selfReference.field.label || selfReference.field.api_name} cannot reference this record`,
+      };
+    }
     const candidate = { ...current, ...Object.fromEntries(values.map(({ field, value }) => [field.api_name, value])) };
     try {
       const calculated = compileFormulas(fields)(candidate);

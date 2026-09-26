@@ -10,6 +10,7 @@ const fields = [
   { api_name: "name", source_column: "name", field_type: "text", label: "Name", active: true },
   { api_name: "enabled", source_column: "enabled", field_type: "boolean", label: "Enabled", active: true },
   { api_name: "due", source_column: "due", field_type: "date", label: "Due", active: true },
+  { api_name: "parent_record_id", source_column: "parent_record_id", field_type: "lookup", label: "Parent Record", active: true, config: { relatedObjectKey: "sample", preventSelfReference: true } },
 ];
 const rule = (extra = {}) => ({ id: "rule-a", name: "Positive amount", object_id: "object-a", company_id: "company-a", active: true,
   trigger_key: "before_save", conditions: [{ field: "amount", operator: "less_than", value: "0" }],
@@ -59,6 +60,7 @@ async function fixture(t, options = {}) {
     }
     if (sql.startsWith("SELECT * FROM platform_rules WHERE id=")) return { rows: state.rules.filter(r => r.id === params[0] && r.company_id === params[1]) };
     if (sql.startsWith("SELECT company_id FROM")) return { rows: [{ company_id: options.foreignRecord ? "company-b" : "company-a" }] };
+    if (sql.startsWith('SELECT id FROM "sample_records"')) return { rows: [{ id: params[0] }] };
     if (sql.includes('xmin::text AS "__validation_version"')) {
       assert.match(sql, /company_id=\$2/);
       assert.equal(params[1], "company-a");
@@ -114,6 +116,14 @@ test("partial updates validate stored values, successful edits use an optimistic
   assert.equal((await request("PUT", `${records}/${id}`, { name: "Rename" })).status, 422);
   assert.equal(state.writes.length, 0);
   assert.equal((await request("PUT", `${records}/${id}`, { amount: 2 })).status, 200);
+});
+
+test("metadata can prevent a record from being its own lookup parent", async t => {
+  const { request, state } = await fixture(t);
+  const response = await request("PUT", `${records}/${id}`, { parent_record_id: id });
+  assert.equal(response.status, 422);
+  assert.equal(response.data.code, "SELF_REFERENCE_NOT_ALLOWED");
+  assert.equal(state.writes.length, 0);
 });
 
 test("concurrent update returns 409 instead of accepting a stale validation snapshot", async t => {

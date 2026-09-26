@@ -135,6 +135,7 @@ export default function ObjectPage({
   fields: suppliedFields = null,
   onBack,
   onSelectRecord,
+  renderRecordActions,
 }) {
   const [objectMetadata, setObjectMetadata] =
     useState(suppliedObject || null);
@@ -775,6 +776,10 @@ export default function ObjectPage({
                   {executingAction === (component.id || component.key || `${component.action}:${detailLayout.definition.components.indexOf(component)}`) ? "Executing..." : component.label || component.action}
                 </button>
               ))}
+              {renderRecordActions?.(selectedRecord, {
+                refresh: loadRecords,
+                setError,
+              })}
               {recordModal?.type === "edit" ? (
                 <RecordModal open mode="edit" title="Edit record" size="lg" className={layoutPresentationClass(editLayout || createLayout || detailLayout)} onClose={() => setRecordModal(null)} formId="platform-edit-record-form">
                   <FormRenderer formId="platform-edit-record-form" definition={editLayout?.definition || createLayout?.definition || detailLayout?.definition} fields={activeFields} initialValues={selectedRecord} mode="edit" onSubmit={saveEditedRecord} />
