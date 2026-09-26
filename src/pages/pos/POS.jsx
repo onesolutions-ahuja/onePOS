@@ -116,7 +116,6 @@ function ModifierPickerModal({ product, groups, onClose, onConfirm }) {
 
 function POS({
   onAdmin,
-  onSettings,
   onOpenOnlineOrders,
   onOpenApp,
   onLogout,
@@ -296,7 +295,11 @@ function POS({
         });
       }
     } catch (error) {
-      console.error("Load online order count error:", error);
+      /* Authorization failures repeat on every tick — never log them; the
+         poll is stopped below when the caller lacks online_orders.view. */
+      if (!String(error?.message || "").includes("uthorization")) {
+        console.error("Load online order count error:", error);
+      }
 
       if (error.code === "AUTH_REQUIRED") {
         onLogout();
@@ -514,7 +517,9 @@ function POS({
   useEffect(() => {
     loadProducts();
     loadCurrentTill();
-    loadOnlineOrderCount();
+    /* The initial count fetch happens once the permission state arrives
+       (same gate as the interval below) — an unauthorized caller never
+       fires a request that can only 403. */
 
     let cancelled = false;
     apiRequest("/api/auth/me/permissions", {
@@ -525,6 +530,10 @@ function POS({
         if (p.success) {
           setPermissions(p.data?.permissions || []);
           setIsAdmin(p.data?.isAdmin || false);
+          /* First count fetch, now that we know the caller may poll. */
+          if (p.data?.isAdmin || (p.data?.permissions || []).includes("online_orders.view")) {
+            loadOnlineOrderCount();
+          }
         }
       })
       .catch((error) => {
@@ -637,13 +646,15 @@ function POS({
         }
       });
 
-    const onlineOrderTimer = setInterval(
-      loadOnlineOrderCount,
-      15000
-    );
+    /* Only poll while the signed-in user may actually read online orders
+       (the endpoint enforces online_orders.view). */
+    const mayPoll = isAdmin || permissions.includes("online_orders.view");
+    const onlineOrderTimer = mayPoll
+      ? setInterval(loadOnlineOrderCount, 15000)
+      : null;
 
-    return () => clearInterval(onlineOrderTimer);
-  }, []);
+    return () => { if (onlineOrderTimer) clearInterval(onlineOrderTimer); };
+  }, [isAdmin, permissions]);
 
   /* =========================================================
      OFFLINE QUEUE
@@ -1848,8 +1859,6 @@ function POS({
         onManageTill={() =>
           setShowTill(true)
         }
-        onAdmin={onAdmin}
-        onSettings={isAdmin || permissions.includes("settings.manage") ? onSettings : null}
         onOpenOnlineOrders={
           onOpenOnlineOrders
         }
@@ -2431,6 +2440,9 @@ function POS({
         page="Sales"
         permissionState={{ isAdmin, permissions }}
         canOpenSettings={isAdmin || permissions.includes("settings.manage")}
+        surface="till"
+        /* App's onAdmin already carries the offline-session guard. */
+        onSwitchSurface={onAdmin}
         onNavigate={(nextPage, options) => {
           /* One exit for every destination: App owns the admin route. */
           if (onOpenApp) {

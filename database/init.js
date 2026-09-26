@@ -1,4 +1,5 @@
 import bcrypt from "bcryptjs";
+import { readFileSync } from "node:fs";
 
 export async function initializeDatabase(pool) {
   console.log("onePOS: checking database...");
@@ -2476,6 +2477,8 @@ ON secure_invoice_links(company_id, created_at DESC);
     ALTER TABLE user_licence_assignments ADD COLUMN IF NOT EXISTS starts_at TIMESTAMPTZ;
     ALTER TABLE user_licence_assignments ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ;
   `);
+
+  await pool.query(readFileSync(new URL("./baseFoundation.sql", import.meta.url), "utf8"));
 
   console.log("onePOS: database ready");
 }

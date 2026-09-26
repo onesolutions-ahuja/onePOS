@@ -98,6 +98,40 @@ export function normalizeRecordCollection(value) {
   };
 }
 
+/*
+ * NAVIGATION TARGET — the stable saved definition for On Click → Navigate.
+ *
+ * Only registry keys are persisted, never URLs or display labels: the runtime
+ * re-resolves the target at click time through the ONE resolver
+ * (src/utils/navigationTargets.js), so renamed pages, re-pointed objects and
+ * permission changes can never leave a stale hard-coded route behind.
+ *
+ *   type system_page   → key = the navCatalogue page name (PAGE_SLUGS key)
+ *   type custom_page   → key = platform_pages.page_key (company-scoped)
+ *   type object_list   → key = Platform Object object_key
+ *   type object_record → key = object_key, recordSource current|explicit,
+ *                        recordId only for explicit (validated shape)
+ */
+export const NAVIGATION_TARGET_TYPES = Object.freeze(["system_page", "custom_page", "object_list", "object_record"]);
+
+function normalizeNavigationTargetValue(value) {
+  const source = value && typeof value === "object" && !Array.isArray(value) ? value : null;
+  if (!source || !NAVIGATION_TARGET_TYPES.includes(source.type)) return null;
+  const key = typeof source.key === "string" ? source.key.trim().slice(0, 200) : "";
+  if (!key) return null;
+  if (source.type === "system_page") return { type: source.type, key };
+  if (!/^[a-z_][a-z0-9_]*$/.test(key)) return null;
+  if (source.type !== "object_record") return { type: source.type, key };
+  const recordSource = source.recordSource === "explicit" ? "explicit" : "current";
+  const target = { type: source.type, key, objectKey: key, recordSource };
+  if (recordSource === "explicit") {
+    const recordId = typeof source.recordId === "string" ? source.recordId.trim().slice(0, 64) : "";
+    if (!/^[0-9a-fA-F-]{8,64}$/.test(recordId)) return null;
+    target.recordId = recordId;
+  }
+  return target;
+}
+
 function normalizeInteraction(value) {
   const source = value && typeof value === "object" && !Array.isArray(value) ? value : {};
   const type = ON_CLICK_TYPES.includes(source.type ?? source.onClickType ?? source.on_click) ? (source.type ?? source.onClickType ?? source.on_click) : "none";
@@ -109,6 +143,13 @@ function normalizeInteraction(value) {
     workflowUuid: safeString(source.workflowUuid ?? source.workflow_uuid, 64) || null,
     actionKey: safeString(source.actionKey ?? source.action_key, 100) || null,
     navigateTo: safeString(source.navigateTo ?? source.navigate_to, 200) || null,
+    /* Canonical navigation-target definition (custom_page pages today; the
+       other destination types ride the same shape). Whichever of the two is
+       populated wins — the legacy flat page-key stays readable. */
+    navigationTarget: normalizeNavigationTargetValue(source.navigationTarget ?? source.navigation_target)
+      || (source.navigateTo && !source.navigationTarget && !source.navigation_target
+        ? { type: "custom_page", key: safeString(source.navigateTo, 200) }
+        : null),
     formLayoutId: safeString(source.formLayoutId ?? source.form_layout_id, 64) || null,
     formPresentation: ["full_screen", "screen_modal", "compact_popup"].includes(source.formPresentation ?? source.form_presentation) ? (source.formPresentation ?? source.form_presentation) : "screen_modal",
   };

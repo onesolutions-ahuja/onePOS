@@ -1,7 +1,7 @@
 import { normalizePicklistOptions, localPicklistOptions, fieldValueError, normalizeFieldValue, enrichFields, applyFieldSecurity, resolveEffectiveFieldSecurity, valueSetOptions } from "../services/platformFieldValues.js";
 import express from "express";
 import { isSafeIdentifier, toSafeApiName } from "../services/platformMetadata.js";
-import { normalizeObjectPageDefinition, objectNavigationEntries } from "../services/platformObjectNavigation.js";
+import { normalizeObjectPageDefinition, objectNavigationEntries, OBJECT_RUNTIME_ROUTE_PREFIX } from "../services/platformObjectNavigation.js";
 import { evaluateValidationRules, validationRuleError } from "../services/platformValidation.js";
 import { compileFormulas, FormulaError, isCalculatedField, normalizeRollupConfig, ROLLUP_OPERATIONS } from "../services/platformFormula.js";
 import { ConditionError, evaluateCondition, validateConditionConfig, validateConditionalRequired } from "../services/platformConditions.js";
@@ -1578,10 +1578,43 @@ export default function createPlatformRouter({ authenticate, authorize, db, pool
     res.json({ success: true, data: result.rows });
   });
 
-  router.get("/platform/runtime/apps", authenticate, async (req, res) => {
-    const result = await db("SELECT * FROM platform_apps WHERE company_id=$1 AND active=true ORDER BY label", [req.user.companyId]);
-    res.json({ success: true, data: result.rows });
+router.get("/platform/runtime/apps", authenticate, async (req, res) => {
+  const apps = await db(
+    "SELECT * FROM platform_apps WHERE company_id=$1 AND active=true ORDER BY label",
+    [req.user.companyId]
+  );
+
+  const pages = await db(
+    `SELECT *
+     FROM platform_pages
+     WHERE company_id=$1
+       AND active=true
+     ORDER BY label`,
+    [req.user.companyId]
+  );
+
+  const pagesByApp = new Map();
+
+  for (const page of pages.rows) {
+    const key = String(page.app_id);
+
+    if (!pagesByApp.has(key)) {
+      pagesByApp.set(key, []);
+    }
+
+    pagesByApp.get(key).push(page);
+  }
+
+  const data = apps.rows.map((app) => ({
+    ...app,
+    pages: pagesByApp.get(String(app.id)) || [],
+  }));
+
+  res.json({
+    success: true,
+    data,
   });
+});
 
   router.get("/platform/runtime/pages/:pageKey", authenticate, async (req, res) => {
     const key = String(req.params.pageKey || "").trim();
@@ -1876,6 +1909,231 @@ export default function createPlatformRouter({ authenticate, authorize, db, pool
     } catch (error) {
       if (error.status) return res.status(error.status).json({ success: false, message: error.message });
       next(error);
+    }
+  });
+
+  /*
+   * MY PROFILE RECORD — the ONE canonical record-page feed for the signed-in
+   * user's own account. It resolves the users-backed Platform Object (the
+   * canonical "employee" object by default, or the objectKey the shell is
+   * already looking at) and returns that record with the SAME metadata-driven
+   * fields the generic object runtime renders, so the shell can open the
+   * profile through the ONE /app/objects/<key> record route — the SAME record
+   * page architecture every other Object uses. No ad hoc profile surface, no
+   * second record-view system, no SQL in components.
+   *
+   * Self access is deliberately READ-ONLY and limited to the caller's own row:
+   * viewing your own account record must not require the object's can_view
+   * grant (which would otherwise expose the whole directory). Every write path
+   * stays behind the existing manage/permission gates untouched.
+   */
+  /*
+   * RECORD PAGE FEED — the ONE canonical resolver for a record deep link
+   * (/app/objects/<key>/records/<recordId>): the navigation-target resolver
+   * and the shell both point Object Record navigation here, and the record
+   * page renders it through the SAME generic object runtime.
+   *
+   * The user's OWN record keeps its dedicated feed (GET /runtime/my-record)
+   * — self access deliberately bypasses the object grant. Every OTHER record
+   * resolves through THIS feed, which enforces the platform's normal
+   * visibility exactly like the records list:
+   *
+   *   active object of this company (or a system object)
+   *     → the caller's platform_object_permissions can_view grant
+   *       (superadmin excepted, matching loadObjectNavigation)
+   *   → object company/store scoping + appendSystemReadScope
+   *     → readable fields through field security
+   *
+   * A forged or cross-company record id therefore 403/404s here and the
+   * navigation layer never exposes data the object runtime would refuse.
+   */
+  router.get("/platform/runtime/record-page", authenticate, async (req, res) => {
+    try {
+      const objectKey = typeof req.query.objectKey === "string" && isSafeIdentifier(req.query.objectKey) ? req.query.objectKey : null;
+      const recordId = typeof req.query.recordId === "string" ? req.query.recordId : "";
+      if (!objectKey || !recordIdIsValid(recordId)) return res.status(400).json({ success: false, message: "A valid object key and record identifier are required" });
+      const metadata = await db(
+        "SELECT * FROM platform_objects WHERE object_key=$1 AND active=true AND (company_id IS NULL OR company_id=$2)",
+        [objectKey, req.user.companyId]
+      );
+      const object = metadata.rows[0];
+      if (!object || !object.source_table || !isSafeIdentifier(object.source_table)) {
+        return res.status(404).json({ success: false, message: "Object is not available" });
+      }
+      if (!(await hasPlatformObjectPermission(db, req, object.id, "view"))) {
+        return res.status(403).json({ success: false, message: "You do not have permission to view records for this object" });
+      }
+      if (object.store_scoped && !req.user.storeId) {
+        return res.status(403).json({ success: false, message: "A store session is required" });
+      }
+      const fieldsResult = await db(
+        "SELECT * FROM platform_fields WHERE object_id=$1 AND active=true AND (company_id IS NULL OR company_id=$2) ORDER BY display_order",
+        [object.id, req.user.companyId]
+      );
+      const fields = await applyFieldSecurity(db, safeSystemFields(object, fieldsResult.rows), req);
+      const readable = fields.filter((field) => field.readable !== false && field.field_type !== "formula" && field.field_type !== "rollup" && isSafeIdentifier(field.api_name) && Boolean(platformFieldSql(field, object)));
+      const columns = readable.map((field) => `${platformFieldSql(field, object)} AS "${field.api_name}"`);
+      if (!columns.length) return res.status(404).json({ success: false, message: "Record is not available" });
+
+      /* Scope is the requested row plus the object's normal company/store
+         visibility — never a wider read. */
+      const clauses = ["id=$1"];
+      const params = [recordId];
+      if (object.company_scoped) {
+        params.push(req.user.companyId);
+        clauses.push(`company_id=$${params.length}`);
+      }
+      if (object.store_scoped) {
+        params.push(req.user.storeId);
+        clauses.push(`store_id=$${params.length}`);
+      }
+      appendSystemReadScope(object, req, clauses, params);
+      const result = await db(`SELECT ${columns.join(", ")}, "${object.source_table}".id AS "id" FROM "${object.source_table}" WHERE ${clauses.join(" AND ")}`, params);
+      const record = result.rows[0] || null;
+      if (!record) return res.status(404).json({ success: false, message: "Record not found" });
+
+      return res.json({
+        success: true,
+        data: {
+          object,
+          record,
+          fields: readable,
+          objectKey: object.object_key,
+          recordPath: `${OBJECT_RUNTIME_ROUTE_PREFIX}${encodeURIComponent(object.object_key)}/records/${encodeURIComponent(record.id)}`,
+        },
+      });
+    } catch (error) {
+      console.error("Record page feed error:", error);
+      res.status(500).json({ success: false, message: "Unable to load the record" });
+    }
+  });
+
+  router.get("/platform/runtime/my-record", authenticate, async (req, res) => {
+    try {
+      const objectKey = typeof req.query.objectKey === "string" && isSafeIdentifier(req.query.objectKey) ? req.query.objectKey : "employee";
+      /* A recordId is accepted for deep links (browser refresh of the profile
+         route) but is validated to be the caller's OWN record — self access
+         never widens to another user's row. */
+      const requestedRecordId = typeof req.query.recordId === "string" ? req.query.recordId : "";
+      if (requestedRecordId) {
+        if (!recordIdIsValid(requestedRecordId)) return res.status(400).json({ success: false, message: "Invalid record identifier" });
+        if (requestedRecordId !== req.user.id) return res.status(403).json({ success: false, message: "You can only open your own record through the profile route" });
+      }
+      const metadata = await db(
+        "SELECT * FROM platform_objects WHERE object_key=$1 AND active=true AND (company_id IS NULL OR company_id=$2)",
+        [objectKey, req.user.companyId]
+      );
+      const object = metadata.rows[0];
+      if (!object || !object.source_table || !isSafeIdentifier(object.source_table)) {
+        return res.status(404).json({ success: false, message: "User record object is not available" });
+      }
+      /* Only the users-backed object family qualifies — a tenant must not be
+         able to repoint the profile at an arbitrary object. */
+      const system = systemObject(object);
+      if (!system || system.table !== "users") {
+        return res.status(400).json({ success: false, message: "The configured object does not represent user accounts" });
+      }
+      if (object.store_scoped && !req.user.storeId) {
+        return res.status(403).json({ success: false, message: "A store session is required" });
+      }
+
+      const fieldsResult = await db(
+        "SELECT * FROM platform_fields WHERE object_id=$1 AND active=true AND (company_id IS NULL OR company_id=$2) ORDER BY display_order",
+        [object.id, req.user.companyId]
+      );
+      const fields = await applyFieldSecurity(db, safeSystemFields(object, fieldsResult.rows), req);
+      const readable = fields.filter((field) => field.readable !== false && field.field_type !== "formula" && field.field_type !== "rollup" && isSafeIdentifier(field.api_name) && Boolean(platformFieldSql(field, object)));
+      const columns = readable.map((field) => `${platformFieldSql(field, object)} AS "${field.api_name}"`);
+      if (!columns.length) return res.status(404).json({ success: false, message: "User record is not available" });
+
+      /* Scope is the caller's OWN row (id=$1) plus the object's normal
+         company/store visibility — never a wider read. */
+      const clauses = ["id=$1"];
+      const params = [req.user.id];
+      if (object.company_scoped) {
+        params.push(req.user.companyId);
+        clauses.push(`company_id=$${params.length}`);
+      }
+      if (object.store_scoped) {
+        params.push(req.user.storeId);
+        clauses.push(`store_id=$${params.length}`);
+      }
+      appendSystemReadScope(object, req, clauses, params);
+      const result = await db(`SELECT ${columns.join(", ")}, "${object.source_table}".id AS "id" FROM "${object.source_table}" WHERE ${clauses.join(" AND ")}`, params);
+      const record = result.rows[0] || null;
+      if (!record) return res.status(404).json({ success: false, message: "Your user record could not be found" });
+
+      return res.json({
+        success: true,
+        data: {
+          object,
+          record,
+          fields: readable,
+          objectKey: object.object_key,
+          recordPath: `${OBJECT_RUNTIME_ROUTE_PREFIX}${encodeURIComponent(object.object_key)}/records/${encodeURIComponent(record.id)}`,
+        },
+      });
+    } catch (error) {
+      console.error("My record error:", error);
+      res.status(500).json({ success: false, message: "Unable to load your record" });
+    }
+  });
+
+  /*
+   * NAVIGATION TARGET REGISTRY — the server-side discovery feed for Builder
+   * components (Custom Button On Click → Navigate and every future
+   * navigation-capable component).
+   *
+   * Destinations are discovered from the SAME authoritative sources the
+   * shells already use — never a second route list:
+   *
+   *   customPages → the company-scoped active platform_pages rows (key +
+   *                 label only; the Builder stores the KEY, not the label)
+   *   objectPages → the SAME loadObjectNavigation() payload the app-catalog
+   *                 returns: object visibility, module licence/enablement,
+   *                 device profile and the caller's object permissions are
+   *                 all filtered server-side, so a destination a caller
+   *                 cannot reach never becomes configurable in the first
+   *                 place.
+   *
+   * System pages are not duplicated here: the client derives them from the
+   * ONE navCatalogue with the caller's permission state (already shipped by
+   * /api/auth/me/permissions), and the runtime resolver re-checks them at
+   * click time. Navigation remains discoverability only — every destination
+   * endpoint keeps enforcing its own authorization.
+   */
+  router.get("/platform/runtime/navigation-targets", authenticate, async (req, res) => {
+    try {
+      const [userResult, permissionResult, entitlementResult] = await Promise.all([
+        db("SELECT is_superadmin FROM users WHERE id=$1 AND active=true", [req.user.id]),
+        db(
+          `SELECT p.code
+           FROM role_permissions rp
+           JOIN permissions p ON p.id=rp.permission_id
+           WHERE rp.role_id=$1`,
+          [req.user.roleId]
+        ),
+        getCompanyEntitlements(db, req.user.companyId),
+      ]);
+      const isSuperadmin = userResult.rows[0]?.is_superadmin === true;
+      const permissions = permissionResult.rows.map((row) => row.code);
+      const navigation = await loadObjectNavigation(req, { isSuperadmin, permissions, entitlements: entitlementResult });
+      const pagesResult = await db(
+        "SELECT page_key, label FROM platform_pages WHERE company_id=$1 AND active=true ORDER BY label",
+        [req.user.companyId]
+      );
+      res.json({
+        success: true,
+        data: {
+          customPages: pagesResult.rows
+            .filter((page) => isSafeIdentifier(page.page_key))
+            .map((page) => ({ key: page.page_key, label: page.label || page.page_key })),
+          objectPages: navigation.entries,
+        },
+      });
+    } catch (error) {
+      console.error("Navigation targets error:", error);
+      res.status(500).json({ success: false, message: "Unable to load navigation targets" });
     }
   });
 
@@ -2849,18 +3107,61 @@ export default function createPlatformRouter({ authenticate, authorize, db, pool
     }
   });
 
+  async function resolveImportLookupMatches(targetObject, targetFields, rawValue, req) {
+    const value = typeof rawValue === "string" ? rawValue.trim() : rawValue;
+    if (value === null || value === undefined || value === "") return { matches: [], ambiguous: false, reason: null };
+    const safeText = String(value);
+    if (recordIdIsValid(safeText)) {
+      const scope = ["id=$1"];
+      const params = [safeText];
+      if (targetObject.company_scoped) { params.push(req.user.companyId); scope.push(`company_id=$${params.length}`); }
+      if (targetObject.store_scoped) { if (!req.user.storeId) throw Object.assign(new Error("A store session is required"), { status: 403 }); params.push(req.user.storeId); scope.push(`store_id=$${params.length}`); }
+      const result = await db(`SELECT id FROM "${targetObject.source_table}" WHERE ${scope.join(" AND ")}`, params);
+      return { matches: result.rows.map((row) => String(row.id)), ambiguous: false, reason: null };
+    }
+    const candidates = (targetFields || []).filter((field) => {
+      if (!field || field.active === false || field.field_type === "formula" || field.field_type === "rollup") return false;
+      const config = field.config && typeof field.config === "object" ? field.config : {};
+      const api = String(field.api_name || "").toLowerCase();
+      const isUnique = field.unique === true || config.unique === true || config.businessKey === true || config.business_key === true || config.uniqueBusinessKey === true || config.unique_business_key === true || config.externalId === true || config.external_id === true;
+      return isUnique || /(?:sku|barcode|code|external|serial|reference|number|identifier)$/.test(api) || /(?:sku|barcode|code|external|serial|reference|number|identifier)/.test(String(field.label || "").toLowerCase());
+    });
+    const matches = [];
+    for (const field of candidates) {
+      const normalized = normalizeFieldValue(field, safeText);
+      if (normalized === null || normalized === "") continue;
+      const scope = [`${metadataColumn(field)}=$1`];
+      const params = [normalized];
+      if (targetObject.company_scoped) { params.push(req.user.companyId); scope.push(`company_id=$${params.length}`); }
+      if (targetObject.store_scoped) { if (!req.user.storeId) throw Object.assign(new Error("A store session is required"), { status: 403 }); params.push(req.user.storeId); scope.push(`store_id=$${params.length}`); }
+      const result = await db(`SELECT id FROM "${targetObject.source_table}" WHERE ${scope.join(" AND ")}`, params);
+      for (const row of result.rows) matches.push(String(row.id));
+    }
+    const unique = [...new Set(matches)];
+    return { matches: unique, ambiguous: unique.length > 1, reason: unique.length > 1 ? "ambiguous" : null };
+  }
+
   async function validateLookupReference(field, value, req) {
     if (field.field_type !== "lookup" || !field.config || typeof field.config !== "object") return null;
     const targetKey = field.config.relatedObjectKey || field.config.related_object_key || field.config.objectKey;
-    if (!targetKey) return null;
-    if (!recordIdIsValid(String(value))) return `${field.label} must reference a valid record`;
-    const targetResult = await db("SELECT * FROM platform_objects WHERE object_key=$1 AND active=true AND (company_id IS NULL OR company_id=$2)", [targetKey, req.user.companyId]);
-    const target = targetResult.rows[0];
-    if (!target || !target.source_table || !isSafeIdentifier(target.source_table)) return `${field.label} references an unavailable object`;
-    const where = target.company_scoped ? " WHERE id=$1 AND company_id=$2" : " WHERE id=$1";
-    const params = target.company_scoped ? [value, req.user.companyId] : [value];
-    const reference = await db(`SELECT id FROM "${target.source_table}"${where}`, params);
-    return reference.rows.length ? null : `${field.label} references a record that does not exist`;
+    let targetObject = null;
+    let targetFields = [];
+    if (targetKey) {
+      const targetResult = await db("SELECT * FROM platform_objects WHERE object_key=$1 AND active=true AND (company_id IS NULL OR company_id=$2)", [targetKey, req.user.companyId]);
+      targetObject = targetResult.rows[0];
+      if (targetObject) {
+        const metadata = await db("SELECT * FROM platform_fields WHERE object_id=$1 AND active=true AND (company_id IS NULL OR company_id=$2) ORDER BY display_order", [targetObject.id, req.user.companyId]);
+        targetFields = await enrichFields(db, safeSystemFields(targetObject, metadata.rows), req);
+      }
+    }
+    if (!targetObject || !targetObject.source_table || !isSafeIdentifier(targetObject.source_table)) {
+      return `${field.label} references an unavailable object`;
+    }
+    if (value === null || value === undefined || value === "") return null;
+    const matchResult = await resolveImportLookupMatches(targetObject, targetFields, value, req);
+    if (!matchResult.matches.length) return `${field.label} references a record that does not exist`;
+    if (matchResult.ambiguous) return `${field.label} match is ambiguous; multiple records satisfy the configured relationship key`;
+    return null;
   }
 
   async function validateLookupConfiguration(objectId, fieldType, config, req) {
@@ -3020,10 +3321,12 @@ export default function createPlatformRouter({ authenticate, authorize, db, pool
         return { error: `Unknown field "${apiName}"` };
       }
       if (field.field_type === "formula" || field.field_type === "rollup") return { error: `Calculated field "${apiName}" is read-only` };
-      if (field.writable === false) return { error: `Field "${apiName}" is read-only` };
+      if (field.writable === false || field.writeable === false || field.protected === true || field.system === true || field.is_protected === true || field.read_only === true || field.readOnly === true) {
+        return { error: `Field "${apiName}" is protected or read-only` };
+      }
       const column = metadataColumn(field);
       if (!column) return { error: `Field "${apiName}" is unmapped` };
-      if (["id", "company_id", "store_id"].includes(column)) return { error: `Field "${apiName}" is managed by the server` };
+      if (["id", "company_id", "store_id"].includes(column) || ["company_id", "store_id"].includes(String(field.source_column || ""))) return { error: `Field "${apiName}" is managed by the server` };
       const valueError = fieldValueError(field, value);
       if (valueError) return { error: valueError };
       if (["select", "picklist"].includes(field.field_type)) {
@@ -3046,7 +3349,300 @@ export default function createPlatformRouter({ authenticate, authorize, db, pool
     return { values };
   }
 
-  async function recordRuleCheck(req, object, fields, values, trigger, recordId = null) {
+  function normalizeRequestedOperation(operation) {
+    const value = String(operation ?? "auto").trim().toLowerCase();
+    if (["create", "update", "upsert", "auto"].includes(value)) return value;
+    return "auto";
+  }
+
+  function resolveImportAction(operation, existingId) {
+    const requested = normalizeRequestedOperation(operation);
+    const hasExistingId = !!existingId && recordIdIsValid(String(existingId));
+    if (requested === "create") return "create";
+    if (requested === "update") return hasExistingId ? "update" : "error";
+    if (requested === "upsert") return hasExistingId ? "update" : "create";
+    if (requested === "auto") return hasExistingId ? "update" : "create";
+    return "create";
+  }
+
+  function getImportKeyCandidates(fields, input = {}) {
+    const candidates = [];
+    for (const field of fields) {
+      if (!field || !field.active || !field.api_name || !metadataColumn(field)) continue;
+      const config = field.config && typeof field.config === "object" ? field.config : {};
+      const isUnique = field.unique === true || config.unique === true || config.businessKey === true || config.business_key === true || config.uniqueBusinessKey === true || config.unique_business_key === true || config.externalId === true || config.external_id === true;
+      if (!isUnique && !/(?:sku|barcode|code|external|serial|reference|number|identifier)$/.test(String(field.api_name).toLowerCase()) && !/(?:sku|barcode|code|external|serial|reference|number|identifier)/.test(String(field.label || "").toLowerCase())) continue;
+      if (input[field.api_name] === undefined || input[field.api_name] === null || String(input[field.api_name]).trim() === "") continue;
+      const normalized = normalizeFieldValue(field, input[field.api_name]);
+      if (normalized === null || normalized === "") continue;
+      candidates.push({ field, value: normalized });
+    }
+    return candidates;
+  }
+
+  function getImportUniqueFields(fields) {
+    const byName = new Map();
+    for (const field of fields) {
+      if (!field || !field.active || !field.api_name || !metadataColumn(field)) continue;
+      const config = field.config && typeof field.config === "object" ? field.config : {};
+      const isUnique = field.unique === true || config.unique === true || config.businessKey === true || config.business_key === true || config.uniqueBusinessKey === true || config.unique_business_key === true || config.externalId === true || config.external_id === true;
+      const api = String(field.api_name).toLowerCase();
+      if (isUnique || /(?:sku|barcode|code|external|serial|reference|number|identifier)$/.test(api) || /(?:sku|barcode|code|external|serial|reference|number|identifier)/.test(String(field.label || "").toLowerCase())) {
+        byName.set(api, field);
+      }
+    }
+    return [...byName.values()];
+  }
+
+  function summarizeImportPreview(rows, preview) {
+    const summary = {
+      total: rows.length,
+      valid: 0,
+      warnings: 0,
+      errors: 0,
+      create: 0,
+      update: 0,
+      skipped: 0,
+      failed: 0,
+      new: 0,
+      skip: 0,
+      error: 0,
+    };
+    for (const item of preview || []) {
+      if (item.status === "warning") summary.warnings += 1;
+      if (item.status === "valid") summary.valid += 1;
+      if (item.status === "error") summary.errors += 1;
+      if (item.action === "create") summary.create += 1;
+      if (item.action === "update") summary.update += 1;
+    }
+    summary.skipped = summary.errors;
+    summary.failed = summary.errors;
+    summary.new = summary.create;
+    summary.skip = summary.skipped;
+    summary.error = summary.errors;
+    return summary;
+  }
+
+  function findImportUniqueValues(fields, input = {}) {
+    const values = [];
+    for (const field of getImportUniqueFields(fields)) {
+      const raw = input?.[field.api_name];
+      if (raw === undefined || raw === null || raw === "") continue;
+      const normalized = normalizeFieldValue(field, raw);
+      if (normalized === null || normalized === "") continue;
+      values.push({ field, value: normalized });
+    }
+    return values;
+  }
+
+  function buildImportRowInput(row, fieldByApiName) {
+    const normalized = {};
+    for (const [header, value] of Object.entries(row || {})) {
+      const key = String(header).toLowerCase();
+      if (key === "id") normalized.id = value;
+      const match = fieldByApiName.get(key);
+      if (match) normalized[match.api_name] = value;
+    }
+    const existingId = normalized.id ? String(normalized.id).trim() : null;
+    const { id: _, ...input } = normalized;
+    return { input, existingId };
+  }
+
+  async function findDatabaseDuplicateMatches(req, object, fields, input, { allowSameRecordId = false } = {}) {
+    const matches = [];
+    for (const field of getImportUniqueFields(fields)) {
+      const raw = input?.[field.api_name];
+      if (raw === undefined || raw === null || raw === "") continue;
+      const normalized = normalizeFieldValue(field, raw);
+      if (normalized === null || normalized === "") continue;
+      const scope = [`${metadataColumn(field)}=$1`];
+      const params = [normalized];
+      if (object.company_scoped) { params.push(req.user.companyId); scope.push(`company_id=$${params.length}`); }
+      if (object.store_scoped) {
+        if (!req.user.storeId) throw Object.assign(new Error("A store session is required"), { status: 403 });
+        params.push(req.user.storeId); scope.push(`store_id=$${params.length}`);
+      }
+      const existing = await db(`SELECT id FROM "${object.source_table}" WHERE ${scope.join(" AND ")}`, params);
+      for (const row of existing.rows) {
+        const existingIdValue = String(row.id);
+        if (allowSameRecordId && existingIdValue === String(allowSameRecordId)) continue;
+        matches.push({ field: field.api_name, fieldLabel: field.label || field.api_name, value: normalized, id: row.id });
+      }
+    }
+    return matches;
+  }
+
+  async function validateImportDuplicateState(req, object, fields, input, { operation, existingId = null, csvSeen = new Map() } = {}) {
+    const requested = normalizeRequestedOperation(operation);
+    const directId = existingId && recordIdIsValid(String(existingId)) ? String(existingId) : null;
+    if (csvSeen && csvSeen instanceof Map) {
+      for (const candidate of findImportUniqueValues(fields, input)) {
+        const key = `${candidate.field.api_name}:${String(candidate.value)}`;
+        if (csvSeen.has(key)) {
+          return {
+            status: "error",
+            field: candidate.field.api_name,
+            value: candidate.value,
+            code: "CSV_DUPLICATE_VALUE",
+            message: `Duplicate ${candidate.field.label || candidate.field.api_name} value within the CSV: ${candidate.value}`,
+          };
+        }
+        csvSeen.set(key, true);
+      }
+    }
+    if (requested === "upsert") {
+      const target = await resolveImportTarget(req, object, fields, input, { operation: requested, existingId: directId });
+      if (target.action === "error") {
+        return {
+          status: "error",
+          field: null,
+          value: null,
+          code: "IMPORT_MATCHING_ERROR",
+          message: target.message || "Ambiguous or invalid upsert match",
+        };
+      }
+      if (target.action === "update") return { status: "valid" };
+    }
+    if (requested === "create") {
+      const duplicateMatches = await findDatabaseDuplicateMatches(req, object, fields, input, { allowSameRecordId: directId || false });
+      if (duplicateMatches.length) {
+        const match = duplicateMatches[0];
+        return {
+          status: "error",
+          field: match.field,
+          value: match.value,
+          code: "EXISTING_RECORD_DUPLICATE",
+          message: `${match.fieldLabel || match.field} ${match.value} already exists in this company scope`,
+        };
+      }
+    }
+    if (requested === "update") {
+      const duplicateMatches = await findDatabaseDuplicateMatches(req, object, fields, input, { allowSameRecordId: directId || false });
+      const conflicting = directId
+        ? duplicateMatches.filter((match) => String(match.id) !== String(directId))
+        : duplicateMatches;
+      if (conflicting.length) {
+        const match = conflicting[0];
+        return {
+          status: "error",
+          field: match.field,
+          value: match.value,
+          code: "EXISTING_RECORD_DUPLICATE",
+          message: directId
+            ? `Update would duplicate ${match.fieldLabel || match.field} ${match.value} on a different record in this company scope`
+            : `Update target could not be uniquely identified because ${match.fieldLabel || match.field} ${match.value} already exists in this company scope`,
+        };
+      }
+    }
+    return { status: "valid" };
+  }
+
+  async function resolveImportTarget(req, object, fields, input, { operation, existingId = null } = {}) {
+    const requested = normalizeRequestedOperation(operation);
+    const action = resolveImportAction(requested, existingId);
+    const directId = existingId && recordIdIsValid(String(existingId)) ? String(existingId) : null;
+    if (action === "update" && directId) {
+      const scope = ["id=$1"];
+      const params = [directId];
+      if (object.company_scoped) { params.push(req.user.companyId); scope.push(`company_id=$${params.length}`); }
+      if (object.store_scoped) {
+        if (!req.user.storeId) throw Object.assign(new Error("A store session is required"), { status: 403 });
+        params.push(req.user.storeId); scope.push(`store_id=$${params.length}`);
+      }
+      const existing = await db(`SELECT id FROM "${object.source_table}" WHERE ${scope.join(" AND ")}`, params);
+      if (!existing.rows.length) return { action: "error", message: `Update target ${existingId} was not found` };
+      return { action: "update", targetId: directId, matches: [directId] };
+    }
+    if (requested !== "upsert") return { action, targetId: directId || null, matches: directId ? [directId] : [] };
+    const candidateKeys = [];
+    for (const { field, value } of getImportKeyCandidates(fields, input)) {
+      const scope = [`${metadataColumn(field)}=$1`];
+      const params = [value];
+      if (object.company_scoped) { params.push(req.user.companyId); scope.push(`company_id=$${params.length}`); }
+      if (object.store_scoped) {
+        if (!req.user.storeId) throw Object.assign(new Error("A store session is required"), { status: 403 });
+        params.push(req.user.storeId); scope.push(`store_id=$${params.length}`);
+      }
+      const matches = await db(`SELECT id FROM "${object.source_table}" WHERE ${scope.join(" AND ")}`, params);
+      const ids = matches.rows.map((row) => String(row.id));
+      for (const id of ids) candidateKeys.push(id);
+    }
+    const unique = [...new Set(candidateKeys)];
+    if (unique.length > 1) return { action: "error", message: "Ambiguous upsert match: multiple existing records match the configured unique/business key" };
+    if (unique.length === 1) return { action: "update", targetId: unique[0], matches: unique };
+    return { action: "create", targetId: null, matches: [] };
+  }
+
+  async function validateImportRow(req, object, fields, input, { lineNumber, action, existingId = null, operation = null, csvSeen = null } = {}) {
+    const result = { lineNumber, action, status: "valid", field: null, value: null, message: null, code: null, warnings: [] };
+    const requested = normalizeRequestedOperation(operation ?? action ?? "auto");
+    const duplicateCheck = await validateImportDuplicateState(req, object, fields, input, { operation: requested, existingId, csvSeen });
+    if (duplicateCheck.status === "error") {
+      result.status = "error";
+      result.field = duplicateCheck.field || null;
+      result.value = duplicateCheck.value || null;
+      result.code = duplicateCheck.code || "DUPLICATE_VALUE";
+      result.message = duplicateCheck.message;
+      return result;
+    }
+    const targetPlan = await resolveImportTarget(req, object, fields, input, { operation: requested, existingId });
+    if (targetPlan.action === "error") {
+      result.status = "error";
+      result.code = "IMPORT_MATCHING_ERROR";
+      result.message = targetPlan.message;
+      return result;
+    }
+    const canonicalAction = targetPlan.action === "update" ? "update" : "create";
+    result.action = canonicalAction;
+    const permission = await hasPlatformObjectPermission(db, req, object.id, canonicalAction === "update" ? "edit" : "create");
+    if (!permission) {
+      result.status = "error";
+      result.code = "IMPORT_PERMISSION_REQUIRED";
+      result.message = `${canonicalAction} permission is required`;
+      return result;
+    }
+    const targetId = targetPlan.targetId || (existingId && recordIdIsValid(String(existingId)) ? String(existingId) : null);
+    if (canonicalAction === "update" && targetId && !recordIdIsValid(String(targetId))) {
+      result.status = "error";
+      result.code = "INVALID_MATCHING_IDENTIFIER";
+      result.message = "The row's matching identifier is not a valid record id";
+      return result;
+    }
+    if (canonicalAction === "update" && !targetId) {
+      result.status = "error";
+      result.code = "UPDATE_TARGET_NOT_FOUND";
+      result.message = "Update target was not found";
+      return result;
+    }
+    const validation = await validateRecordInput(req, object, fields, input, { requireRequired: canonicalAction === "create" });
+    if (validation.error) {
+      result.status = "error";
+      result.code = "FIELD_VALIDATION_FAILED";
+      result.message = validation.error;
+      return result;
+    }
+    result.values = validation.values;
+    const trigger = canonicalAction === "update" ? "before_update" : "before_create";
+    const ruleCheck = await recordRuleCheck(req, object, fields, validation.values, trigger, canonicalAction === "update" ? targetId : null, { allowMissingExisting: true });
+    if (ruleCheck.status) {
+      result.status = "error";
+      result.code = "OBJECT_VALIDATION_RULE_FAILED";
+      result.message = ruleCheck.message || "Validation failed";
+      const first = ruleCheck.errors?.[0];
+      if (first) {
+        result.field = first.field || null;
+        result.value = first.value || null;
+      }
+      return result;
+    }
+    return result;
+  }
+
+  function operationFromAction(action) {
+    return action === "update" ? "update" : action === "create" ? "create" : "upsert";
+  }
+
+  async function recordRuleCheck(req, object, fields, values, trigger, recordId = null, { allowMissingExisting = false } = {}) {
     const result = await db("SELECT * FROM platform_rules WHERE object_id=$1 AND active=true AND (company_id IS NULL OR company_id=$2) AND trigger_key IN ($3,'before_save') AND action->>'type'='validation' ORDER BY id", [object.id, req.user.companyId, trigger]);
     let current = {};
     if (recordId) {
@@ -3055,14 +3651,17 @@ export default function createPlatformRouter({ authenticate, authorize, db, pool
       if (object.company_scoped) { params.push(req.user.companyId); scope.push(`company_id=$${params.length}`); }
       if (object.store_scoped) { params.push(req.user.storeId); scope.push(`store_id=$${params.length}`); }
       const existing = await db(`SELECT *, xmin::text AS "__validation_version" FROM "${object.source_table}" WHERE ${scope.join(" AND ")}`, params);
-      if (!existing.rows.length) return { status: 404, message: "Record not found" };
+      if (!existing.rows.length) {
+        if (allowMissingExisting) return {};
+        return { status: 404, message: "Record not found" };
+      }
       current = existing.rows[0];
     }
     const candidate = { ...current, ...Object.fromEntries(values.map(({ field, value }) => [field.api_name, value])) };
     try {
       const calculated = compileFormulas(fields)(candidate);
       const withRollups = await populateRollups(db, object, fields, [calculated], req);
-      const resolved = withRollups[0] || calculated;
+      const resolved = Array.isArray(withRollups) && withRollups.length ? withRollups[0] : calculated;
       const conditionalError = validateConditionalRequired(fields, resolved);
       if (conditionalError) return { status: 422, code: "CONDITIONAL_REQUIRED", message: conditionalError };
       if (!result.rows.length) return {};
@@ -3455,32 +4054,38 @@ export default function createPlatformRouter({ authenticate, authorize, db, pool
       if (!csvText.trim()) return res.status(400).json({ success: false, message: "CSV content is required" });
       const { headers, rows } = parseCsv(csvText);
       if (!headers.length || !rows.length) return res.status(400).json({ success: false, message: "CSV contains no data rows" });
-      const fieldByApiName = new Map(fields.filter((field) => field.active === true && field.readable !== false).map((field) => [field.api_name.toLowerCase(), field]));
+      const fieldByApiName = new Map(fields.filter((field) => field.active === true).map((field) => [field.api_name.toLowerCase(), field]));
       const errors = [];
+      const warnings = [];
       const preview = [];
+      const csvSeen = new Map();
+      let valid = 0;
+      let warningCount = 0;
+      const operation = normalizeRequestedOperation(req.body?.operation ?? "auto");
       for (const { row, lineNumber } of rows) {
-        const normalized = {};
-        for (const [header, value] of Object.entries(row)) {
-          const key = String(header).toLowerCase();
-          if (key === "id") normalized.id = value;
-          const match = fieldByApiName.get(key);
-          if (match) normalized[match.api_name] = value;
-        }
-        const existingId = normalized.id ? String(normalized.id).trim() : null;
-        const { id: _, ...input } = normalized;
-        const action = existingId && recordIdIsValid(existingId) ? "update" : "create";
-        if (!(await hasPlatformObjectPermission(db, req, object.id, action === "update" ? "edit" : "create"))) {
-          errors.push({ lineNumber, message: `${action} permission is required`, action });
+        const { input, existingId } = buildImportRowInput(row, fieldByApiName);
+        const action = resolveImportAction(operation, existingId);
+        const validation = await validateImportRow(req, object, fields, input, { lineNumber, action, existingId, operation, csvSeen });
+        if (validation.status === "error") {
+          errors.push({ row: lineNumber, status: "error", field: validation.field, value: validation.value, message: validation.message, rowData: input, originalRow: row });
           continue;
         }
-        const validation = await validateRecordInput(req, object, fields, input, { requireRequired: action === "create" });
-        if (validation.error) {
-          errors.push({ lineNumber, message: validation.error, action });
-          continue;
+        if (validation.warnings?.length) {
+          warningCount += validation.warnings.length;
+          warnings.push(...validation.warnings.map((warning) => ({ row: lineNumber, status: "warning", rowData: input, originalRow: row, ...warning })));
         }
-        preview.push({ lineNumber, action, row: input });
+        preview.push({ row: lineNumber, status: validation.warnings?.length ? "warning" : "valid", action: validation.action || action, rowData: input, warnings: validation.warnings || [] });
+        valid += 1;
       }
-      res.json({ success: true, data: { rowCount: rows.length, errors, preview } });
+      const summary = summarizeImportPreview(rows, preview);
+      summary.warnings = warningCount;
+      summary.errors = errors.length;
+      summary.create = preview.filter((item) => item.action === "create").length;
+      summary.update = preview.filter((item) => item.action === "update").length;
+      summary.skip = errors.length;
+      summary.error = errors.length;
+      summary.failed = errors.length;
+      res.json({ success: true, data: { rowCount: rows.length, valid, warnings: warningCount, errors: errors.length, preview, warnings, summary, errors } });
     } catch (error) {
       console.error("Platform import validation error:", error);
       res.status(500).json({ success: false, message: "Unable to validate object import" });
@@ -3497,77 +4102,87 @@ export default function createPlatformRouter({ authenticate, authorize, db, pool
       if (!csvText.trim()) return res.status(400).json({ success: false, message: "CSV content is required" });
       const { rows } = parseCsv(csvText);
       if (!rows.length) return res.status(400).json({ success: false, message: "CSV contains no data rows" });
-      const fieldByApiName = new Map(fields.filter((field) => field.active === true && field.readable !== false).map((field) => [field.api_name.toLowerCase(), field]));
+      const operation = normalizeRequestedOperation(req.body?.operation ?? "auto");
+      const fieldByApiName = new Map(fields.filter((field) => field.active === true).map((field) => [field.api_name.toLowerCase(), field]));
       const results = [];
       const errors = [];
+      const csvSeen = new Map();
+      let created = 0;
+      let updated = 0;
+      let skipped = 0;
       for (const { row, lineNumber } of rows) {
-        const normalized = {};
-        for (const [header, value] of Object.entries(row)) {
-          const key = String(header).toLowerCase();
-          if (key === "id") normalized.id = value;
-          const match = fieldByApiName.get(key);
-          if (match) normalized[match.api_name] = value;
-        }
-        const existingId = normalized.id ? String(normalized.id).trim() : null;
-        const { id: _, ...input } = normalized;
-        const action = existingId && recordIdIsValid(existingId) ? "update" : "create";
+        const { input, existingId } = buildImportRowInput(row, fieldByApiName);
+        const action = resolveImportAction(operation, existingId);
         try {
-          if (!(await hasPlatformObjectPermission(db, req, object.id, action === "update" ? "edit" : "create"))) {
-            errors.push({ lineNumber, message: `${action} permission is required`, action });
+          const validation = await validateImportRow(req, object, fields, input, { lineNumber, action, existingId, operation, csvSeen });
+          if (validation.status === "error") {
+            errors.push({ row: lineNumber, status: "error", field: validation.field, value: validation.value, message: validation.message, rowData: input, originalRow: row });
+            skipped += 1;
             continue;
           }
-          if (action === "update") {
-            const validation = await validateRecordInput(req, object, fields, input);
-            if (validation.error) {
-              errors.push({ lineNumber, message: validation.error, action });
-              continue;
-            }
-            const params = validation.values.map(({ value }) => value);
-            const assignments = validation.values.map(({ column }, index) => `"${column}"=$${index + 1}`);
-            params.push(existingId);
-            const scope = [`id=$${params.length + 1}`];
-            const scopeParams = [existingId];
+          const normalizedInput = Object.fromEntries(validation.values.map(({ field, value }) => [field.api_name, value]));
+          const finalAction = validation.action || action;
+          const targetId = validation.action === "update" ? (existingId || await resolveImportTarget(req, object, fields, input, { operation, existingId }).then((resolved) => resolved.targetId)) : null;
+          if (finalAction === "update") {
+            const assignmentEntries = Object.entries(normalizedInput);
+            const valueParams = assignmentEntries.map(([, value]) => value);
+            const assignments = assignmentEntries.map(([key], index) => `"${key}"=$${index + 1}`);
+            const scopeParams = [targetId || existingId];
+            const scope = [`id=$${valueParams.length + 1}`];
+            let nextIndex = valueParams.length + 2;
             if (object.company_scoped) {
               scopeParams.push(req.user.companyId);
-              scope.push(`company_id=$${params.length + scopeParams.length}`);
+              scope.push(`company_id=$${nextIndex}`);
+              nextIndex += 1;
             }
             if (object.store_scoped) {
               if (!req.user.storeId) {
-                errors.push({ lineNumber, message: "A store session is required", action });
+                errors.push({ row: lineNumber, status: "error", message: "A store session is required" });
+                skipped += 1;
                 continue;
               }
               scopeParams.push(req.user.storeId);
-              scope.push(`store_id=$${params.length + scopeParams.length}`);
+              scope.push(`store_id=$${nextIndex}`);
+              nextIndex += 1;
             }
+            const updateParams = [...valueParams, ...scopeParams];
             const result = await db(
               `UPDATE "${object.source_table}" SET ${assignments.join(",")} WHERE ${scope.join(" AND ")}`,
-              [...params, ...scopeParams],
+              updateParams,
             );
             if (!result.rows.length) {
-              errors.push({ lineNumber, message: "Record not found", action });
+              errors.push({ row: lineNumber, status: "error", message: "Record not found", rowData: input, originalRow: row });
+              skipped += 1;
               continue;
             }
-            results.push({ lineNumber, action, id: existingId });
+            updated += 1;
+            results.push({ row: lineNumber, action: "update", id: targetId || existingId, status: "updated" });
           } else {
-            const validation = await validateRecordInput(req, object, fields, input, { requireRequired: true });
-            if (validation.error) {
-              errors.push({ lineNumber, message: validation.error, action });
-              continue;
-            }
-            const columns = validation.values.map(({ column }) => `"${column}"`);
-            const values = validation.values.map(({ value }) => value);
+            const columns = Object.keys(normalizedInput).map((key) => `"${key}"`);
+            const values = Object.values(normalizedInput);
             const placeholders = values.map((_, index) => `$${index + 1}`);
             if (object.company_scoped) { columns.push('"company_id"'); values.push(req.user.companyId); placeholders.push(`$${values.length}`); }
             if (object.store_scoped) { columns.push('"store_id"'); values.push(req.user.storeId); placeholders.push(`$${values.length}`); }
             const result = await db(`INSERT INTO "${object.source_table}" (${columns.join(",")}) VALUES (${placeholders.join(",")}) RETURNING id`, values);
-            results.push({ lineNumber, action, id: result.rows[0]?.id || null });
+            created += 1;
+            results.push({ row: lineNumber, action: "create", id: result.rows[0]?.id || null, status: "created" });
           }
         } catch (error) {
-          errors.push({ lineNumber, message: error.message || "Import failed", action });
+          errors.push({ row: lineNumber, status: "error", message: error.message || "Import failed", rowData: input, originalRow: row });
+          skipped += 1;
         }
       }
-      res.json({ success: true, data: { imported: results.length, errors, results } });
-      if (typeof writeAudit === "function") await writeAudit(req.user.companyId, req.user.id, "platform.bulk_import", "platform_object", object.id, { objectKey: object.object_key, imported: results.length, errors: errors.length });
+      const summary = { created, updated, skipped, failed: errors.length };
+      res.json({ success: true, data: { summary, results, errors } });
+      if (typeof writeAudit === "function") await writeAudit(req.user.companyId, req.user.id, "platform.bulk_import", "platform_object", object.id, {
+        objectKey: object.object_key,
+        operation,
+        fileName: req.body?.fileName || req.body?.filename || null,
+        created,
+        updated,
+        skipped,
+        failed: errors.length,
+      });
     } catch (error) {
       console.error("Platform object import error:", error);
       res.status(500).json({ success: false, message: "Unable to import object records" });

@@ -72,7 +72,8 @@ export function filterNavigationByCatalog(items, catalogKeys) {
   if (!(catalogKeys instanceof Set)) return items;
   return items.filter(([page]) => {
     const moduleKey = CATALOG_MODULE_BY_PAGE[page];
-    return !moduleKey || catalogKeys.has(moduleKey);
+    if (moduleKey === undefined) return true;
+    return catalogKeys.has(moduleKey);
   });
 }
 

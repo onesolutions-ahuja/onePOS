@@ -2,6 +2,11 @@ import { useEffect, useMemo, useState } from "react";
 import { Plus, Search, X } from "lucide-react";
 import { apiRequest } from "../../../services/api.js";
 import WorkflowAdmin from "./WorkflowAdmin.jsx";
+import {
+  NAVIGATION_TARGET_TYPES,
+  describeNavigationTarget,
+  systemNavigationTargets,
+} from "../../../utils/navigationTargets.js";
 
 /*
  * GENERIC ACTION / WORKFLOW PICKER.
@@ -35,34 +40,203 @@ export function describeInteraction(interaction) {
   if (!interaction || interaction.type === "none" || !interaction.type) return "None";
   if (interaction.type === "workflow") return `Workflow · ${interaction.workflowLabel || interaction.workflowUuid || "selected"}`;
   if (interaction.type === "action") return `Action · ${interaction.actionKey || "selected"}`;
-  if (interaction.type === "navigate") return `Navigate · ${interaction.navigateTo || "target"}`;
+  if (interaction.type === "navigate") return `Navigate · ${describeNavigationTarget(interaction.navigationTarget, interaction.navigateTo) || "target"}`;
   if (interaction.type === "form_layout") return `Form Layout · ${interaction.formLayoutLabel || interaction.formLayoutId || "selected"}`;
   return "None";
 }
+/*
+ * NAVIGATION TARGET SELECTOR — the ONE destination picker for every
+ * navigation-capable component (Custom Button today; cards/rows/menus later
+ * through the same `action: navigate` capability).
+ *
+ * Destinations come from the authoritative sources, never a local route list:
+ *
+ *   System/App Page → the ONE navCatalogue filtered by the caller's own
+ *                     permission state (the Builder cannot offer a page the
+ *                     configured user cannot open)
+ *   Custom Page     → /api/platform/runtime/apps (company-scoped pages)
+ *   Object List     → /api/platform/runtime/navigation-targets objectPages
+ *                     (server-filtered by object permission + licence)
+ *   Object Record   → the same object discovery + a record-source selector
+ *                     (Current Record / an explicit record identifier)
+ *
+ * Only a STABLE target definition is persisted ({ type, key, ... }); labels
+ * are display state. The runtime re-resolves and re-checks everything at
+ * click time — configuration here is never a permission bypass.
+ */
+function NavigationTargetSelector({ value, onChange }) {
+  const [targets, setTargets] = useState(() => ({ system: null, customPages: [], objectPages: [] }));
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState("");
+  const [permissionState, setPermissionState] = useState(null);
 
-function NavigateTargetInput({ value, onChange }) {
-  const [pages, setPages] = useState([]);
   useEffect(() => {
-    apiRequest("/api/platform/runtime/apps")
-      .then((response) => {
-        const apps = Array.isArray(response?.data) ? response.data : [];
-        setPages(apps.flatMap((app) => (Array.isArray(app.pages) ? app.pages : []).map((page) => ({ key: page.page_key, label: page.label, app: app.label }))));
+    let cancelled = false;
+    setLoading(true);
+    setLoadError("");
+    Promise.all([
+      apiRequest("/api/auth/me/permissions").catch(() => null),
+      apiRequest("/api/platform/runtime/navigation-targets").catch(() => null),
+    ])
+      .then(([permissionResponse, targetResponse]) => {
+        if (cancelled) return;
+        const permissionData = permissionResponse?.success ? permissionResponse.data : null;
+        const payload = targetResponse?.success ? targetResponse.data : null;
+        setPermissionState(permissionData);
+        setTargets({
+          system: permissionData ? "catalogue" : null,
+          customPages: Array.isArray(payload?.customPages) ? payload.customPages : [],
+          objectPages: Array.isArray(payload?.objectPages) ? payload.objectPages : [],
+        });
+        if (!targetResponse?.success) {
+          setLoadError(targetResponse?.message || "Unable to load available destinations.");
+        }
       })
-      .catch(() => setPages([]));
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
   }, []);
+
+  const type = value?.type || "";
+  const selectType = (nextType) => {
+    if (!nextType) {
+      onChange(null);
+      return;
+    }
+    if (nextType === NAVIGATION_TARGET_TYPES.OBJECT_RECORD) {
+      onChange({ type: nextType, key: "", objectKey: "", recordSource: "current" });
+      return;
+    }
+    onChange({ type: nextType, key: "" });
+  };
+
+  /* A saved target whose key no longer resolves still shows as "saved" so a
+     reload round-trips instead of silently clearing the configuration. */
+  const savedFallback = (present, saved) => (present ? null : saved || value?.key || "saved target");
+  const customKey = type === "custom_page" ? value?.key || "" : "";
+  const objectKey = type === "object_list" ? value?.key || "" : type === "object_record" ? value?.objectKey || "" : "";
+  const knownObject = objectPages.some((page) => page.objectKey === objectKey);
+
+  return (
+    <div className="space-y-2">
+      <div className="space-y-1">
+        <label className="block text-xs font-medium text-slate-500">Destination type</label>
+        <select
+          className="w-full rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-sm"
+          value={type}
+          onChange={(event) => selectType(event.target.value)}
+        >
+          <option value="">Select destination…</option>
+          <option value={NAVIGATION_TARGET_TYPES.SYSTEM_PAGE}>System / App Page</option>
+          <option value={NAVIGATION_TARGET_TYPES.CUSTOM_PAGE}>Custom Page</option>
+          <option value={NAVIGATION_TARGET_TYPES.OBJECT_LIST}>Object List</option>
+          <option value={NAVIGATION_TARGET_TYPES.OBJECT_RECORD}>Object Record</option>
+        </select>
+      </div>
+
+      {type === NAVIGATION_TARGET_TYPES.SYSTEM_PAGE ? (
+        <SystemPageTargetInput
+          value={value}
+          onChange={onChange}
+          permissionState={permissionState}
+          savedFallback={savedFallback}
+        />
+      ) : null}
+
+      {type === NAVIGATION_TARGET_TYPES.CUSTOM_PAGE ? (
+        <div className="space-y-1">
+          <label className="block text-xs font-medium text-slate-500">Page</label>
+          <select
+            className="w-full rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-sm"
+            value={customKey}
+            onChange={(event) => onChange({ type, key: event.target.value || "" })}
+          >
+            <option value="">{loading ? "Loading pages…" : customPages.length ? "Select page…" : "No pages available"}</option>
+            {customKey && !customPages.some((page) => page.key === customKey) ? <option value={customKey}>{savedFallback(false, customKey)}</option> : null}
+            {customPages.map((page) => <option key={page.key} value={page.key}>{page.label || page.key}</option>)}
+          </select>
+          <p className="text-[11px] text-slate-400">Stored as the stable page key; deleted pages fail safely at click time.</p>
+        </div>
+      ) : null}
+
+      {type === NAVIGATION_TARGET_TYPES.OBJECT_LIST || type === NAVIGATION_TARGET_TYPES.OBJECT_RECORD ? (
+        <div className="space-y-1">
+          <label className="block text-xs font-medium text-slate-500">Object</label>
+          <select
+            className="w-full rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-sm"
+            value={objectKey}
+            onChange={(event) => {
+              const nextKey = event.target.value || "";
+              if (type === NAVIGATION_TARGET_TYPES.OBJECT_RECORD) {
+                onChange({ type, key: nextKey, objectKey: nextKey, recordSource: value?.recordSource || "current", ...(value?.recordSource === "explicit" && value?.recordId ? { recordId: value.recordId } : {}) });
+              } else {
+                onChange({ type, key: nextKey });
+              }
+            }}
+          >
+            <option value="">{loading ? "Loading objects…" : objectPages.length ? "Select object…" : "No objects available"}</option>
+            {objectKey && !knownObject ? <option value={objectKey}>{savedFallback(false, objectKey)}</option> : null}
+            {objectPages.map((page) => <option key={page.objectKey} value={page.objectKey}>{page.label || page.objectKey}</option>)}
+          </select>
+          <p className="text-[11px] text-slate-400">Only objects your account can open are listed; access is re-checked at click time.</p>
+        </div>
+      ) : null}
+
+      {type === NAVIGATION_TARGET_TYPES.OBJECT_RECORD ? (
+        <div className="space-y-1">
+          <label className="block text-xs font-medium text-slate-500">Record</label>
+          <select
+            className="w-full rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-sm"
+            value={value?.recordSource || "current"}
+            onChange={(event) => {
+              const recordSource = event.target.value === "explicit" ? "explicit" : "current";
+              const next = { type, key: objectKey, objectKey, recordSource };
+              if (recordSource === "explicit" && value?.recordId) next.recordId = value.recordId;
+              onChange(next);
+            }}
+          >
+            <option value="current">Current Record (the component's bound record)</option>
+            <option value="explicit">Explicit Record ID</option>
+          </select>
+          {value?.recordSource === "explicit" ? (
+            <input
+              className="w-full rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-sm"
+              placeholder="Record ID (UUID)"
+              value={value?.recordId || ""}
+              onChange={(event) => onChange({ type, key: objectKey, objectKey, recordSource: "explicit", recordId: event.target.value.trim() })}
+            />
+          ) : (
+            <p className="text-[11px] text-slate-400">The bound component's selected record becomes the destination; without one the click fails safely.</p>
+          )}
+        </div>
+      ) : null}
+
+      {loadError ? <p className="text-[11px] text-red-600">{loadError}</p> : null}
+      <p className="text-[11px] text-slate-400">Navigation only changes location — the destination still enforces every permission.</p>
+    </div>
+  );
+}
+
+/** System/App page picker over the ONE permission-filtered nav catalogue. */
+function SystemPageTargetInput({ value, onChange, permissionState, savedFallback }) {
+  const systemTargets = useMemo(() => {
+    if (permissionState === "catalogue" || !permissionState) return [];
+    return systemNavigationTargets(permissionState);
+  }, [permissionState]);
+  const key = value?.key || "";
+  const known = systemTargets.some((target) => target.key === key);
   return (
     <div className="space-y-1">
-      <label className="block text-xs font-medium text-slate-500">Navigate to page</label>
+      <label className="block text-xs font-medium text-slate-500">Page</label>
       <select
         className="w-full rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-sm"
-        value={value || ""}
-        onChange={(event) => onChange(event.target.value)}
+        value={key}
+        onChange={(event) => onChange({ type: NAVIGATION_TARGET_TYPES.SYSTEM_PAGE, key: event.target.value || "" })}
       >
-        <option value="">Select page…</option>
-        {value && !pages.some((page) => page.key === value) ? <option value={value}>{value}</option> : null}
-        {pages.map((page) => <option key={page.key} value={page.key}>{page.label} · {page.app}</option>)}
+        <option value="">{systemTargets.length ? "Select page…" : "Loading pages…"}</option>
+        {key && !known ? <option value={key}>{savedFallback(false, key)}</option> : null}
+        {systemTargets.map((target) => <option key={target.key} value={target.key}>{target.label}</option>)}
       </select>
-      <p className="text-[11px] text-slate-400">Stored as the page key; navigation still passes every permission gate.</p>
+      <p className="text-[11px] text-slate-400">Pages the current user cannot open are not offered — and are re-checked at click time.</p>
     </div>
   );
 }
@@ -237,7 +411,10 @@ export default function ActionWorkflowPicker({ interaction, onChange, objectKey 
       ) : null}
 
       {type === "navigate" ? (
-        <NavigateTargetInput value={interaction?.navigateTo || ""} onChange={(navigateTo) => patch({ navigateTo: navigateTo || null })} />
+        <NavigationTargetSelector
+          value={interaction?.navigationTarget || null}
+          onChange={(navigationTarget) => patch({ navigationTarget: navigationTarget || null })}
+        />
       ) : null}
 
       {type === "form_layout" ? (

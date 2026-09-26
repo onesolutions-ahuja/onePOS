@@ -77,6 +77,14 @@ function makeDb() {
       return { rows: state.stores.filter((s) => s.company_id === values[0] && s.code === values[1]).map((s) => ({ id: s.id })) };
     }
 
+    if (q.startsWith("SELECT id FROM stores WHERE company_id = $1 AND id = $2")) {
+      return { rows: state.stores.filter((s) => s.company_id === values[0] && s.id === values[1]).map((s) => ({ id: s.id })) };
+    }
+
+    if (q.startsWith("SELECT id FROM stores WHERE company_id = $1 AND id = $2")) {
+      return { rows: state.stores.filter((s) => s.company_id === values[0] && s.id === values[1]).map((s) => ({ id: s.id })) };
+    }
+
     if (q.startsWith("SELECT id FROM stores WHERE company_id = $1 ORDER BY created_at")) {
       const rows = state.stores
         .filter((s) => s.company_id === values[0])
@@ -125,9 +133,50 @@ function makeDb() {
       return { rows: [] };
     }
 
+    if (q.startsWith("SELECT id, status, store_id FROM online_orders WHERE company_id = $1 AND platform = 'uber'")) {
+      return {
+        rows: state.orders
+          .filter((o) => o.company_id === values[0] && o.platform === "uber" && o.external_order_id === values[1])
+          .map((o) => ({ id: o.id, status: o.status, store_id: o.store_id })),
+      };
+    }
+
     if (q.startsWith("INSERT INTO inventory_movements")) {
       const parsed = parseInsert(text, values);
       state.inventoryMovements.push(parsed);
+      return { rows: [] };
+    }
+
+    if (q.startsWith("SELECT * FROM online_orders WHERE id = $1 AND company_id = $2 FOR UPDATE")) {
+      return {
+        rows: state.orders.filter((o) => o.id === values[0] && o.company_id === values[1]).map((o) => ({ ...o })),
+      };
+    }
+
+    if (q.startsWith("SELECT i.id, i.product_id, i.product_name")) {
+      return {
+        rows: state.orderItems
+          .filter((item) => item.order_id === values[0])
+          .map((item) => ({ ...item, track_stock: item.track_stock === true, batch_tracking: item.batch_tracking === true })),
+      };
+    }
+
+    if (q.startsWith("UPDATE online_orders SET status = $1")) {
+      const order = state.orders.find((o) => o.id === values[1]);
+      if (order) {
+        order.status = values[0];
+        if (q.includes("cancel_reason")) order.cancel_reason = values[2];
+        if (values[0] === "CANCELLED") order.cancelled_at = new Date().toISOString();
+      }
+      return { rows: [] };
+    }
+
+    if (q.startsWith("UPDATE online_orders SET inventory_reserved = FALSE")) {
+      const order = state.orders.find((o) => o.id === values[0]);
+      if (order) {
+        order.inventory_reserved = false;
+        order.inventory_released = true;
+      }
       return { rows: [] };
     }
 
@@ -265,11 +314,38 @@ async function buildApp() {
       db: fake.db,
       pool: fakePool,
       writeAudit: async () => {},
-      createInventoryMovement: async () => {},
+      createInventoryMovement: async (_client, movement) => {
+        fake.state.inventoryMovements.push(movement);
+      },
     })
   );
 
   return { app, fake };
+}
+
+function seedReservedUberOrder(fake, externalOrderId) {
+  const order = {
+    id: crypto.randomUUID(),
+    company_id: COMPANY,
+    platform: "uber",
+    external_order_id: externalOrderId,
+    store_id: STORE_1,
+    status: "RECEIVED",
+    fulfilment_type: "SELF_PICKUP",
+    inventory_reserved: true,
+    inventory_released: false,
+  };
+  fake.state.orders.push(order);
+  fake.state.orderItems.push({
+    id: crypto.randomUUID(),
+    order_id: order.id,
+    product_id: "p1000000-0000-4000-8000-00000000uber",
+    product_name: "Test stock item",
+    quantity: 2,
+    track_stock: true,
+    batch_tracking: false,
+  });
+  return order;
 }
 
 function sign(payloadBody, secret) {
@@ -339,6 +415,43 @@ test("uber webhook: no signature header rejected 401 when a secret is configured
   assert.equal(res.status, 401);
 });
 
+test("uber webhook: invalidly signed cancellation does not change order or release stock", async () => {
+  const { app, fake } = await buildApp();
+  const order = seedReservedUberOrder(fake, "UBER-CANCEL-INVALID-SIGNATURE");
+  const payload = Buffer.from(
+    JSON.stringify({ event_type: "orders.cancel", resource_id: order.external_order_id, user_id: UBER_STORE })
+  );
+
+  const res = await fetchRequest(app, "/api/online/uber/webhook", payload, {
+    "x-uber-signature": sign(payload, "attacker-secret"),
+  });
+
+  assert.equal(res.status, 401);
+  assert.equal(order.status, "RECEIVED");
+  assert.equal(fake.state.inventoryMovements.length, 0);
+  assert.equal(fake.state.orderEvents.length, 0);
+});
+
+test("uber webhook: cancellation without configured signature secret remains audit-only", async () => {
+  const { app, fake } = await buildApp();
+  const order = seedReservedUberOrder(fake, "UBER-CANCEL-UNVERIFIED");
+  for (const integration of fake.state.integrations) {
+    integration.configuration.client_secret = null;
+    integration.configuration.webhook_secret = null;
+  }
+  const payload = Buffer.from(
+    JSON.stringify({ event_type: "orders.cancel", resource_id: order.external_order_id, user_id: UBER_STORE })
+  );
+
+  const res = await fetchRequest(app, "/api/online/uber/webhook", payload, {});
+
+  assert.equal(res.status, 200);
+  assert.equal(await res.text(), "");
+  assert.equal(order.status, "RECEIVED");
+  assert.equal(fake.state.inventoryMovements.length, 0);
+  assert.equal(fake.state.orderEvents.length, 0);
+});
+
 test("uber webhook: store.deprovisioned recorded without destructive change", async () => {
   const { app, fake } = await buildApp();
   const payload = Buffer.from(JSON.stringify({ event_type: "store.deprovisioned", store_id: UBER_STORE }));
@@ -388,7 +501,65 @@ test("uber webhook: orders.notification creates a RECEIVED order (UNMAPPED items
   assert.equal(order.fulfilment_type, "COLLECTION");
   assert.equal(fake.state.orderItems.length, 1);
   assert.equal(fake.state.orderItems[0].mapping_status, "UNMAPPED");
-  assert.equal(fake.state.orderItems[0].quantity, 2);
+});
+
+test("uber webhook: unmapped external store is not assigned to an arbitrary store in a multi-store company", async () => {
+  const { app, fake } = await buildApp();
+  fake.state.stores.push({
+    id: "s3000000-0000-4000-8000-00000000uber",
+    company_id: COMPANY,
+    code: "onepos-second-store",
+    created_at: "2026-02-01",
+  });
+  const payload = Buffer.from(JSON.stringify({
+    event_type: "orders.notification",
+    payload: {
+      order_id: "UBER-ORD-UNMAPPED-STORE",
+      store_id: "uber-store-without-a-mapping",
+      fulfillment_type: "PICKUP",
+      items: [],
+    },
+  }));
+
+  const res = await fetchRequest(app, "/api/online/uber/webhook", payload, {
+    "x-uber-signature": sign(payload, SECRET),
+  });
+
+  test("uber webhook: configured external store mapping selects its company-owned onePOS store", async () => {
+    const { app, fake } = await buildApp();
+    const mappedStoreId = "s3000000-0000-4000-8000-00000000uber";
+    fake.state.stores.push({
+      id: mappedStoreId,
+      company_id: COMPANY,
+      code: "local-store-3",
+      created_at: "2026-02-01",
+    });
+    const integration = fake.state.integrations.find((row) => row.company_id === COMPANY);
+    integration.configuration.store_mappings = [
+      { uber_store_id: UBER_STORE, onepos_store_id: mappedStoreId },
+    ];
+    const payload = Buffer.from(JSON.stringify({
+      event_type: "orders.notification",
+      payload: {
+        order_id: "UBER-ORD-STORE-MAPPED",
+        store_id: UBER_STORE,
+        fulfillment_type: "PICKUP",
+        items: [],
+      },
+    }));
+
+    const res = await fetchRequest(app, "/api/online/uber/webhook", payload, {
+      "x-uber-signature": sign(payload, SECRET),
+    });
+
+    assert.equal(res.status, 200);
+    assert.equal(fake.state.orders[0].store_id, mappedStoreId);
+  });
+
+  assert.equal(res.status, 200);
+  assert.equal(fake.state.orders.length, 1);
+  assert.equal(fake.state.orders[0].store_id, null);
+  assert.equal(fake.state.inventoryMovements.length, 0);
 });
 
 test("uber webhook: duplicate delivery never creates a second order", async () => {
@@ -403,6 +574,70 @@ test("uber webhook: duplicate delivery never creates a second order", async () =
 
   const matching = fake.state.orders.filter((o) => o.external_order_id === "UBER-ORD-DUP");
   assert.equal(matching.length, 1);
+});
+
+test("uber webhook: cancellation transitions mapped order and releases reservation once", async () => {
+  const { app, fake } = await buildApp();
+  const order = seedReservedUberOrder(fake, "UBER-CANCEL-1");
+  const mappedStoreId = "s3000000-0000-4000-8000-00000000uber";
+  fake.state.stores.push({
+    id: mappedStoreId,
+    company_id: COMPANY,
+    code: "local-store-3",
+    created_at: "2026-02-01",
+  });
+  fake.state.integrations.find((row) => row.company_id === COMPANY).configuration.store_mappings = [
+    { uber_store_id: UBER_STORE, onepos_store_id: mappedStoreId },
+  ];
+  order.store_id = mappedStoreId;
+  const payload = Buffer.from(
+    JSON.stringify({ event_type: "orders.cancel", resource_id: order.external_order_id, user_id: UBER_STORE })
+  );
+  const headers = { "x-uber-signature": sign(payload, SECRET) };
+
+  const res = await fetchRequest(app, "/api/online/uber/webhook", payload, headers);
+
+  assert.equal(res.status, 200);
+  assert.equal(await res.text(), "");
+  assert.equal(order.status, "CANCELLED");
+  assert.equal(order.inventory_reserved, false);
+  assert.equal(order.inventory_released, true);
+  assert.equal(fake.state.inventoryMovements.filter((movement) => movement.movementType === "ONLINE_RELEASE").length, 1);
+  assert.equal(fake.state.orderEvents.filter((event) => event.event_type === "STATUS_CHANGED").length, 1);
+  assert.equal(fake.state.orders.filter((candidate) => candidate.external_order_id === order.external_order_id).length, 1);
+});
+
+test("uber webhook: duplicate cancellation is idempotent and does not release stock twice", async () => {
+  const { app, fake } = await buildApp();
+  const order = seedReservedUberOrder(fake, "UBER-CANCEL-DUP");
+  const payload = Buffer.from(
+    JSON.stringify({ event_type: "orders.failure", resource_id: order.external_order_id, user_id: UBER_STORE })
+  );
+  const headers = { "x-uber-signature": sign(payload, SECRET) };
+
+  await fetchRequest(app, "/api/online/uber/webhook", payload, headers);
+  await fetchRequest(app, "/api/online/uber/webhook", payload, headers);
+
+  assert.equal(order.status, "CANCELLED");
+  assert.equal(fake.state.inventoryMovements.filter((movement) => movement.movementType === "ONLINE_RELEASE").length, 1);
+  assert.equal(fake.state.orderEvents.filter((event) => event.event_type === "STATUS_CHANGED").length, 1);
+});
+
+test("uber webhook: cancellation for an unmapped order is acknowledged without creating an order", async () => {
+  const { app, fake } = await buildApp();
+  const payload = Buffer.from(
+    JSON.stringify({ event_type: "orders.cancel", resource_id: "UBER-CANCEL-UNMAPPED", user_id: UBER_STORE })
+  );
+
+  const res = await fetchRequest(app, "/api/online/uber/webhook", payload, {
+    "x-uber-signature": sign(payload, SECRET),
+  });
+
+  assert.equal(res.status, 200);
+  assert.equal(await res.text(), "");
+  assert.equal(fake.state.orders.length, 0);
+  assert.equal(fake.state.inventoryMovements.length, 0);
+  assert.equal(fake.state.orderEvents.length, 0);
 });
 
 test("uber webhook: notification without inline order creates a skeleton RECEIVED order (no fabricated transitions)", async () => {

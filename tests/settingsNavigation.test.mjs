@@ -246,7 +246,7 @@ describe("5. /app/settings still resolves to the existing implementation", () =>
        the surface defaults it to null. */
     assert.match(
       LAYOUT_SRC,
-      /<SettingsAdmin key=\{settingsTab\} initialTab=\{settingsTab\} user=\{user\} isAdmin=\{onlinePermissions\.isAdmin\} isSuperadmin=\{onlinePermissions\.isSuperadmin\} entitlements=\{onlinePermissions\.entitlements\} \/>/,
+      /<SettingsAdmin initialTab=\{settingsTab\} onTabChange=\{\(tab\) => navigate\("Settings", \{ settingsTab: tab \}\)\} user=\{user\} isAdmin=\{onlinePermissions\.isAdmin\} isSuperadmin=\{onlinePermissions\.isSuperadmin\} entitlements=\{onlinePermissions\.entitlements\} \/>/,
     );
   });
 
@@ -258,6 +258,12 @@ describe("5. /app/settings still resolves to the existing implementation", () =>
 
   test("the navigation still routes through the existing path builder", () => {
     assert.match(LAYOUT_SRC, /return buildAppPath\(nextPage, \{ settingsTab \}\);/);
-    assert.match(LAYOUT_SRC, /navigate\("Settings", \{ settingsTab: tab \|\| "General" \}\)/);
+    assert.match(LAYOUT_SRC, /onTabChange=\{\(tab\) => navigate\("Settings", \{ settingsTab: tab \}\)\}/);
+  });
+
+  test("Platform deep links keep Platform selected without remounting the Settings shell", () => {
+    assert.equal(parseAppPath("/app/settings/platform").settingsTab, "Platform");
+    assert.match(LAYOUT_SRC, /const \[settingsTab, setSettingsTab\] = useState\(\(\) => resolveRoute\(\)\.settingsTab \|\| "General"\)/);
+    assert.doesNotMatch(LAYOUT_SRC, /<SettingsAdmin key=\{settingsTab\}/);
   });
 });

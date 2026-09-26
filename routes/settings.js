@@ -4,7 +4,10 @@ import {
   loadPlatformConfig,
   buildStoredConfiguration,
   maskConfiguration,
+  sanitizeUberStoreMappings,
+  sanitizeUberStoreMenuMappings,
 } from "../services/onlineOrders/platformConfig.js";
+import { UBER_MENU_MAPPING_SCHEMA } from "../services/onlineOrders/uberMenuMapping.js";
 import {
   JARVES_ALLOWANCE_RESULTS,
   getJarvesLicenceState,
@@ -14,6 +17,7 @@ import {
 } from "../services/jarvis/licensing.js";
 import { destinationFor, isValidLandingPage, normalizeDeviceProfile } from "../services/runtimeAccess.js";
 import { listPaymentMethods, ensureDefaultPaymentMethods } from "../services/paymentMethods.js";
+import { executeWorkflowAction } from "../services/platformWorkflow.js";
 
 export default function createSettingsRouter({
   authenticate,
@@ -762,6 +766,145 @@ export default function createSettingsRouter({
    * ------------------------------------------------------------------
    */
 
+  router.get(
+    "/settings/online-platforms/uber/store-mappings",
+    authenticate,
+    authorize("online_orders.configure"),
+    async (req, res) => {
+      try {
+        const [runtime, stores] = await Promise.all([
+          loadPlatformConfig(db, req.user.companyId, "uber"),
+          db(
+            "SELECT id, name, code FROM stores WHERE company_id=$1 AND active=true ORDER BY name",
+            [req.user.companyId]
+          ),
+        ]);
+        res.json({
+          success: true,
+          data: {
+            mappings: sanitizeUberStoreMappings(runtime.store_mappings || []),
+            store_menu_mappings: sanitizeUberStoreMenuMappings(runtime.store_menu_mappings || []),
+            onepos_stores: stores.rows.map(({ id, name, code }) => ({ id, name, code })),
+          },
+        });
+      } catch (error) {
+        console.error("Load Uber store mappings error:", error);
+        res.status(500).json({ success: false, message: "Unable to load Uber store mappings" });
+      }
+    }
+  );
+
+  router.put(
+    "/settings/online-platforms/uber/store-mappings",
+    authenticate,
+    authorize("online_orders.configure"),
+    async (req, res) => {
+      if (!pool) {
+        return res.status(500).json({ success: false, message: "DATABASE_URL is not configured" });
+      }
+
+      let mappings;
+      let storeMenuMappings;
+      try {
+        mappings = sanitizeUberStoreMappings(req.body?.store_mappings);
+        storeMenuMappings = req.body?.store_menu_mappings === undefined
+          ? undefined
+          : sanitizeUberStoreMenuMappings(req.body.store_menu_mappings);
+      } catch (error) {
+        return res.status(400).json({ success: false, message: error.message });
+      }
+
+      const companyId = req.user.companyId;
+      let discovery;
+      let storesResult;
+      try {
+        [discovery, storesResult] = await Promise.all([
+          executeWorkflowAction({
+            db,
+            req,
+            companyId,
+            action: { type: "UBER_GET_STORES" },
+          }),
+          db("SELECT id FROM stores WHERE company_id=$1 AND active=true", [companyId]),
+        ]);
+      } catch (error) {
+        return res.status(400).json({ success: false, message: error.message || "Unable to validate Uber store mappings" });
+      }
+
+      const uberRows = Array.isArray(discovery?.data?.stores)
+        ? discovery.data.stores
+        : Array.isArray(discovery?.data)
+          ? discovery.data
+          : [];
+      const allowedUberStores = new Set(uberRows.map((store) => String(store.id || store.store_id || "")));
+      const allowedOneposStores = new Set(storesResult.rows.map((store) => String(store.id)));
+      if (discovery?.success !== true && (mappings.length || storeMenuMappings?.length)) {
+        return res.status(400).json({ success: false, message: "Retrieve available Uber stores before saving mappings" });
+      }
+      for (const mapping of mappings) {
+        if (!allowedUberStores.has(mapping.uber_store_id)) {
+          return res.status(400).json({ success: false, message: `Uber store ${mapping.uber_store_id} is not available to this company connector` });
+        }
+        if (!allowedOneposStores.has(mapping.onepos_store_id)) {
+          return res.status(400).json({ success: false, message: `onePOS store ${mapping.onepos_store_id} is not an active store for this company` });
+        }
+      }
+      for (const menuConfiguration of storeMenuMappings || []) {
+        if (!allowedUberStores.has(menuConfiguration.uber_store_id)) {
+          return res.status(400).json({ success: false, message: `Uber store ${menuConfiguration.uber_store_id} is not available to this company connector` });
+        }
+      }
+
+      const client = await pool.connect();
+      try {
+        await client.query("BEGIN");
+        const existing = await client.query(
+          "SELECT configuration, active FROM integrations WHERE company_id=$1 AND provider='uber' FOR UPDATE",
+          [companyId]
+        );
+        const existingConfiguration = existing.rows[0]?.configuration || {};
+        const configuration = buildStoredConfiguration({
+          environment: existingConfiguration.environment || "sandbox",
+          store_mappings: mappings,
+          ...(storeMenuMappings === undefined ? {} : { store_menu_mappings: storeMenuMappings }),
+        }, existingConfiguration);
+        const result = await client.query(
+          `INSERT INTO integrations (company_id,name,provider,configuration,active)
+           VALUES ($1,'Uber Eats','uber',$2,$3)
+           ON CONFLICT (company_id,provider) DO UPDATE SET
+             configuration=EXCLUDED.configuration, updated_at=NOW()
+           RETURNING id`,
+          [companyId, JSON.stringify(configuration), existing.rows[0]?.active === true]
+        );
+        await writeAudit?.(
+          companyId,
+          req.user.id,
+          "online_platform_store_mappings.updated",
+          "integration",
+          result.rows[0].id,
+          { platform: "uber", count: mappings.length }
+        );
+        await client.query("COMMIT");
+        return res.json({
+          success: true,
+          data: {
+            store_mappings: mappings,
+            store_menu_mappings: configuration.store_menu_mappings || [],
+          },
+        });
+      } catch (error) {
+        await client.query("ROLLBACK");
+        if (["INVALID_UBER_STORE_MAPPINGS", "INVALID_UBER_STORE_MENU_MAPPINGS", "INVALID_MENU_MAPPING"].includes(error?.code)) {
+          return res.status(400).json({ success: false, message: error.message });
+        }
+        console.error("Save Uber store mappings error:", error);
+        return res.status(500).json({ success: false, message: "Unable to save Uber store mappings" });
+      } finally {
+        client.release();
+      }
+    }
+  );
+
   router.get("/settings/online-platforms", authenticate, async (req, res) => {
     try {
       const names = { uber: "Uber Eats", deliveroo: "Deliveroo" };
@@ -775,6 +918,7 @@ export default function createSettingsRouter({
           name: names[platform],
           enabled: runtime.enabled === true,
           ...maskConfiguration(runtime),
+          ...(platform === "uber" ? { menu_mapping_schema: UBER_MENU_MAPPING_SCHEMA } : {}),
         });
       }
 
@@ -797,6 +941,34 @@ export default function createSettingsRouter({
       return res.status(500).json({ success: false, message: "DATABASE_URL is not configured" });
     }
 
+    const requestedStoreId = req.body?.storeId;
+    if (platform === "uber" && requestedStoreId) {
+      try {
+        const currentConfig = await loadPlatformConfig(db, req.user.companyId, platform);
+        const requestedEnvironment = req.body?.environment === "production" ? "production" : "sandbox";
+        if (requestedEnvironment !== currentConfig.environment) {
+          return res.status(400).json({ success: false, message: "Save the Uber environment, then retrieve and select a store for that environment" });
+        }
+        const discovery = await executeWorkflowAction({
+          db,
+          req,
+          companyId: req.user.companyId,
+          action: { type: "UBER_GET_STORES" },
+        });
+        const stores = Array.isArray(discovery?.data?.stores)
+          ? discovery.data.stores
+          : Array.isArray(discovery?.data)
+            ? discovery.data
+            : [];
+        const allowedStoreIds = new Set(stores.map((store) => String(store.id || store.store_id || "")));
+        if (discovery?.success !== true || !allowedStoreIds.has(String(requestedStoreId))) {
+          return res.status(400).json({ success: false, message: "Select a store returned by Uber store discovery for this company" });
+        }
+      } catch (error) {
+        return res.status(400).json({ success: false, message: error.message || "Unable to verify the selected Uber store" });
+      }
+    }
+
     const {
       enabled = false,
       environment = "sandbox",
@@ -809,6 +981,7 @@ export default function createSettingsRouter({
       requireOtpOnCompletion,
       apiKey,
       webhookSecret,
+      menuMapping,
       notes,
     } = req.body;
 
@@ -838,6 +1011,7 @@ export default function createSettingsRouter({
             requireOtpOnCompletion === undefined ? undefined : requireOtpOnCompletion === true || requireOtpOnCompletion === "true",
           api_key: apiKey,
           webhook_secret: webhookSecret,
+          menu_mapping: menuMapping,
           notes,
         },
         existingConfiguration
@@ -878,10 +1052,14 @@ export default function createSettingsRouter({
           name: names[platform],
           enabled: runtime.enabled === true,
           ...maskConfiguration(runtime),
+          ...(platform === "uber" ? { menu_mapping_schema: UBER_MENU_MAPPING_SCHEMA } : {}),
         },
       });
     } catch (error) {
       await client.query("ROLLBACK");
+      if (error?.code === "INVALID_MENU_MAPPING") {
+        return res.status(400).json({ success: false, message: error.message });
+      }
       console.error("Update online platform settings error:", error);
       res.status(500).json({ success: false, message: "Unable to save online platform settings" });
     } finally {

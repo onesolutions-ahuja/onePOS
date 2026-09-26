@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
-import { X } from "lucide-react";
 import { apiRequest } from "../../services/api.js";
+import RecordModal from "../RecordModal.jsx";
 import FormRenderer from "../../pages/settings/Platform/FormRenderer.jsx";
 
 function keyOf(value) {
@@ -67,6 +67,7 @@ export default function StandardObjectFormModal({
     : presentationMode === "overlay_rectangle"
       ? "standard-object-form-panel-rectangle"
       : "standard-object-form-panel-inline";
+  const formId = "standard-object-form-modal";
   async function submit(values) {
     try {
       setSaving(true);
@@ -87,79 +88,34 @@ export default function StandardObjectFormModal({
   }
 
   return (
-    <div className={`standard-object-form-overlay standard-object-form-overlay-${presentationMode}`} data-presentation={presentationMode}>
-      <div className={`standard-object-form-panel ${presentationClass}`}>
-        <header className="flex items-center justify-between border-b px-5 py-4">
-          <h2 className="text-lg font-bold capitalize">{heading}</h2>
-          <button type="button" onClick={onClose} disabled={saving} className="rounded p-2 hover:bg-slate-100" aria-label="Close"><X size={18} /></button>
-        </header>
-        <div className="overflow-auto p-5">
-          {error && <div className="mb-4 rounded border border-red-200 bg-red-50 p-3 text-sm text-red-700">{error}</div>}
-          {loading ? <div className="py-10 text-center text-sm text-slate-500">Loading platform form...</div> : (
-            <FormRenderer
-              definition={definition}
-              fields={fields}
-              initialValues={initialValues}
-              mode={mode}
-              loading={saving}
-              error={error}
-              onSubmit={submit}
-            />
-          )}
-          {children}
-        </div>
-      </div>
-      <style>{`
-        .standard-object-form-overlay {
-          position: fixed;
-          inset: 0;
-          z-index: 50;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          padding: 16px;
-          background: rgb(0 0 0 / 50%);
-        }
-        .standard-object-form-panel {
-          display: flex;
-          flex-direction: column;
-          width: min(100%, 720px);
-          max-height: 90vh;
-          overflow: hidden;
-          border: 1px solid var(--border-color, #e5e7eb);
-          border-radius: var(--onepos-radius, 12px);
-          background: var(--card-background, #fff);
-          box-shadow: var(--onepos-shadow-lg, 0 20px 50px rgb(0 0 0 / 20%));
-        }
-        .standard-object-form-panel-rectangle { width: min(100%, 860px); }
-        .standard-object-form-panel-compact { width: min(100%, 540px); }
-        .standard-object-form-overlay .standard-object-form-panel > header {
-          display: flex;
-          align-items: center;
-          justify-content: space-between;
-          gap: 12px;
-          border-bottom: 1px solid var(--border-color, #e5e7eb);
-          padding: 16px 20px;
-        }
-        .standard-object-form-overlay .standard-object-form-panel > header h2 {
-          margin: 0;
-          color: var(--text-primary, #111827);
-          font-size: 18px;
-          font-weight: 700;
-        }
-        .standard-object-form-overlay .standard-object-form-panel > div {
-          overflow: auto;
-          padding: 20px;
-        }
-        @media (max-width: 640px) {
-          .standard-object-form-overlay { align-items: stretch; padding: 0; }
-          .standard-object-form-panel {
-            width: 100%;
-            max-height: 100%;
-            border-radius: 0;
-          }
-        }
-      `}</style>
-    </div>
+    <RecordModal
+      open={true}
+      mode={mode === "view" ? "view" : mode === "create" || mode === "quick_create" ? "create" : "edit"}
+      title={heading}
+      size={presentationMode === "overlay_square" ? "sm" : presentationMode === "overlay_rectangle" ? "lg" : "md"}
+      dirty={false}
+      saving={saving}
+      onClose={onClose}
+      onCancel={onClose}
+      formId={formId || undefined}
+      saveLabel={mode === "quick_create" ? "Quick Create" : undefined}
+      className={presentationClass}
+    >
+      {error && <div className="mb-4 rounded border border-red-200 bg-red-50 p-3 text-sm text-red-700">{error}</div>}
+      {loading ? <div className="py-10 text-center text-sm text-slate-500">Loading platform form...</div> : (
+        <FormRenderer
+          definition={definition}
+          fields={fields}
+          initialValues={initialValues}
+          mode={mode}
+          loading={saving}
+          error={error}
+          onSubmit={submit}
+          formId={formId}
+          embedded={false}
+        />
+      )}
+      {children}
+    </RecordModal>
   );
 }

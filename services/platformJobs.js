@@ -36,7 +36,7 @@ export async function failPlatformJob({ db, id, error, retryable = true }) {
   return result.rows[0] || null;
 }
 
-export async function drainDuePlatformJobs({ db, handler, limit = 20 }) {
+export async function drainDuePlatformJobs({ db, handler, limit = 20, onFailed = null }) {
   if (typeof handler !== "function") throw new Error("A platform job handler is required");
   const jobs = await claimDuePlatformJobs({ db, limit });
   const results = [];
@@ -47,6 +47,7 @@ export async function drainDuePlatformJobs({ db, handler, limit = 20 }) {
       results.push({ id: job.id, status: outcome?.status || "COMPLETED", outcome });
     } catch (error) {
       const failed = await failPlatformJob({ db, id: job.id, error, retryable: error?.retryable !== false });
+      if (typeof onFailed === "function") await onFailed(job, failed);
       results.push({ id: job.id, status: failed?.status || "FAILED", error });
     }
   }

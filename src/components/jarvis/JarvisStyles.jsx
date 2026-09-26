@@ -220,13 +220,13 @@ export const JARVIS_STYLES = `
 
      uses) plus breathing room, so the prompt/input row is never occluded. */
 
-  padding: 0.75rem 0.75rem calc(var(--dock-height) + 16px + env(safe-area-inset-bottom));
+  padding: 0.75rem 0.75rem calc(var(--dock-height) + var(--dock-offset-bottom, var(--dock-bottom, 12px)) + 16px);
 
 }
 
 .jarvis-panel-overlay--dock > .jarvis-panel-backdrop {
 
-  bottom: calc(var(--dock-height) + 16px + env(safe-area-inset-bottom));
+  bottom: calc(var(--dock-height) + var(--dock-offset-bottom, var(--dock-bottom, 12px)) + 16px);
 
   pointer-events: auto;
 
@@ -236,7 +236,7 @@ export const JARVIS_STYLES = `
 
   width: min(400px, calc(100vw - 1.5rem));
 
-  max-height: min(78dvh, calc(100dvh - var(--dock-height) - 5.5rem - env(safe-area-inset-bottom)));
+  max-height: min(78dvh, calc(100dvh - var(--dock-height) - 5.5rem - var(--dock-offset-bottom, var(--dock-bottom, 12px))));
 
   pointer-events: auto;
 
@@ -1006,18 +1006,68 @@ export const JARVIS_STYLES = `
 
 .jarvis-dot:nth-child(3) { animation-delay: 320ms; }
 
-@keyframes jarvis-dot { 0%, 100% { opacity: 0.3; transform: translateY(0); } 50% { opacity: 1; transform: translateY(-2px); } }
-
-
-
-/* Microphone control: teal idle, clear listening state. */
-
+@keyframes jarvis-dot { 0%, 100% { opacity: 0.3; transform: translateY(0); } 50% { opacity: 1; transform: translateY(-2px); } }/* Microphone control: teal idle, clear listening state. */
 .jarvis-mic { transition: background-color 150ms ease, color 150ms ease, box-shadow 150ms ease; }
-
 .jarvis-mic--listening { animation: jarvis-mic-pulse 1.4s ease-out infinite; }
-
 @keyframes jarvis-mic-pulse { 0% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.55); } 100% { box-shadow: 0 0 0 14px rgba(16, 185, 129, 0); } }
 
+/* Mic ACCESS indicator: a tiny status chip riding the corner pocket —
+   Windows-style available/blocked glyph with a status dot. It is status
+   only: no click target, no capture, no toggling. */
+.jarvis-mic-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 5px;
+  border-radius: 9999px;
+  background: rgba(6, 24, 22, 0.55);
+  border: 1px solid rgba(82, 201, 191, 0.35);
+  color: #7ce0d6;
+  line-height: 0;
+  pointer-events: auto;
+  box-shadow: 0 1px 4px rgba(3, 15, 14, 0.4);
+}
+.jarvis-mic-status-dot {
+  width: 4px;
+  height: 4px;
+  border-radius: 9999px;
+  background: #34d399;
+  box-shadow: 0 0 5px rgba(52, 211, 153, 0.85);
+}
+.jarvis-mic-status--blocked {
+  border-color: rgba(248, 113, 113, 0.45);
+  color: #fda4af;
+}
+.jarvis-mic-status--blocked .jarvis-mic-status-dot {
+  background: #f87171;
+  box-shadow: 0 0 5px rgba(248, 113, 113, 0.8);
+}
+/* In the dock's centre pocket the chip floats at the orb's right shoulder;
+   the standalone corner gets the same placement relative to the orb, so both
+   surfaces read identically (and the mobile 46px orb shifts the chip too). */
+.jarvis-mic-status--corner {
+  position: absolute;
+  left: calc(50% + var(--jarvis-orb-size, 65px) * 0.25);
+  bottom: calc(50% + 2px);
+  z-index: 3;
+}
+
+.jarvis-corner.jarvis-dock-anchor .jarvis-mic-status--corner {
+  display: grid;
+  place-items: center;
+  width: 10px;
+  height: 10px;
+  padding: 0;
+}
+
+.jarvis-corner.jarvis-dock-anchor .jarvis-mic-status--corner > svg {
+  display: none;
+}
+
+.jarvis-corner.jarvis-dock-anchor .jarvis-mic-status--corner .jarvis-mic-status-dot {
+  width: 5px;
+  height: 5px;
+}
 
 
 /* Respect the operator's motion preference: presence stays, motion stops. */

@@ -7,7 +7,11 @@ const read = (path) => fs.readFileSync(new URL(path, import.meta.url), "utf8");
 test("settings uses hierarchical categories, permission-filtered search source, and compact content width", () => {
   const settings = read("../src/pages/settings/SettingsAdmin.jsx");
   const css = read("../src/index.css");
-  assert.match(settings, /settings-categories/);
+  /* Batch 5–6 moved the category rail into the three-pane settings shell:
+     Pane 1 categories → Pane 2 sections submenu → Pane 3 content. */
+  assert.match(settings, /settings-category-group/);
+  assert.match(settings, /settings-category-active/);
+  assert.match(settings, /onepos-settings-menu/);
   assert.match(settings, /Search settings/);
   assert.match(settings, /const searchResults = settingsQuery\.trim\(\) \? tabs\.filter/);
   assert.match(css, /grid-template-columns: minmax\(220px, 260px\) minmax\(0, 1fr\)/);

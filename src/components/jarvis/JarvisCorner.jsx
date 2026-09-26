@@ -2,6 +2,7 @@ import { useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import JarvisOrb, { ORB_STATES } from "./JarvisOrb.jsx";
 import JarvisPanel from "./JarvisPanel.jsx";
+import JarvisMicStatus from "./JarvisMicStatus.jsx";
 
 /**
  * The application-level JARVES surface. The pocket is deliberately separate
@@ -10,7 +11,8 @@ import JarvisPanel from "./JarvisPanel.jsx";
  * `embedded` places the orb inline in the shared AdminNavDock's reserved centre
  * zone — the SAME treatment on the admin (/app) pages and the Till/POS screen,
  * because both mount the one dock component. The orb keeps floating above the
- * bar: there is no pedestal behind it.
+ * bar: there is no pedestal behind it. A small mic access indicator rides with
+ * the corner (status only — it never captures or blocks the mic itself).
  */
 export default function JarvisCorner({ embedded = false }) {
   const [open, setOpen] = useState(false);
@@ -32,6 +34,7 @@ export default function JarvisCorner({ embedded = false }) {
           onClick={() => setOpen(true)}
           buttonRef={launcherRef}
         />
+        <JarvisMicStatus className="jarvis-mic-status--corner" />
       </div>
       {open &&
         /* Portal to document.body: the dock's <nav> uses backdrop-filter, which

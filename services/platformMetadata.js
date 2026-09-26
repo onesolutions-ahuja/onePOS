@@ -769,10 +769,10 @@ export async function initializePlatformMetadata(pool, { includeOperationalObjec
     for (let index = 0; index < object.fields.length; index += 1) {
       const [apiName, label, fieldType, sourceColumn, required] = object.fields[index];
       await pool.query(
-        `INSERT INTO platform_fields (object_id, api_name, label, field_type, source_column, required, display_order)
-         VALUES ($1,$2,$3,$4,$5,$6,$7)
-         ON CONFLICT (object_id, api_name) WHERE company_id IS NULL DO UPDATE SET label=EXCLUDED.label, field_type=EXCLUDED.field_type, source_column=EXCLUDED.source_column, required=EXCLUDED.required, display_order=EXCLUDED.display_order`,
-        [objectId, apiName, label, fieldType, sourceColumn, required, index]
+        `INSERT INTO platform_fields (object_id, api_name, label, field_type, source_column, required, writable, display_order)
+         VALUES ($1,$2,$3,$4,$5,$6,$8,$7)
+         ON CONFLICT (object_id, api_name) WHERE company_id IS NULL DO UPDATE SET label=EXCLUDED.label, field_type=EXCLUDED.field_type, source_column=EXCLUDED.source_column, required=EXCLUDED.required, writable=EXCLUDED.writable, display_order=EXCLUDED.display_order`,
+        [objectId, apiName, label, fieldType, sourceColumn, required, index, Boolean(sourceColumn)]
       );
     }
   }
@@ -870,12 +870,12 @@ export async function initializePlatformMetadata(pool, { includeOperationalObjec
       for (let index = 0; index < object.fields.length; index += 1) {
         const [apiName, label, fieldType, sourceColumn, required] = object.fields[index];
         await pool.query(
-          `INSERT INTO platform_fields (object_id,api_name,label,field_type,source_column,required,display_order)
-           VALUES ($1,$2,$3,$4,$5,$6,$7)
+          `INSERT INTO platform_fields (object_id,api_name,label,field_type,source_column,required,writable,display_order)
+           VALUES ($1,$2,$3,$4,$5,$6,$8,$7)
            ON CONFLICT (object_id,api_name) WHERE company_id IS NULL DO UPDATE
              SET label=EXCLUDED.label,field_type=EXCLUDED.field_type,source_column=EXCLUDED.source_column,
-                 required=EXCLUDED.required,display_order=EXCLUDED.display_order`,
-          [result.rows[0].id, apiName, label, fieldType, sourceColumn, required, index]
+                 required=EXCLUDED.required,writable=EXCLUDED.writable,display_order=EXCLUDED.display_order`,
+          [result.rows[0].id, apiName, label, fieldType, sourceColumn, required, index, Boolean(sourceColumn)]
         );
       }
     }

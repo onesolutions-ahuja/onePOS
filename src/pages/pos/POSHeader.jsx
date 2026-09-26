@@ -3,8 +3,6 @@ import {
   Database,
   LogOut,
   RefreshCw,
-  ShoppingBag,
-  Settings,
   Wifi,
   WifiOff,
   X,
@@ -23,11 +21,7 @@ function POSHeader({
   loadingTill,
   till,
   onManageTill,
-  onAdmin,
-  onSettings,
-  onOpenOnlineOrders,
   onLogout,
-  onlineOrderCount = 0,
   offlineCount = 0,
   failedCount = 0,
   syncing = false,
@@ -240,63 +234,13 @@ function POSHeader({
           <span className="md:hidden">Till</span>
         </button>
 
-        {/* ONLINE ORDERS — icon+badge below md; full label at md+. */}
-        <button
-          onClick={onOpenOnlineOrders}
-          className="relative h-9 px-2 md:px-3 bg-slate-800 rounded-md text-sm hover:bg-slate-700 transition-colors flex items-center shrink-0"
-          title="Online Orders"
-        >
-          <span className="flex items-center gap-2">
-            <ShoppingBag size={15} />
+        {/* Orders remain available through the standard app navigation. The
+            POS header keeps diagnostics and session controls only, without a
+            separate shortcut button that duplicates app-level access. */}
 
-            <span className="hidden md:inline">Online Orders</span>
-
-            {onlineOrderCount > 0 && (
-              <span
-                className="
-                  absolute
-                  -top-1.5
-                  -right-1.5
-                  min-w-[18px]
-                  h-[18px]
-                  px-1
-                  bg-red-600
-                  text-white
-                  text-[11px]
-                  font-bold
-                  rounded-full
-                  flex
-                  items-center
-                  justify-center
-                "
-              >
-                {onlineOrderCount > 99
-                  ? "99+"
-                  : onlineOrderCount}
-              </span>
-            )}
-          </span>
-        </button>
-
-        {/* ADMIN — icon-only below sm. */}
-        <button
-          onClick={onAdmin}
-          className="h-9 px-2 sm:px-3 bg-slate-800 rounded-md text-sm hover:bg-slate-700 transition-colors shrink-0"
-        >
-          <span className="hidden sm:inline">Admin</span>
-          <span className="sm:hidden">A</span>
-        </button>
-
-        {onSettings && (
-          <button
-            onClick={onSettings}
-            className="h-9 w-9 flex items-center justify-center bg-slate-800 rounded-md text-sm hover:bg-slate-700 transition-colors shrink-0"
-            title="Settings available to you"
-            aria-label="Settings available to you"
-          >
-            <Settings size={17} />
-          </button>
-        )}
+        {/* Admin / settings are handled by the contextual dock actions. The
+            header keeps session and diagnostics controls only, so the two views
+            can never disagree about where switching and settings live. */}
 
         {/* LOGOUT */}
         <button

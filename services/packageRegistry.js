@@ -82,6 +82,7 @@ export function packageDefinition(entry) {
     platform: "OneBuilder",
     online_orders: "OneOnline",
     integrations: "OneIntegrations",
+    uber_eats: "Uber Eats",
   };
   const packageDescriptions = {
     retail_pos: "Sales, payments, returns and order processing.",
@@ -98,11 +99,13 @@ export function packageDefinition(entry) {
     platform: "Customer-configurable Platform metadata and builders.",
     online_orders: "Online order intake and preparation.",
     integrations: "External delivery, payment and communication integrations.",
+    uber_eats: "Uber Eats connection and online order integration.",
   };
   const entitlementKeys = {
     retail_pos: "pos", products: "pos", inventory: "inventory", batch_expiry: "batch_expiry",
     hospitality: "hospitality", kds: "kds", customer_credit: "credit_control", suppliers: "purchasing", customers: "customers", staff: "staff",
-    reports: "reports", online_orders: "online_orders", integrations: "integrations", platform: "platform",
+    reports: "reports", online_orders: "online_orders", integrations: "integrations",
+    uber_eats: "integrations", platform: "platform",
   };
   const dependencies = {
     retail_pos: ["products"],
@@ -113,7 +116,12 @@ export function packageDefinition(entry) {
     customer_credit: ["customers", "retail_pos"],
     reports: [],
     platform: [],
+    uber_eats: ["integrations", "online_orders"],
   };
+  const packageType = entry.packageType === "FOUNDATION" || entry.technical === true
+    ? "FOUNDATION"
+    : "APPLICATION";
+  const billable = packageType === "APPLICATION" && entry.billable !== false;
   return {
     packageKey: entry.packageKey || entry.key,
     name: packageNames[entry.key] || entry.name,
@@ -122,9 +130,20 @@ export function packageDefinition(entry) {
     dependencies: Array.isArray(entry.dependencies) ? entry.dependencies : (dependencies[entry.key] || []),
     moduleKey: entry.key,
     manifest: {
+      packageKey: entry.packageKey || entry.key,
+      name: packageNames[entry.key] || entry.name,
+      version: entry.version || "1.0.0",
+      packageType,
+      publisher: entry.publisher || "OneSolutions",
+      category: entry.category || "Business",
+      description: packageDescriptions[entry.key] || entry.description,
       route: entry.route,
       entitlementKey: entry.entitlementKey || entitlementKeys[entry.key] || entry.key,
-      licenceRequired: true,
+      licenceRequired: billable,
+      billable,
+      visibility: entry.visibility || (packageType === "FOUNDATION" ? "HIDDEN" : "PUBLIC"),
+      installable: entry.installable !== false,
+      systemOnly: entry.systemOnly === true || packageType === "FOUNDATION",
       permissions: entry.permissions,
       storeScoped: entry.storeScoped === true,
       category: entry.category,
@@ -287,6 +306,188 @@ export function packageDefinition(entry) {
           },
         ],
       } : {}),
+      ...(entry.key === "uber_eats" ? {
+        objects: [
+          {
+            objectKey: "uber_eats_connection",
+            metadataScope: "global",
+            label: "Uber Eats Connection",
+            pluralLabel: "Uber Eats Connections",
+            description: "Tenant-scoped connection status for Uber Eats. Client credentials remain in the existing integration configuration and are not exposed as Platform fields.",
+            sourceTable: "integrations",
+            fields: [
+              { apiName: "name", label: "Connection Name", fieldType: "text", writable: false },
+              { apiName: "provider", label: "Provider", fieldType: "text", required: true, writable: false },
+              { apiName: "active", label: "Active", fieldType: "boolean", writable: false },
+              { apiName: "created_at", label: "Created", fieldType: "datetime", writable: false },
+              { apiName: "updated_at", label: "Updated", fieldType: "datetime", writable: false },
+            ],
+          },
+        ],
+        permissionDeclarations: [
+          { key: "connection_status", permission: "online_orders.view", access: "read" },
+          { key: "connector_actions", permission: "online_orders.configure", access: "execute" },
+          { key: "order_lifecycle", permission: "online_orders.manage", access: "execute" },
+        ],
+        actions: [
+          {
+            actionKey: "uber_eats.get_stores",
+            objectKey: "uber_eats_connection",
+            label: "Get Uber Eats Stores",
+            description: "List stores available to the configured company connector.",
+            handlerKey: "UBER_GET_STORES",
+            requiredPermission: "online_orders.configure",
+          },
+          {
+            actionKey: "uber_eats.test_connection",
+            objectKey: "uber_eats_connection",
+            label: "Test Uber Eats Connection",
+            description: "Test connector credentials and discover accessible stores.",
+            handlerKey: "UBER_TEST_CONNECTION",
+            requiredPermission: "online_orders.configure",
+          },
+          {
+            actionKey: "uber_eats.upload_menu",
+            objectKey: "uber_eats_connection",
+            label: "Upload Uber Eats Menu",
+            description: "Publish explicitly Uber-enabled Product Master items.",
+            handlerKey: "UBER_UPLOAD_MENU",
+            requiredPermission: "online_orders.configure",
+          },
+          {
+            actionKey: "uber_eats.accept_order",
+            objectKey: "uber_eats_connection",
+            label: "Accept Uber Eats Order",
+            description: "Accept a company-scoped Uber Eats order through the online-order lifecycle.",
+            handlerKey: "UBER_ACCEPT_ORDER",
+            requiredPermission: "online_orders.manage",
+          },
+          {
+            actionKey: "uber_eats.deny_order",
+            objectKey: "uber_eats_connection",
+            label: "Deny Uber Eats Order",
+            description: "Deny a company-scoped Uber Eats order through the online-order lifecycle.",
+            handlerKey: "UBER_DENY_ORDER",
+            requiredPermission: "online_orders.manage",
+          },
+          {
+            actionKey: "uber_eats.update_item_price",
+            objectKey: "uber_eats_connection",
+            label: "Update Uber Eats Item Price",
+            description: "Push a mapped onePOS product price to its Uber Eats menu item.",
+            handlerKey: "UBER_UPDATE_ITEM_PRICE",
+            requiredPermission: "online_orders.configure",
+          },
+          {
+            actionKey: "uber_eats.set_item_unavailable",
+            objectKey: "uber_eats_connection",
+            label: "Set Uber Eats Item Unavailable",
+            description: "Temporarily suspend a mapped Uber Eats menu item.",
+            handlerKey: "UBER_SET_ITEM_UNAVAILABLE",
+            requiredPermission: "online_orders.configure",
+          },
+          {
+            actionKey: "uber_eats.set_item_available",
+            objectKey: "uber_eats_connection",
+            label: "Set Uber Eats Item Available",
+            description: "Remove the suspension from a mapped Uber Eats menu item.",
+            handlerKey: "UBER_SET_ITEM_AVAILABLE",
+            requiredPermission: "online_orders.configure",
+          },
+        ],
+        buttons: [
+          { buttonKey: "uber_eats_get_stores", objectKey: "uber_eats_connection", label: "Get Stores", actionKey: "uber_eats.get_stores", requiredPermission: "online_orders.configure", variant: "secondary" },
+          { buttonKey: "uber_eats_test_connection", objectKey: "uber_eats_connection", label: "Test Connection", actionKey: "uber_eats.test_connection", requiredPermission: "online_orders.configure", variant: "secondary" },
+          { buttonKey: "uber_eats_upload_menu", objectKey: "uber_eats_connection", label: "Upload Menu", actionKey: "uber_eats.upload_menu", requiredPermission: "online_orders.configure", variant: "primary" },
+        ],
+        mappingSchema: [
+          {
+            key: "store",
+            scope: "company",
+            source: "integrations.configuration.store_id",
+            externalKey: "integrations.configuration.store_location_id",
+            target: "stores.id",
+            override: "company-selected-store",
+          },
+          {
+            key: "product",
+            scope: "company",
+            source: "products.uber_item_id",
+            externalKey: "Uber Eats item id",
+            eligibility: "products.available_on_uber",
+            override: "preserve-explicit-product-item-id",
+          },
+        ],
+        workflows: [
+          {
+            key: "uber_eats_menu_sync_after_product_save",
+            label: "Uber Eats menu sync after product save",
+            objectKey: "product",
+            triggerKey: "after_save",
+            activeByDefault: false,
+            conditions: [{ field: "available_on_uber", operator: "equals", value: true }],
+            actions: [{ type: "UBER_UPLOAD_MENU" }],
+          },
+        ],
+        forms: [
+          {
+            formKey: "uber_eats_connection",
+            label: "Uber Eats Connection",
+            permission: "online_orders.configure",
+            fields: [
+              { key: "environment", label: "Environment", source: "integrations.configuration.environment", editableBy: "existing-online-platform-settings" },
+              { key: "client_id", label: "Client ID", source: "integrations.configuration.client_id", sensitive: true, editableBy: "existing-online-platform-settings" },
+              { key: "client_secret", label: "Client Secret", source: "integrations.configuration.client_secret", sensitive: true, editableBy: "existing-online-platform-settings" },
+              { key: "store_id", label: "onePOS Store", source: "integrations.configuration.store_id", editableBy: "existing-online-platform-settings" },
+            ],
+          },
+        ],
+        pages: [
+          {
+            pageKey: "uber_eats",
+            label: "Uber Eats",
+            routePath: "/app/custom/uber_eats",
+            runtimeComponent: "uber_eats_settings",
+            permissions: ["online_orders.view", "online_orders.configure"],
+            definition: {
+              presentation_mode: "landing",
+              runtime_component: "uber_eats_settings",
+              required_permissions: ["online_orders.view"],
+              form_key: "uber_eats_connection",
+              mapping_schema: [
+                { key: "store", path: "integrations.configuration.store_id", external_key: "integrations.configuration.store_location_id" },
+                { key: "product", path: "products.uber_item_id", eligibility: "products.available_on_uber" },
+              ],
+              forms: [
+                { key: "environment", component_key: "picklist", source: "integrations.configuration.environment", permission: "online_orders.configure" },
+                { key: "client_id", component_key: "text_input", source: "integrations.configuration.client_id", sensitive: true, permission: "online_orders.configure" },
+                { key: "client_secret", component_key: "text_input", source: "integrations.configuration.client_secret", sensitive: true, permission: "online_orders.configure" },
+                { key: "store_id", component_key: "lookup", source: "integrations.configuration.store_id", permission: "online_orders.configure" },
+              ],
+              sections: [
+                { id: "uber-eats-connection", label: "Uber Eats Connection", columns: 1 },
+                { id: "uber-eats-mapping", label: "Product Mapping", columns: 1 },
+              ],
+              components: [
+                { id: "uber-eats-heading", section_id: "uber-eats-connection", component_key: "header", label: "Uber Eats" },
+                { id: "uber-eats-settings", section_id: "uber-eats-connection", component_key: "text", label: "Manage credentials and store selection in the existing Online Platforms settings. Secrets are never displayed in this package page." },
+                { id: "uber-eats-mapping-info", section_id: "uber-eats-mapping", component_key: "text", label: "Product availability and item IDs use the existing Product Master fields available_on_uber and uber_item_id." },
+              ],
+            },
+          },
+        ],
+        listViews: [
+          {
+            objectKey: "uber_eats_connection",
+            viewKey: "connection_status",
+            label: "Connection Status",
+            description: "Uber Eats connection status without exposing client credentials.",
+            columns: ["name", "provider", "active", "updated_at"],
+            filters: { provider: "uber" },
+            isDefault: true,
+          },
+        ],
+      } : {}),
     },
   };
 }
@@ -310,7 +511,20 @@ export function resolvePackagePlan(packageKey, packages) {
     for (const dependency of pkg.dependencies || []) {
       const dependencyKey = typeof dependency === "string" ? dependency : dependency.packageKey || dependency.package_key;
       if (!dependencyKey) throw new Error(`Invalid dependency declared by ${key}`);
-      visit(dependencyKey);
+      if (!(typeof dependency === "object" && dependency.optional === true)) {
+        const required = byKey.get(dependencyKey);
+        if (required && typeof dependency === "object") {
+          const minVersion = dependency.minVersion || dependency.min_version;
+          const maxVersion = dependency.maxVersion || dependency.max_version;
+          if (minVersion && comparePackageVersions(required.version, minVersion) < 0) {
+            throw new Error(`Package ${key} requires ${dependencyKey} version ${minVersion} or later`);
+          }
+          if (maxVersion && comparePackageVersions(required.version, maxVersion) > 0) {
+            throw new Error(`Package ${key} requires ${dependencyKey} version ${maxVersion} or earlier`);
+          }
+        }
+        visit(dependencyKey);
+      }
     }
 
     visiting.delete(key);
@@ -320,6 +534,20 @@ export function resolvePackagePlan(packageKey, packages) {
 
   visit(packageKey);
   return ordered;
+}
+
+export function comparePackageVersions(left, right) {
+  const parse = (version) => {
+    const match = String(version || "").match(/^(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$/);
+    if (!match) throw new Error(`Invalid semantic package version: ${version}`);
+    return match.slice(1).map(Number);
+  };
+  const a = parse(left);
+  const b = parse(right);
+  for (let index = 0; index < 3; index += 1) {
+    if (a[index] !== b[index]) return a[index] < b[index] ? -1 : 1;
+  }
+  return 0;
 }
 
 export function resolveFeaturePlan(packageDefinitionEntry, requestedFeatures = []) {
@@ -345,12 +573,13 @@ export function resolveFeaturePlan(packageDefinitionEntry, requestedFeatures = [
 
 const safeMetadataKey = (value) => typeof value === "string" && /^[a-z_][a-z0-9_]{0,99}$/.test(value);
 
-export async function provisionPackageMetadata(db, { packageId, moduleId, companyId, manifest = {} }) {
+export async function provisionPackageMetadata(db, { packageId, moduleId, companyId, manifest = {}, packageVersion = manifest.version || "1.0.0" }) {
   const objects = Array.isArray(manifest.objects) ? manifest.objects : [];
   const objectIds = new Map();
 
   for (const definition of objects) {
     const objectKey = definition?.objectKey || definition?.object_key || definition?.key;
+    const objectCompanyId = definition.metadataScope === "global" ? null : companyId || null;
     if (!safeMetadataKey(objectKey)) throw new Error(`Invalid package object key: ${objectKey || "(missing)"}`);
     if (typeof definition.label !== "string" || !definition.label.trim()) {
       throw new Error(`Package object label is required: ${objectKey}`);
@@ -365,19 +594,19 @@ export async function provisionPackageMetadata(db, { packageId, moduleId, compan
       if (object.package_id && object.package_id !== packageId) {
         throw new Error(`Platform object is owned by another package: ${objectKey}`);
       }
-      if (object.company_id && object.company_id !== companyId) {
+      if (object.company_id && object.company_id !== objectCompanyId) {
         throw new Error(`Platform object belongs to another company: ${objectKey}`);
       }
       await db(
-        "UPDATE platform_objects SET package_id=$1,module_id=COALESCE(module_id,$2),company_id=COALESCE(company_id,$3),label=$4,plural_label=$5,description=$6,active=true,updated_at=NOW() WHERE id=$7 RETURNING *",
-        [packageId, moduleId, companyId || null, definition.label.trim(), definition.pluralLabel || definition.plural_label || null, definition.description || null, object.id]
+          "UPDATE platform_objects SET package_id=$1,module_id=COALESCE(module_id,$2),company_id=COALESCE(company_id,$3),label=CASE WHEN user_modified THEN label ELSE $4 END,plural_label=CASE WHEN user_modified THEN plural_label ELSE $5 END,description=CASE WHEN user_modified THEN description ELSE $6 END,source_package_version=$8,managed=true,package_required=$9,active=true,updated_at=NOW() WHERE id=$7 RETURNING *",
+          [packageId, moduleId, objectCompanyId, definition.label.trim(), definition.pluralLabel || definition.plural_label || null, definition.description || null, object.id, packageVersion, definition.required === true]
       );
     } else {
       const result = await db(
         `INSERT INTO platform_objects
-         (module_id,package_id,object_key,label,plural_label,description,company_id,source_table)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
-        [moduleId, packageId, objectKey, definition.label.trim(), definition.pluralLabel || definition.plural_label || null, definition.description || null, companyId || null, definition.sourceTable || definition.source_table || null]
+         (module_id,package_id,object_key,label,plural_label,description,company_id,source_table,source_package_version,managed,package_required)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,true,$10) RETURNING *`,
+        [moduleId, packageId, objectKey, definition.label.trim(), definition.pluralLabel || definition.plural_label || null, definition.description || null, objectCompanyId, definition.sourceTable || definition.source_table || null, packageVersion, definition.required === true]
       );
       object = result.rows[0];
     }
@@ -397,15 +626,15 @@ export async function provisionPackageMetadata(db, { packageId, moduleId, compan
           throw new Error(`Platform field belongs to another company: ${objectKey}.${apiName}`);
         }
         await db(
-          "UPDATE platform_fields SET label=$1,field_type=$2,required=$3,readable=$4,writable=$5,options=$6::jsonb,config=$7::jsonb,active=true WHERE id=$8",
-          [field.label.trim(), field.fieldType || field.field_type || "text", field.required === true, field.readable !== false, field.writable === true, JSON.stringify(field.options || []), JSON.stringify({ ...(field.config || {}), packageContract: field.required === true ? "required" : "default", packageOwned: true }), existingField.rows[0].id]
+          "UPDATE platform_fields SET label=CASE WHEN user_modified THEN label ELSE $1 END,field_type=CASE WHEN user_modified THEN field_type ELSE $2 END,required=$3,readable=CASE WHEN user_modified THEN readable ELSE $4 END,writable=CASE WHEN user_modified THEN writable ELSE $5 END,options=CASE WHEN user_modified THEN options ELSE $6::jsonb END,config=CASE WHEN user_modified THEN config ELSE $7::jsonb END,source_package_id=$9,source_package_version=$10,managed=true,package_required=$11,active=true WHERE id=$8",
+          [field.label.trim(), field.fieldType || field.field_type || "text", field.required === true, field.readable !== false, field.writable === true, JSON.stringify(field.options || []), JSON.stringify({ ...(field.config || {}), packageContract: field.required === true ? "required" : "default", packageOwned: true, packageId }), existingField.rows[0].id, packageId, packageVersion, field.required === true]
         );
       } else {
         await db(
           `INSERT INTO platform_fields
-           (object_id,api_name,label,field_type,required,readable,writable,options,config,company_id)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9::jsonb,$10)`,
-          [object.id, apiName, field.label.trim(), field.fieldType || field.field_type || "text", field.required === true, field.readable !== false, field.writable === true, JSON.stringify(field.options || []), JSON.stringify({ ...(field.config || {}), packageContract: field.required === true ? "required" : "default", packageOwned: true }), companyId || null]
+           (object_id,api_name,label,field_type,required,readable,writable,options,config,company_id,source_package_id,source_package_version,managed,package_required)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9::jsonb,$10,$11,$12,true,$13)`,
+          [object.id, apiName, field.label.trim(), field.fieldType || field.field_type || "text", field.required === true, field.readable !== false, field.writable === true, JSON.stringify(field.options || []), JSON.stringify({ ...(field.config || {}), packageContract: field.required === true ? "required" : "default", packageOwned: true, packageId }), companyId || null, packageId, packageVersion, field.required === true]
         );
       }
     }
@@ -440,11 +669,11 @@ export async function provisionPackageMetadata(db, { packageId, moduleId, compan
     }
     await db(
       `INSERT INTO platform_relationships
-       (parent_object_id,child_object_id,relationship_key,relationship_type,child_field_id,active)
-       VALUES ($1,$2,$3,$4,$5,true)
+       (parent_object_id,child_object_id,relationship_key,relationship_type,child_field_id,active,source_package_id,source_package_version,managed,package_required)
+       VALUES ($1,$2,$3,$4,$5,true,$6,$7,true,$8)
        ON CONFLICT (parent_object_id,relationship_key)
-       DO UPDATE SET child_object_id=EXCLUDED.child_object_id,relationship_type=EXCLUDED.relationship_type,child_field_id=EXCLUDED.child_field_id,active=true`,
-      [parentObjectId, childObjectId, relationship.relationshipKey || relationship.relationship_key, relationship.relationshipType || relationship.relationship_type || "lookup", childFieldId]
+       DO UPDATE SET child_object_id=EXCLUDED.child_object_id,relationship_type=EXCLUDED.relationship_type,child_field_id=EXCLUDED.child_field_id,source_package_id=EXCLUDED.source_package_id,source_package_version=EXCLUDED.source_package_version,managed=true,package_required=EXCLUDED.package_required,active=true`,
+      [parentObjectId, childObjectId, relationship.relationshipKey || relationship.relationship_key, relationship.relationshipType || relationship.relationship_type || "lookup", childFieldId, packageId, packageVersion, relationship.required === true]
     );
   }
 
@@ -493,36 +722,138 @@ export async function provisionPackageMetadata(db, { packageId, moduleId, compan
       `INSERT INTO platform_pages (app_id,company_id,page_key,label,route_path,page_type,definition,active)
        VALUES ($1,$2,$3,$4,$5,'page',$6::jsonb,true)
        ON CONFLICT (app_id,company_id,page_key) DO UPDATE SET label=EXCLUDED.label,route_path=EXCLUDED.route_path,definition=EXCLUDED.definition,active=true,updated_at=NOW()`,
-      [appResult.rows[0].id, companyId || null, pageKey, page.label.trim(), page.routePath || `/app/custom/${pageKey}`, JSON.stringify({ presentation_mode: "landing", runtime_component: page.runtimeComponent || page.runtime_component || null, components: [] })]
+      [appResult.rows[0].id, companyId || null, pageKey, page.label.trim(), page.routePath || `/app/custom/${pageKey}`, JSON.stringify(page.definition || { presentation_mode: "landing", runtime_component: page.runtimeComponent || page.runtime_component || null, components: [] })]
     );
   }
 
-  for (const rule of Array.isArray(manifest.rules) ? manifest.rules : []) {
-    const objectId = objectIds.get(rule.objectKey || rule.object_key);
+  for (const action of Array.isArray(manifest.actions) ? manifest.actions : []) {
+    const objectId = objectIds.get(action.objectKey || action.object_key) || objectIds.values().next().value || null;
+    const actionKey = action.actionKey || action.action_key;
+    const handlerKey = action.handlerKey || action.handler_key;
+    if (!objectId || !safeMetadataKey(String(actionKey || "").replace(/\./g, "_")) || !/^[A-Z][A-Z0-9_]{0,139}$/.test(handlerKey || "") || typeof action.label !== "string" || !action.label.trim()) {
+      throw new Error("Package actions require a declared object, safe action key, registered handler key and label");
+    }
+    const registered = await db(
+      `INSERT INTO platform_registered_actions
+       (company_id,object_id,action_key,label,description,handler_key,required_permission,config,active)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,true)
+       ON CONFLICT (company_id,action_key) WHERE company_id IS NOT NULL
+       DO UPDATE SET object_id=EXCLUDED.object_id,label=EXCLUDED.label,description=EXCLUDED.description,
+         handler_key=EXCLUDED.handler_key,required_permission=EXCLUDED.required_permission,
+         config=COALESCE(platform_registered_actions.config,'{}'::jsonb) || EXCLUDED.config,
+         active=true,updated_at=NOW()
+       WHERE platform_registered_actions.config->>'packageOwned'='true'
+         AND platform_registered_actions.config->>'packageId'=EXCLUDED.config->>'packageId'
+       RETURNING id`,
+      [companyId || null, objectId, actionKey, action.label.trim(), action.description || null, handlerKey, action.requiredPermission || action.required_permission || null, JSON.stringify({ packageOwned: true, packageId })]
+    );
+    if (!registered.rows.length) throw new Error(`Package action key is owned by another declaration: ${actionKey}`);
+  }
+
+  for (const button of Array.isArray(manifest.buttons) ? manifest.buttons : []) {
+    const objectId = objectIds.get(button.objectKey || button.object_key) || objectIds.values().next().value || null;
+    const actionKey = button.actionKey || button.action_key;
+    if (!objectId || !safeMetadataKey(button.buttonKey || button.button_key) || typeof button.label !== "string" || !button.label.trim() || !actionKey) {
+      throw new Error("Package buttons require a declared object, safe key, label and action target");
+    }
+    const registered = await db(
+      `INSERT INTO platform_buttons
+       (company_id,object_id,button_key,label,action_key,placement,visibility_rule,config,active,target_type,target_key,variant,required_permission,input_mappings)
+       VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8::jsonb,true,'action',$5,$9,$10,'{}'::jsonb)
+       ON CONFLICT (company_id,button_key) WHERE company_id IS NOT NULL
+       DO UPDATE SET object_id=EXCLUDED.object_id,label=EXCLUDED.label,action_key=EXCLUDED.action_key,
+         placement=EXCLUDED.placement,visibility_rule=EXCLUDED.visibility_rule,
+         config=COALESCE(platform_buttons.config,'{}'::jsonb) || EXCLUDED.config,
+         active=true,target_type='action',target_key=EXCLUDED.target_key,variant=EXCLUDED.variant,
+         required_permission=EXCLUDED.required_permission,updated_at=NOW()
+       WHERE platform_buttons.config->>'packageOwned'='true'
+         AND platform_buttons.config->>'packageId'=EXCLUDED.config->>'packageId'
+       RETURNING id`,
+      [companyId || null, objectId, button.buttonKey || button.button_key, button.label.trim(), actionKey, button.placement || "record", JSON.stringify(button.visibilityRule || button.visibility_rule || {}), JSON.stringify({ packageOwned: true, packageId, ...(button.config || {}) }), button.variant || "primary", button.requiredPermission || button.required_permission || null]
+    );
+    if (!registered.rows.length) throw new Error(`Package button key is owned by another declaration: ${button.buttonKey || button.button_key}`);
+  }
+
+  const packageRules = [
+    ...(Array.isArray(manifest.rules) ? manifest.rules : []),
+    ...(Array.isArray(manifest.workflows) ? manifest.workflows.map((workflow) => ({
+      ...workflow,
+      name: workflow.name || workflow.label,
+      action: {
+        type: "workflow",
+        match: workflow.match || "all",
+        actions: workflow.actions || [],
+      },
+    })) : []),
+  ];
+  for (const rule of packageRules) {
+    const objectKey = rule.objectKey || rule.object_key;
+    let objectId = objectIds.get(objectKey);
+    if (!objectId) {
+      const external = await db(
+        "SELECT id FROM platform_objects WHERE object_key=$1 AND (company_id IS NULL OR company_id=$2) LIMIT 1",
+        [objectKey, companyId]
+      );
+      objectId = external.rows[0]?.id;
+    }
     if (!objectId || typeof rule.name !== "string" || !safeMetadataKey(rule.triggerKey || rule.trigger_key)) {
       throw new Error("Package rules must reference declared objects with safe trigger keys");
     }
     const existingRule = await db(
-      "SELECT id FROM platform_rules WHERE object_id=$1 AND company_id IS NOT DISTINCT FROM $2 AND name=$3 LIMIT 1",
+      "SELECT id,action FROM platform_rules WHERE object_id=$1 AND company_id IS NOT DISTINCT FROM $2 AND name=$3 LIMIT 1",
       [objectId, companyId || null, rule.name.trim()]
     );
-    if (existingRule.rows.length) continue;
+    const ruleAction = { ...(rule.action || {}), packageKey: manifest.packageKey || rule.packageKey };
+    if (existingRule.rows.length) {
+      continue;
+    }
     await db(
       `INSERT INTO platform_rules
-       (object_id,name,trigger_key,conditions,action,active,company_id)
-       VALUES ($1,$2,$3,$4::jsonb,$5::jsonb,false,$6)`,
+       (object_id,name,trigger_key,conditions,action,active,company_id,lifecycle_status)
+       VALUES ($1,$2,$3,$4::jsonb,$5::jsonb,false,$6,'INACTIVE')`,
       [
         objectId,
         rule.name.trim(),
         rule.triggerKey || rule.trigger_key,
         JSON.stringify(rule.conditions || []),
-        JSON.stringify(rule.action || {}),
+        JSON.stringify(ruleAction),
         companyId || null,
       ]
     );
   }
 
-  return { objects: objectIds.size };
+  const ownedMetadata = await db(
+    `WITH owned AS (
+       SELECT 'object'::text AS metadata_type,id FROM platform_objects WHERE package_id=$1
+       UNION ALL
+       SELECT 'field',f.id FROM platform_fields f JOIN platform_objects o ON o.id=f.object_id WHERE o.package_id=$1
+       UNION ALL
+       SELECT 'relationship',r.id FROM platform_relationships r
+        WHERE r.source_package_id=$1
+       UNION ALL
+       SELECT 'layout',id FROM platform_layouts WHERE source_package_id=$1
+       UNION ALL
+       SELECT 'workflow',id FROM platform_rules WHERE source_package_id=$1
+       UNION ALL
+       SELECT 'report',id FROM platform_reports WHERE source_package_id=$1
+       UNION ALL
+       SELECT 'action',id FROM platform_registered_actions WHERE config->>'packageId'=$1::text
+       UNION ALL
+       SELECT 'button',id FROM platform_buttons WHERE config->>'packageId'=$1::text
+       UNION ALL
+       SELECT 'page',p.id FROM platform_pages p
+         JOIN platform_apps a ON a.id=p.app_id
+        WHERE a.app_key=('package_' || replace($1::text,'-','_'))
+     )
+     INSERT INTO package_metadata_ownership
+       (package_id,package_version,metadata_type,metadata_id,managed,package_required,default_snapshot)
+     SELECT $1,$2,metadata_type,id,true,false,jsonb_build_object('packageVersion',$2)
+       FROM owned
+     ON CONFLICT(package_id,metadata_type,metadata_id) DO UPDATE SET
+       package_version=EXCLUDED.package_version,managed=true,updated_at=NOW()`,
+    [packageId, packageVersion]
+  );
+  return { objects: objectIds.size, ownedMetadata: ownedMetadata.rowCount || 0 };
 }
 
 export async function provisionDefaultCompanyPackages(db, { companyId, installedBy = null, packageKeys = ["retail_pos", "products", "customers"] }) {
@@ -565,12 +896,23 @@ export function seedPackageRegistry(pool) {
       );
       if (!moduleResult.rows.length) continue;
       await pool.query(
-        `INSERT INTO package_registry (package_key,name,version,description,module_id,manifest)
-         VALUES ($1,$2,$3,$4,$5,$6::jsonb)
+        `INSERT INTO package_registry
+         (package_key,name,version,description,module_id,manifest,package_type,publisher,category,visible,installable,billable,system_only,display_order,publication_state)
+         VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7,$8,$9,$10,$11,$12,$13,$14,$15)
          ON CONFLICT (package_key) DO UPDATE SET
            name=EXCLUDED.name, version=EXCLUDED.version, description=EXCLUDED.description,
-           module_id=EXCLUDED.module_id, manifest=EXCLUDED.manifest, active=TRUE, updated_at=NOW()`,
-        [definition.packageKey, definition.name, definition.version, definition.description, moduleResult.rows[0].id, JSON.stringify(definition.manifest)]
+           module_id=EXCLUDED.module_id, manifest=EXCLUDED.manifest, package_type=EXCLUDED.package_type,
+           publisher=EXCLUDED.publisher,category=EXCLUDED.category,visible=EXCLUDED.visible,
+           installable=EXCLUDED.installable,billable=EXCLUDED.billable,system_only=EXCLUDED.system_only,
+           display_order=EXCLUDED.display_order,publication_state=EXCLUDED.publication_state,active=TRUE,updated_at=NOW()`,
+        [
+          definition.packageKey, definition.name, definition.version, definition.description,
+          moduleResult.rows[0].id, JSON.stringify(definition.manifest),
+          definition.manifest.packageType, definition.manifest.publisher, definition.manifest.category,
+          definition.manifest.visibility !== "HIDDEN", definition.manifest.installable !== false,
+          definition.manifest.billable !== false, definition.manifest.systemOnly === true,
+          Number(definition.manifest.displayOrder || 0), definition.manifest.publicationState || "PUBLISHED",
+        ]
       );
       }
       for (const definition of definitions) {
@@ -582,9 +924,17 @@ export function seedPackageRegistry(pool) {
         const dependencyResult = await pool.query("SELECT id FROM package_registry WHERE package_key=$1", [dependencyKey]);
         if (!dependencyResult.rows.length) throw new Error(`Package dependency not found: ${dependencyKey}`);
         await pool.query(
-          `INSERT INTO package_dependencies (package_id,dependency_id,version_range,optional)
-           VALUES ($1,$2,$3,$4)`,
-          [packageResult.rows[0].id, dependencyResult.rows[0].id, typeof dependency === "string" ? null : dependency.versionRange || dependency.version_range || null, typeof dependency === "string" ? false : dependency.optional === true]
+          `INSERT INTO package_dependencies
+           (package_id,dependency_id,version_range,min_version,max_version,optional)
+           VALUES ($1,$2,$3,$4,$5,$6)`,
+          [
+            packageResult.rows[0].id,
+            dependencyResult.rows[0].id,
+            typeof dependency === "string" ? null : dependency.versionRange || dependency.version_range || null,
+            typeof dependency === "string" ? null : dependency.minVersion || dependency.min_version || null,
+            typeof dependency === "string" ? null : dependency.maxVersion || dependency.max_version || null,
+            typeof dependency === "string" ? false : dependency.optional === true,
+          ]
         );
       }
       }

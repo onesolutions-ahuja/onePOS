@@ -259,7 +259,9 @@ describe("7. Shell remains full-width", () => {
   });
 
   test("AdminLayout's flex root gives the shell room, and the dock stays fixed", () => {
-    assert.match(LAYOUT, /className="h-screen bg-slate-100 flex relative"/);
+    /* The Batch 5–6 motion pass added presentation-only surface classes to the
+       flex root; the layout contract (full-height flex row) is unchanged. */
+    assert.match(LAYOUT, /className="h-screen bg-slate-100 flex relative[^"]*"/);
     assert.match(LAYOUT, /<AdminNavDock/);
   });
 

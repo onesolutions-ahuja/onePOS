@@ -64,6 +64,7 @@ test("every existing Platform surface stays reachable", () => {
     workflow: '<WorkflowAdmin',
     "workflow-runs": '<WorkflowRunsAdmin',
     "app-catalog": '<InternalAppCatalog',
+    "approval-builder": '<ApprovalProcessBuilder',
     relationships: '<RelationshipList',
     layouts: '<LayoutList',
     rules: '<RuleList',
@@ -79,6 +80,14 @@ test("every existing Platform surface stays reachable", () => {
   for (const component of ["ObjectEditor", "RelationshipEditor", "RuleEditor", "FieldEditor", "ObjectPage", "LayoutEditor"]) {
     assert.match(platformAdmin, new RegExp(component), `${component} must stay wired`);
   }
+});
+
+test("Approval Processes is registered to the existing builder inside PlatformAdmin", () => {
+  assert.equal(SURFACE_BY_KEY["approval-builder"].view, "approval-builder");
+  assert.equal(SURFACE_KEY_BY_VIEW["approval-builder"], "approval-builder");
+  assert.match(platformAdmin, /import ApprovalProcessBuilder from "\.\/Platform\/ApprovalProcessBuilder\.jsx"/);
+  assert.match(platformAdmin, /if \(view === "approval-builder"\)[\s\S]*?<ApprovalProcessBuilder onMessage=\{onMessage\} onError=\{onError\} \/>/);
+  assert.match(read("src/pages/settings/SettingsAdmin.jsx"), /tab === "Platform" && access\["Platform"\] && <PlatformAdmin/);
 });
 
 test("nothing invents a new Platform surface", () => {
@@ -118,15 +127,17 @@ test("the global rail does not repeat the object-level tabs", () => {
     assert.ok(!labels.includes(objectTab), `${objectTab} belongs to the object, not the platform rail`);
   }
 
-  // The three cross-object lists live under one clearly-labelled group.
+  // The cross-object lists are intentionally kept out of the normal global rail
+  // so the object-scoped configuration remains the canonical place to manage
+  // them. The global shell is limited to the non-duplicated primary surfaces.
   const crossObject = PLATFORM_GROUPS.find((group) => group.label === "Across all objects");
-  assert.deepEqual(crossObject.items.map((item) => item.key), ["all-relationships", "all-forms", "all-rules"]);
+  assert.deepEqual(crossObject.items.map((item) => item.key), []);
 
   const elsewhere = PLATFORM_GROUPS
     .filter((group) => group.label !== "Across all objects")
     .flatMap((group) => group.items.map((item) => item.key));
   for (const key of ["all-relationships", "all-forms", "all-rules"]) {
-    assert.ok(!elsewhere.includes(key), `${key} must be listed once`);
+    assert.ok(!elsewhere.includes(key), `${key} must not be duplicated in the normal global rail`);
   }
 
   // The object's own tabs are still supplied by the object screen.

@@ -12,12 +12,9 @@
  *     shared platform-service stubs so the whole lifecycle still runs
  *     end-to-end (platform-side OTP validation simulated).
  *
- * NOT yet connected (still stubbed, by design - endpoints to be wired after
- * sandbox validation):
- *   - Menu sync: publish/update/unpublish product (Uber menu API
- *     PUT /v1/eats/stores/{store_id}/menus and
- *     POST /v1/eats/stores/{store_id}/menus/items/{item_id})
- *   - Webhook intake: normalizeIncomingOrder (orders.notification webhook)
+ * Menu publishing and store discovery are exposed as registered workflow
+ * actions; the online routes invoke those same actions rather than making
+ * provider calls independently.
  *
  * All Uber API specifics stay in this file + uberClient.js; POS, Products,
  * Reports and AdminLayout never call Uber directly.
@@ -87,7 +84,16 @@ function parseUberWebhookEvent(payload) {
           : payload;
 
   const externalOrderId =
-    resource.order_id ?? resource.orderId ?? resource.uuid ?? payload.order_id ?? payload.orderId ?? null;
+    resource.order_id ??
+    resource.orderId ??
+    resource.resource_id ??
+    resource.resourceId ??
+    resource.uuid ??
+    payload.order_id ??
+    payload.orderId ??
+    payload.resource_id ??
+    payload.resourceId ??
+    null;
   const storeId = resource.store_id ?? resource.storeId ?? payload.store_id ?? payload.storeId ?? null;
   const userId = resource.user_id ?? resource.userId ?? payload.user_id ?? payload.userId ?? null;
   const resourceHref = payload.resource_href || payload.resourceHref || resource.resource_href || null;
@@ -96,8 +102,16 @@ function parseUberWebhookEvent(payload) {
   const normalizedType = String(eventType).toLowerCase();
   if (normalizedType === "store.provisioned") eventKind = "store_provisioned";
   else if (normalizedType === "store.deprovisioned") eventKind = "store_deprovisioned";
-  else if (normalizedType === "orders.notification" || normalizedType.startsWith("orders."))
+  // Uber documents these exact cancellation notifications: orders.failure
+  // for API v1.0 stores and orders.cancel for other store configurations.
+  else if (normalizedType === "orders.cancel" || normalizedType === "orders.failure")
+    eventKind = "order_cancelled";
+  else if (
+    normalizedType === "orders.notification" ||
+    normalizedType === "orders.scheduled.notification"
+  )
     eventKind = externalOrderId ? "order_new" : "order_event";
+  else if (normalizedType.startsWith("orders.")) eventKind = "order_event";
 
   return {
     eventType: String(eventType),
@@ -212,6 +226,7 @@ export function buildMenuPayload(products, { storeId, currency = "GBP" } = {}) {
 
   const groups = new Map();
   const published = [];
+  const validationErrors = [];
   let skippedInactive = 0;
   let missingPrice = 0;
 
@@ -222,9 +237,16 @@ export function buildMenuPayload(products, { storeId, currency = "GBP" } = {}) {
     }
 
     const priceMinor = Math.round((Number(product.price) || 0) * 100);
-    if (!(Number(product.price) > 0)) missingPrice += 1;
+    const invalidFields = [];
+    if (!(Number(product.price) > 0)) {
+      missingPrice += 1;
+      invalidFields.push("price");
+    }
 
     const uberItemId = String(product.uber_item_id || product.id);
+    if (!String(product.name || "").trim()) invalidFields.push("title");
+    if (!product.id) invalidFields.push("product_id");
+    if (invalidFields.length) validationErrors.push({ productId: product.id || null, fields: invalidFields });
     const category = product.category_name || "Uncategorised";
     const categoryId = uberMenuCategoryId(category);
 
@@ -264,6 +286,7 @@ export function buildMenuPayload(products, { storeId, currency = "GBP" } = {}) {
       skippedInactiveCount: skippedInactive,
       missingPriceCount: missingPrice,
       publishedItemIds: published.map((item) => item.id),
+      validationErrors,
     },
   };
 }
@@ -273,12 +296,14 @@ export function buildMenuPayload(products, { storeId, currency = "GBP" } = {}) {
  * current Uber developer docs (Order API suite) - re-verify while testing in
  * the sandbox and adjust here only; nothing else in the codebase knows them.
  */
-const API_ENDPOINTS = {
+export const API_ENDPOINTS = {
   stores: "/v1/eats/stores",
-  menu: (storeId) => `/v1/eats/stores/${encodeURIComponent(storeId)}/menus`,
-  accept: (orderId) => `/v1/eats/orders/${encodeURIComponent(orderId)}/accept_pos_order`,
-  deny: (orderId) => `/v1/eats/orders/${encodeURIComponent(orderId)}/deny_pos_order`,
-  cancel: (orderId) => `/v1/eats/orders/${encodeURIComponent(orderId)}/cancel`,
+  menu: (storeId) => `/v2/eats/stores/${encodeURIComponent(storeId)}/menus`,
+  menuItem: (storeId, itemId) =>
+    `/v2/eats/stores/${encodeURIComponent(storeId)}/menus/items/${encodeURIComponent(itemId)}`,
+  accept: (orderId) => `/v1/delivery/order/${encodeURIComponent(orderId)}/accept`,
+  deny: (orderId) => `/v1/delivery/order/${encodeURIComponent(orderId)}/deny`,
+  cancel: (orderId) => `/v1/delivery/order/${encodeURIComponent(orderId)}/cancel`,
   deliveryStatus: (orderId) => `/v1/eats/orders/${encodeURIComponent(orderId)}/restaurantdelivery/status`,
 };
 
@@ -451,7 +476,12 @@ const uberEatsService = {
       config,
       method: "POST",
       path: API_ENDPOINTS.deny(order.external_order_id),
-      body: reason ? { reason } : null,
+      body: {
+        deny_reason: {
+          info: reason || "Order denied by merchant",
+          type: "OTHER",
+        },
+      },
       action: "REJECT_ORDER",
       orderId: order.id,
     });
@@ -468,7 +498,12 @@ const uberEatsService = {
       config,
       method: "POST",
       path: API_ENDPOINTS.cancel(order.external_order_id),
-      body: reason ? { reason } : null,
+      body: {
+        cancellation_reason: {
+          info: reason || "Order cancelled by merchant",
+          type: "OTHER",
+        },
+      },
       action: "CANCEL_ORDER",
       orderId: order.id,
     });
@@ -533,6 +568,19 @@ const uberEatsService = {
     }
 
     const payload = buildMenuPayload(products, { storeId });
+    if (payload._meta.validationErrors.length) {
+      return {
+        success: false,
+        platform: "uber",
+        action: "MENU_SYNC",
+        code: "INVALID_MENU_PAYLOAD",
+        message: "Uber menu contains products with missing required fields",
+        details: { invalidItems: payload._meta.validationErrors },
+        httpStatus: null,
+        data: null,
+        meta: payload._meta,
+      };
+    }
 
     const response = await uberRequest({
       config,
@@ -568,6 +616,37 @@ const uberEatsService = {
       data: response.data,
       meta: payload._meta,
     };
+  },
+
+  /*
+   * Updates one item after its menu has been uploaded. Uber accepts sparse
+   * updates here; price is in the store currency's minor units.
+   */
+  async updateMenuItem(storeId, itemId, body, config) {
+    if (!isRealApiMode(config)) {
+      return {
+        success: false,
+        platform: "uber",
+        action: "UPDATE_MENU_ITEM",
+        code: "NOT_CONFIGURED",
+        message: "Uber credentials are not configured in Settings - Online Platforms",
+        httpStatus: null,
+        data: null,
+      };
+    }
+    return uberRequest({
+      config,
+      method: "POST",
+      path: API_ENDPOINTS.menuItem(storeId, itemId),
+      body,
+      action: "UPDATE_MENU_ITEM",
+      scope: "eats.store",
+      productId: itemId,
+    });
+  },
+
+  async updateItem(storeId, itemId, body, config) {
+    return this.updateMenuItem(storeId, itemId, body, config);
   },
 
   /*

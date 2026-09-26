@@ -1,6 +1,7 @@
 import express from "express";
 import bcrypt from "bcryptjs";
 import { mergeEntitlements, normaliseEntitlements } from "../services/licensing.js";
+import { reconcileCompanyPackageEntitlements } from "../services/packageEntitlements.js";
 import {
   DUPLICATE_EMAIL_MESSAGE,
   findNormalizedEmailConflict,
@@ -409,6 +410,172 @@ export default function createSuperadminRouter({ authenticate, db, pool, tenantD
     }
     await db("UPDATE tenant_database_configs SET active=true,updated_at=NOW(),updated_by=$1 WHERE company_id=$2", [req.user.id, req.params.id]);
     res.json({ success: true, data: { active: true } });
+  });
+
+  router.get("/superadmin/packages", async (_req, res) => {
+    const result = await db(
+      `SELECT id,package_key,name,version,package_type,publisher,category,publication_state,
+              visible,installable,billable,system_only,display_order,available_tiers,manifest
+         FROM package_registry ORDER BY display_order,name`
+    );
+    res.json({ success: true, data: result.rows });
+  });
+
+  router.put("/superadmin/packages/:packageId/marketplace", async (req, res) => {
+    const body = req.body || {};
+    const validBoolean = ["visible", "installable", "billable", "system_only"].every((key) => body[key] === undefined || typeof body[key] === "boolean");
+    const tiers = body.available_tiers;
+    if (!validBoolean || (tiers !== undefined && (!Array.isArray(tiers) || tiers.some((item) => typeof item !== "string" || !/^[a-z0-9_.-]{1,100}$/i.test(item))))) {
+      return res.status(400).json({ success: false, message: "Invalid package visibility configuration" });
+    }
+    if (body.publication_state !== undefined && !["DRAFT", "PUBLISHED", "RETIRED"].includes(body.publication_state)) {
+      return res.status(400).json({ success: false, message: "Invalid publication state" });
+    }
+    const result = await db(
+      `UPDATE package_registry SET
+         visible=COALESCE($1,visible),installable=COALESCE($2,installable),
+         billable=COALESCE($3,billable),system_only=COALESCE($4,system_only),
+         category=COALESCE($5,category),display_order=COALESCE($6,display_order),
+         available_tiers=COALESCE($7::jsonb,available_tiers),
+         publication_state=COALESCE($8,publication_state),updated_at=NOW()
+       WHERE id=$9 RETURNING id,package_key,visible,installable,billable,system_only,category,display_order,available_tiers,publication_state`,
+      [
+        body.visible ?? null,
+        body.installable ?? null,
+        body.billable ?? null,
+        body.system_only ?? null,
+        body.category ?? null,
+        Number.isInteger(body.display_order) ? body.display_order : null,
+        tiers === undefined ? null : JSON.stringify(tiers),
+        body.publication_state ?? null,
+        req.params.packageId,
+      ]
+    );
+    if (!result.rows.length) return res.status(404).json({ success: false, message: "Package not found" });
+    res.json({ success: true, data: result.rows[0] });
+  });
+
+  router.get("/superadmin/bundles", async (_req, res) => {
+    const result = await db(
+      `SELECT b.*,
+              COALESCE(jsonb_agg(DISTINCT jsonb_build_object(
+                'package_id',p.id,'package_key',p.package_key,'entitlement_type',bp.entitlement_type,'version_range',bp.version_range
+              )) FILTER (WHERE p.id IS NOT NULL),'[]'::jsonb) AS packages,
+              COALESCE((SELECT jsonb_object_agg(be.entitlement_key,be.enabled)
+                         FROM licence_bundle_entitlements be WHERE be.bundle_id=b.id),'{}'::jsonb) AS entitlements
+         FROM licence_bundles b
+         LEFT JOIN licence_bundle_packages bp ON bp.bundle_id=b.id
+         LEFT JOIN package_registry p ON p.id=bp.package_id
+        GROUP BY b.id ORDER BY b.name`
+    );
+    res.json({ success: true, data: result.rows });
+  });
+
+  router.post("/superadmin/bundles", async (req, res) => {
+    const key = String(req.body?.bundle_key || "").trim();
+    const name = String(req.body?.name || "").trim();
+    if (!/^[a-z][a-z0-9_.-]{1,99}$/i.test(key) || !name) {
+      return res.status(400).json({ success: false, message: "A valid bundle key and name are required" });
+    }
+    const result = await db(
+      `INSERT INTO licence_bundles(bundle_key,name,description,active)
+       VALUES($1,$2,$3,COALESCE($4,true))
+       ON CONFLICT(bundle_key) DO UPDATE SET name=EXCLUDED.name,description=EXCLUDED.description,active=EXCLUDED.active,updated_at=NOW()
+       RETURNING *`,
+      [key, name, req.body.description || null, req.body.active]
+    );
+    res.status(201).json({ success: true, data: result.rows[0] });
+  });
+
+  router.put("/superadmin/bundles/:bundleId/composition", async (req, res) => {
+    const packages = req.body?.packages;
+    const entitlements = req.body?.entitlements || {};
+    if (!Array.isArray(packages) || !entitlements || typeof entitlements !== "object" || Array.isArray(entitlements)) {
+      return res.status(400).json({ success: false, message: "packages and entitlements are required" });
+    }
+    const bundle = await db("SELECT id FROM licence_bundles WHERE id=$1", [req.params.bundleId]);
+    if (!bundle.rows.length) return res.status(404).json({ success: false, message: "Bundle not found" });
+    const packageIds = [...new Set(packages.map((item) => String(item?.package_id || "")))];
+    const packageRows = packageIds.length
+      ? await db("SELECT id FROM package_registry WHERE id=ANY($1::uuid[])", [packageIds])
+      : { rows: [] };
+    if (packageRows.rows.length !== packageIds.length) {
+      return res.status(400).json({ success: false, message: "Bundle contains an unknown package" });
+    }
+    const normalizedEntitlements = normaliseEntitlements(entitlements);
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query("DELETE FROM licence_bundle_packages WHERE bundle_id=$1", [req.params.bundleId]);
+      await client.query("DELETE FROM licence_bundle_entitlements WHERE bundle_id=$1", [req.params.bundleId]);
+      for (const item of packages) {
+        const type = item.entitlement_type || "COMMERCIAL";
+        if (!["COMMERCIAL", "REQUIRED_DEPENDENCY", "OPTIONAL"].includes(type)) throw new Error("Invalid bundle package entitlement type");
+        await client.query(
+          "INSERT INTO licence_bundle_packages(bundle_id,package_id,entitlement_type,version_range) VALUES($1,$2,$3,$4)",
+          [req.params.bundleId, item.package_id, type, item.version_range || null]
+        );
+      }
+      for (const [entitlementKey, enabled] of Object.entries(normalizedEntitlements)) {
+        await client.query(
+          "INSERT INTO licence_bundle_entitlements(bundle_id,entitlement_key,enabled) VALUES($1,$2,$3)",
+          [req.params.bundleId, entitlementKey, enabled]
+        );
+      }
+      await client.query("COMMIT");
+      res.json({ success: true, data: { bundleId: req.params.bundleId, packages, entitlements: normalizedEntitlements } });
+    } catch (error) {
+      await client.query("ROLLBACK");
+      res.status(400).json({ success: false, message: error.message || "Unable to update bundle composition" });
+    } finally {
+      client.release();
+    }
+  });
+
+  router.put("/superadmin/companies/:id/bundles", async (req, res) => {
+    const bundleIds = req.body?.bundleIds;
+    if (!Array.isArray(bundleIds) || bundleIds.some((id) => typeof id !== "string")) {
+      return res.status(400).json({ success: false, message: "bundleIds must be an array" });
+    }
+    const company = await db("SELECT id FROM companies WHERE id=$1", [req.params.id]);
+    if (!company.rows.length) return res.status(404).json({ success: false, message: "Company not found" });
+    const uniqueIds = [...new Set(bundleIds)];
+    const bundles = uniqueIds.length
+      ? await db("SELECT id FROM licence_bundles WHERE id=ANY($1::uuid[]) AND active=true", [uniqueIds])
+      : { rows: [] };
+    if (bundles.rows.length !== uniqueIds.length) return res.status(400).json({ success: false, message: "One or more bundles are unavailable" });
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query("UPDATE company_bundle_assignments SET active=false,updated_at=NOW() WHERE company_id=$1", [req.params.id]);
+      for (const bundleId of uniqueIds) {
+        await client.query(
+          `INSERT INTO company_bundle_assignments(company_id,bundle_id,active,assigned_by)
+           VALUES($1,$2,true,$3)
+           ON CONFLICT(company_id,bundle_id) DO UPDATE SET active=true,assigned_by=EXCLUDED.assigned_by,updated_at=NOW()`,
+          [req.params.id, bundleId, req.user.id]
+        );
+      }
+      await reconcileCompanyPackageEntitlements((query, params) => client.query(query, params), req.params.id);
+      await client.query("COMMIT");
+      res.json({ success: true, data: { companyId: req.params.id, bundleIds: uniqueIds } });
+    } catch (error) {
+      await client.query("ROLLBACK");
+      console.error("Bundle assignment update error:", error);
+      res.status(500).json({ success: false, message: "Unable to update company bundle assignments" });
+    } finally {
+      client.release();
+    }
+  });
+
+  router.get("/superadmin/companies/:id/entitlement-sources", async (req, res) => {
+    try {
+      const data = await reconcileCompanyPackageEntitlements(db, req.params.id);
+      res.json({ success: true, data });
+    } catch (error) {
+      console.error("Package entitlement provenance load error:", error);
+      res.status(500).json({ success: false, message: "Unable to load package entitlement sources" });
+    }
   });
 
   return router;

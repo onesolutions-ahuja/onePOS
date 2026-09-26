@@ -25,9 +25,15 @@ const MENU = fs.readFileSync(
   new URL("../src/pages/reports/ReportPage.jsx", import.meta.url),
   "utf8"
 );
+const CATALOGUE = fs.readFileSync(
+  new URL("../src/utils/navCatalogue.js", import.meta.url),
+  "utf8"
+);
 
 test("Reports entry exists in the Admin sidebar items list", () => {
-  assert.match(SRC, /\["Reports",\s*BarChart3\]/, "nav items must include Reports with its icon");
+  /* The floating dock replaced the left sidebar; the ONE page catalogue
+     (utils/navCatalogue.js) owns the Reports nav entry with its icon. */
+  assert.match(CATALOGUE, /\["Reports",\s*BarChart3\]/, "nav items must include Reports with its icon");
 });
 
 test("every granular report carries a reports.* permission (no broad report.view)", () => {

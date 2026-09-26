@@ -31,9 +31,12 @@ test("dock bar is 60px tall with a 65px orb — one shared source", () => {
      the admin /app pages and the till render the same dock, so there is no
      per-surface offset any more. Safe-area handling stays in the CSS. */
   assert.match(dockSource, /rounded-\[32px\]/);
-  assert.match(dockSource, /admin-nav-dock-root inset-x-0 flex justify-center bottom-\[12px\]/);
+  assert.match(dockSource, /admin-nav-dock-root inset-x-0 flex justify-center/);
+  assert.doesNotMatch(dockSource, /admin-nav-dock-root[^"]*bottom-/);
   assert.match(dockCss, /--dock-bottom: 12px/);
-  assert.match(dockCss, /bottom: max\(var\(--dock-bottom\), env\(safe-area-inset-bottom\)\)/);
+  assert.match(dockCss, /--dock-offset-bottom: max\(var\(--dock-bottom\), calc\(env\(safe-area-inset-bottom, 0px\) \+ var\(--dock-bottom\)\)\)/);
+  assert.match(dockCss, /padding-inline: max\(8px, env\(safe-area-inset-left, 0px\), env\(safe-area-inset-right, 0px\)\)/);
+  assert.match(dockCss, /bottom: var\(--dock-offset-bottom\)/);
   assert.doesNotMatch(dockSource, /isTill/);
 });
 
@@ -81,6 +84,44 @@ test("ONE canonical dock serves the admin pages and the till", () => {
   assert.doesNotMatch(posSource, /BottomStatusBar/);
 });
 
+test("the status bar and scrollable shell share exact dock clearance", () => {
+  const statusBar = readFileSync(new URL("../src/components/BottomStatusBar.jsx", import.meta.url), "utf8");
+  const indexCss = readFileSync(new URL("../src/index.css", import.meta.url), "utf8");
+  assert.match(statusBar, /bottom: "calc\(var\(--dock-offset-bottom,[\s\S]*?var\(--dock-height, 60px\) \+ 6px\)"/);
+  assert.match(indexCss, /padding-bottom: calc\(var\(--dock-height, 60px\) \+ var\(--dock-offset-bottom,[\s\S]*?42px \+ 26px\)/);
+  assert.match(indexCss, /padding-bottom: calc\(var\(--dock-height, 60px\) \+ var\(--dock-offset-bottom,[\s\S]*?42px \+ 20px\)/);
+});
+
+test("responsive dock wings stay single-row, scrollable, and touch-reachable", () => {
+  assert.match(dockSource, /TABLET_QUERY = "\(max-width: 900px\)"/);
+  assert.match(dockSource, /TABLET_SLOT_LIMIT = 4/);
+  assert.match(dockSource, /EXTRA_COMPACT_QUERY = "\(max-width: 360px\)"/);
+  assert.match(dockSource, /EXTRA_COMPACT_SLOT_LIMIT = 1/);
+  assert.match(dockCss, /@media \(max-width: 900px\)[\s\S]*?--dock-slot-width: clamp\(64px, 8vw, 76px\)/);
+  assert.match(dockCss, /@media \(max-width: 640px\)[\s\S]*?--dock-slot-width: clamp\(48px, 12vw, 58px\)/);
+  assert.match(dockCss, /@media \(max-width: 480px\)[\s\S]*?overflow-x: auto;[\s\S]*?overflow-y: hidden;[\s\S]*?touch-action: pan-x/);
+  assert.doesNotMatch(dockCss, /@media \(max-width: 480px\)[\s\S]*?overflow: hidden/);
+  assert.match(dockCss, /min-width: 48px;[\s\S]*?min-height: 48px/);
+  assert.match(dockSource, /aria-label=\{title \|\| label\}/);
+  assert.match(dockSource, /title=\{title \|\| label\}/);
+  assert.match(dockSource, /<DockSlot[\s\S]*?label="Apps"/);
+  assert.match(dockSource, /<DockSlot[\s\S]*?label="Settings"/);
+  assert.match(dockSource, /label=\{surface === "till" \? "Admin" : "Till"\}/);
+});
+
+test("Jarvis pocket and overlay follow responsive and safe-area dock metrics", () => {
+  assert.match(dockCss, /@media \(max-width: 640px\)[\s\S]*?--dock-center-zone: clamp\(64px, 12vw, 82px\)/);
+  assert.match(dockCss, /@media \(max-width: 480px\)[\s\S]*?--dock-center-zone: clamp\(56px, 16vw, 76px\)/);
+  assert.match(jarvisSource, /@media \(max-width: 640px\)[\s\S]*?--jarvis-orb-size: 46px/);
+  assert.match(jarvisSource, /\.jarvis-corner\.jarvis-dock-anchor \.jarvis-mic-status--corner \{[\s\S]*width: 10px;[\s\S]*height: 10px/);
+  assert.match(jarvisSource, /\.jarvis-corner\.jarvis-dock-anchor \.jarvis-mic-status--corner > svg \{[\s\S]*display: none/);
+  assert.match(jarvisSource, /padding: 0\.75rem 0\.75rem calc\(var\(--dock-height\) \+ var\(--dock-offset-bottom/);
+  assert.match(jarvisSource, /bottom: calc\(var\(--dock-height\) \+ var\(--dock-offset-bottom/);
+  assert.match(dockSource, /bottom-\[calc\(var\(--dock-height\)\+var\(--dock-offset-bottom\)\+16px\)\]/);
+  assert.match(readFileSync(new URL("../index.html", import.meta.url), "utf8"), /viewport-fit=cover/);
+  assert.match(appSource, /pb-\[calc\(var\(--dock-height\)\+var\(--dock-offset-bottom\)\+32px\)\]/);
+});
+
 test("nothing rises behind JARVIS — the dockbar stays one continuous surface", () => {
   /* The raised/curved rectangular pedestal (a ::before tab above the bar) is
      removed; the centre zone keeps only the soft contact shadow of the orb. */
@@ -103,9 +144,9 @@ test("offline state reuses the authoritative connectivity source and only shadow
   assert.match(dockSource, /data-connectivity=\{offline \? "offline" : "online"\}/);
   /* CSS: the normal dock shadow plus a subtle red outer glow — no red dock,
      no icon colour change, and the rule only fires while offline. */
-  assert.match(dockCss, /--dock-offline-shadow: 0 0 0 1px rgba\(248,113,113,\.34\), 0 0 20px 3px rgba\(248,113,113,\.26\)/);
-  assert.match(dockCss, /\.admin-nav-dock\[data-connectivity="offline"\] \{ box-shadow: var\(--dock-offline-shadow\)/);
-  assert.match(dockCss, /--dock-shadow: 0 14px 40px rgba\(4,26,24,\.45\)/);
+  assert.match(dockCss, /--dock-offline-shadow:\s*0 0 0 1px rgba\(248,113,113,\.34\),\s*0 0 20px 3px rgba\(248,113,113,\.26\),\s*0 14px 40px rgba\(4,26,24,\.45\),\s*0 3px 10px rgba\(4,26,24,\.30\),\s*inset 0 1px 0 rgba\(255,255,255,\.10\)/);
+  assert.match(dockCss, /\.admin-nav-dock\[data-connectivity="offline"\]\s*\{\s*box-shadow: var\(--dock-offline-shadow\)/);
+  assert.match(dockCss, /--dock-shadow:\s*0 14px 40px rgba\(4,26,24,\.45\)/);
 });
 
 test("dock JARVIS panel is an above-dock overlay with Escape support", () => {
@@ -115,9 +156,9 @@ test("dock JARVIS panel is an above-dock overlay with Escape support", () => {
   assert.match(panelSource, /event\.key === "Escape"/);
   assert.match(jarvisSource, /\.jarvis-panel-overlay \{[\s\S]*z-index: 960/);
   assert.match(jarvisSource, /\.jarvis-panel-overlay--dock \{[\s\S]*justify-content: center/);
-  assert.match(jarvisSource, /calc\(var\(--dock-height\) \+ 16px \+ env\(safe-area-inset-bottom\)\)/);
+  assert.match(jarvisSource, /calc\(var\(--dock-height\) \+ var\(--dock-offset-bottom,[\s\S]*?\) \+ 16px\)/);
   assert.match(jarvisSource, /\.jarvis-panel-overlay \{[\s\S]*pointer-events: none/);
-  assert.match(jarvisSource, /\.jarvis-panel-overlay--dock > \.jarvis-panel-backdrop \{[\s\S]*bottom: calc\(var\(--dock-height\) \+ 16px \+ env\(safe-area-inset-bottom\)\)/);
+  assert.match(jarvisSource, /\.jarvis-panel-overlay--dock > \.jarvis-panel-backdrop \{[\s\S]*bottom: calc\(var\(--dock-height\) \+ var\(--dock-offset-bottom,[\s\S]*?\) \+ 16px\)/);
   assert.match(jarvisSource, /\.jarvis-panel-overlay--dock > \[data-testid="jarvis-panel"\] \{[\s\S]*pointer-events: auto/);
 });
 

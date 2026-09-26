@@ -118,10 +118,17 @@ export default function RuleList({
       return "—";
     }
     if (typeof action === "object") {
-      return action.type || action.name || "Configured action";
+      const type = action.type || action.name || "";
+      /* Workflow action payloads carry machine keys (SEND_SMS, RUN_SUBFLOW,
+         CREATE_RECORD…) — present them in words like the flow builders. */
+      return type ? humanizeKey(type) : "Configured action";
     }
 
-    return action
+    return humanizeKey(action);
+  }
+
+  function humanizeKey(value) {
+    return String(value || "")
       .replaceAll("_", " ")
       .replace(/\b\w/g, (letter) =>
         letter.toUpperCase()

@@ -21,6 +21,9 @@ const read = (rel) => fs.readFileSync(new URL(rel, import.meta.url), "utf8");
 const MODAL = read("../src/components/RecordModal.jsx");
 const LOGIC = read("../src/utils/recordModal.js");
 const INDEX_CSS = read("../src/index.css");
+const OBJECT_PAGE = read("../src/pages/settings/Platform/ObjectPage.jsx");
+const CUSTOMERS = read("../src/pages/customers/CustomersAdmin.jsx");
+const FORM_RENDERER = read("../src/pages/settings/Platform/FormRenderer.jsx");
 const CHANGE_PW = read("../src/pages/settings/ChangePasswordModal.jsx");
 const USER_FORM = read("../src/pages/settings/UserFormModal.jsx");
 const SETTINGS_ADMIN = read("../src/pages/settings/SettingsAdmin.jsx");
@@ -44,6 +47,30 @@ describe("1. unsaved-change guard", () => {
     const closes = resolveCloseIntent({ dirty: false, confirmDiscard: () => { asked += 1; return true; } });
     assert.equal(closes, true);
     assert.equal(asked, 0, "must not prompt when nothing changed");
+  });
+
+  describe("record modal ownership", () => {
+    test("ObjectPage owns one mutually exclusive create, quick-create, or edit modal", () => {
+      assert.match(OBJECT_PAGE, /const \[recordModal, setRecordModal\] = useState\(null\)/);
+      assert.doesNotMatch(OBJECT_PAGE, /const \[(?:creating|quickCreating|editingRecord), set/);
+      assert.match(OBJECT_PAGE, /recordModal\?\.type === "create"/);
+      assert.match(OBJECT_PAGE, /recordModal\?\.type === "quick_create"/);
+      assert.match(OBJECT_PAGE, /recordModal\?\.type === "edit"/);
+      assert.match(OBJECT_PAGE, /setRecordModal\(\{ type: "edit" \}\)/);
+    });
+
+    test("customer create/edit and view replace one another instead of stacking", () => {
+      assert.match(CUSTOMERS, /const \[recordModal, setRecordModal\] = useState\(null\)/);
+      assert.match(CUSTOMERS, /recordModal\?\.type === "form"/);
+      assert.match(CUSTOMERS, /recordModal\?\.type === "view"/);
+      assert.doesNotMatch(CUSTOMERS, /formCustomer|detailCustomer/);
+    });
+
+    test("create/edit remain editable while view fields are read-only", () => {
+      assert.match(FORM_RENDERER, /const editing = mode === "create" \|\| mode === "edit" \|\| mode === "quick_create"/);
+      assert.doesNotMatch(FORM_RENDERER, /readOnly=\{mode === "view"\}/);
+      assert.match(CUSTOMERS, /mode=\{recordModal\.customer\?\.id \? "edit" : "quick_create"\}/);
+    });
   });
 
   test("a dirty form prompts and closes only when the user confirms", () => {
@@ -220,9 +247,11 @@ describe("3. modal presentation comes from shared tokens", () => {
     }
   });
 
-  test("the overlay sits above the dock, status bar and mobile drawer", () => {
+  test("the overlay sits above the dock, JARVES and the whole app shell", () => {
+    /* 1020 clears the fixed dockbar (900) and the JARVES panel (960), so an
+       open dialog always overlays — and blocks — dock navigation. */
     const overlay = MODAL_CSS.slice(0, MODAL_CSS.indexOf(".onepos-modal {"));
-    assert.match(overlay, /z-index: 80/);
+    assert.match(overlay, /z-index: 1020/);
   });
 
   test("a shared touch floor keeps Compact usable without per-component branching", () => {

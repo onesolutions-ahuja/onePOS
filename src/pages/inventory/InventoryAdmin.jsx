@@ -1,10 +1,32 @@
 import { useEffect, useState } from "react";
-import { Calculator, History, RefreshCw, Search, X } from "lucide-react";
+import { Calculator, History, PackagePlus, RefreshCw, X } from "lucide-react";
 import { apiRequest } from "../../services/api.js";
+import ObjectList from "../../components/records/ObjectList.jsx";
 import { normaliseProduct, getStockStatus } from "../../utils/formatters.js";
 import StockAdjustmentModal from "./StockAdjustmentModal.jsx";
 import StockByStore from "./StockByStore.jsx";
 import StockTransfers from "./StockTransfers.jsx";
+
+/* Column formatting for the shared global list — data shaping only, the
+   presentation (header, spacing, pills, primary link, actions) is ObjectList. */
+const INVENTORY_COLUMNS = [
+  { key: "name", label: "Product", primary: true },
+  { key: "sku", label: "SKU", format: (value) => value || "-" },
+  { key: "barcode", label: "Barcode", format: (value) => value || "-" },
+  { key: "category", label: "Category", format: (value) => value || "All" },
+  { key: "stock", label: "Current Stock", format: (value) => String(value ?? 0) },
+  { key: "price", label: "Price", format: (value) => `£${Number(value || 0).toFixed(2)}` },
+  {
+    key: "stock",
+    label: "Stock Status",
+    format: (_value, product) => getStockStatus(product).label,
+    pill: (_value, product) => {
+      const label = getStockStatus(product).label;
+      return label === "Out of Stock" ? "danger" : label === "Low Stock" ? "warning" : "success";
+    },
+  },
+];
+
 function ReconciliationModal({ data, onClose }) {
   return <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4"><div className="onepos-card w-[850px] max-w-full max-h-[85vh] flex flex-col"><div className="onepos-card-header"><div><h2 className="font-bold text-lg">Stock Reconciliation</h2><p className="text-xs text-slate-500">{data.product}</p></div><button onClick={onClose} title="Close"><X size={18} /></button></div><div className="p-4 overflow-auto"><div className={`p-3 rounded text-sm mb-4 ${data.mismatch ? "bg-red-50 text-red-700" : "bg-emerald-50 text-emerald-700"}`}>{data.mismatch ? "Stock balance mismatch" : "Stock balance matches ledger"} <span className="ml-3">Current {data.currentStock} · Ledger {data.ledgerBalance}</span></div><table className="onepos-table"><thead><tr className="bg-slate-50">{["Date/time", "Type", "Quantity", "Balance", "Reference", "User", "Reason"].map((heading) => <th key={heading} className="text-left px-3 py-2 text-xs uppercase text-slate-500">{heading}</th>)}</tr></thead><tbody>{(data.movements || []).map((movement, index) => <tr key={`${movement.created_at}-${index}`} className="border-t"><td className="px-3 py-2 text-xs">{new Date(movement.created_at).toLocaleString()}</td><td className="px-3 py-2 text-sm font-semibold">{movement.movement_type}</td><td className="px-3 py-2 text-sm">{movement.quantity_change}</td><td className="px-3 py-2 text-sm font-semibold">{movement.balance_after}</td><td className="px-3 py-2 text-xs">{movement.reference_type || "-"}</td><td className="px-3 py-2 text-sm">{movement.username || "-"}</td><td className="px-3 py-2 text-sm">{movement.reason || "-"}</td></tr>)}</tbody></table></div></div></div>;
 }
@@ -159,15 +181,18 @@ function InventoryAdmin() {
               </p>
             </div>
 
-            <button
-              onClick={loadProducts}
-              className="onepos-btn onepos-btn-secondary"
-            >
-              <RefreshCw size={16} />
-              Refresh
-            </button>
+            <div className="onepos-page-header-actions">
+              <button
+                onClick={loadProducts}
+                className="onepos-btn onepos-btn-secondary"
+              >
+                <RefreshCw size={16} />
+                Refresh
+              </button>
+            </div>
           </div>
 
+          {/* Same tabular segmented pattern the admin uses everywhere. */}
           <div className="mb-4 inline-flex rounded-lg border border-slate-200 overflow-hidden">
             <button
               onClick={() => setStockView("products")}
@@ -209,23 +234,6 @@ function InventoryAdmin() {
           )}
 
           <div className="onepos-card overflow-hidden">
-            <div className="onepos-toolbar">
-              <div className="flex items-center gap-3">
-                <div className="relative max-w-md flex-1">
-                  <Search
-                    size={18}
-                    className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"
-                  />
-                  <input
-                    value={search}
-                    onChange={(event) => setSearch(event.target.value)}
-                    placeholder="Search product, SKU or barcode..."
-                    className="onepos-input pl-10"
-                  />
-                </div>
-              </div>
-            </div>
-
             {stockView === "byStore" ? (
               <StockByStore />
             ) : stockView === "transfers" ? (
@@ -235,100 +243,46 @@ function InventoryAdmin() {
                 <RefreshCw size={28} className="mx-auto mb-3 animate-spin" />
                 Loading inventory...
               </div>
-            ) : filteredProducts.length === 0 ? (
-              <div className="onepos-empty">
-                <Package size={40} className="mx-auto mb-3" />
-                <div className="onepos-empty-title">No products found</div>
-                <div className="text-sm mt-1">Try a different search.</div>
-              </div>
             ) : (
-              <div className="overflow-x-auto">
-                <table className="onepos-table">
-                  <thead>
-                    <tr>
-                      {[
-                        "Product",
-                        "SKU",
-                        "Barcode",
-                        "Category",
-                        "Current Stock",
-                        "Price",
-                        "Stock Status",
-                        "Action",
-                      ].map((heading) => (
-                        <th
-                          key={heading}
-                          className="text-left px-4 py-3 text-xs font-semibold text-slate-500 uppercase"
-                        >
-                          {heading}
-                        </th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {filteredProducts.map((product) => {
-                      const status = getStockStatus(product);
-
-                      return (
-                        <tr
-                          key={product.id}
-                          className="border-b border-slate-100 hover:bg-slate-50"
-                        >
-                          <td className="px-4 py-4 font-medium text-sm">
-                            {product.name}
-                          </td>
-                          <td className="px-4 py-4 text-sm text-slate-600">
-                            {product.sku || "-"}
-                          </td>
-                          <td className="px-4 py-4 text-sm text-slate-600">
-                            {product.barcode || "-"}
-                          </td>
-                          <td className="px-4 py-4 text-sm text-slate-600">
-                            {product.category}
-                          </td>
-                          <td className="px-4 py-4 text-sm font-semibold">
-                            {product.stock}
-                          </td>
-                          <td className="px-4 py-4 text-sm font-semibold">
-                            £{product.price.toFixed(2)}
-                          </td>
-                          <td className="px-4 py-4">
-                            <span className={`px-2.5 py-1 rounded-full text-xs font-medium ${status.className}`}>
-                              {status.label}
-                            </span>
-                          </td>
-                          <td className="px-4 py-4 whitespace-nowrap">
-                            <button
-                              onClick={() => loadMovements(product)}
-                              className="p-2 text-slate-500 hover:bg-slate-100 rounded-lg"
-                              title="View movement history"
-                            >
-                              <History size={17} />
-                            </button>
-                            <button
-                              onClick={() => {
-                                setError("");
-                                setMessage("");
-                                setAdjustingProduct(product);
-                              }}
-                              className="ml-1 px-3 py-2 bg-blue-50 text-blue-700 rounded-lg text-sm font-medium hover:bg-blue-100"
-                            >
-                              Adjust stock
-                            </button>
-                            <button
-                              onClick={() => loadReconciliation(product)}
-                              className="ml-1 p-2 text-slate-500 hover:bg-slate-100 rounded-lg"
-                              title="Reconcile stock"
-                            >
-                              <Calculator size={16} />
-                            </button>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
+              <ObjectList
+                records={filteredProducts}
+                columns={INVENTORY_COLUMNS}
+                searchValue={search}
+                onSearchChange={setSearch}
+                searchPlaceholder="Search product, SKU or barcode..."
+                emptyMessage="No products found"
+                emptyHint="Try a different search."
+                onOpenRecord={loadMovements}
+                renderActions={(product) => (
+                  <div className="inline-flex items-center gap-0.5 whitespace-nowrap">
+                    <button
+                      onClick={() => loadMovements(product)}
+                      className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-500"
+                      title="View movement history"
+                    >
+                      <History size={16} />
+                    </button>
+                    <button
+                      onClick={() => loadReconciliation(product)}
+                      className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-500"
+                      title="Reconcile stock"
+                    >
+                      <Calculator size={16} />
+                    </button>
+                    <button
+                      onClick={() => {
+                        setError("");
+                        setMessage("");
+                        setAdjustingProduct(product);
+                      }}
+                      className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-500"
+                      title="Adjust stock"
+                    >
+                      <PackagePlus size={16} />
+                    </button>
+                  </div>
+                )}
+              />
             )}
           </div>
 

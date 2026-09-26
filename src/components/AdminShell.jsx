@@ -6,23 +6,13 @@ import {
   ChevronDown,
   LogOut,
   Monitor,
-  Moon,
-  Palette,
   PanelLeft,
   Settings,
   Store,
-  Sun,
   UserCircle,
 } from "lucide-react";
 import { groupNavItems } from "../utils/adminApps.js";
-import {
-  ACCENT_OPTIONS,
-  APPEARANCE_OPTIONS,
-  DEFAULT_PREFERENCES,
-  applyPreferences,
-  clearPreferences,
-  normalizePreferences,
-} from "../utils/adminPreferences.js";
+import { applyPreferences, clearPreferences, DEFAULT_PREFERENCES } from "../utils/adminPreferences.js";
 import PlatformSearch from "./PlatformSearch.jsx";
 
 export function useAdminAppearance(prefs) {
@@ -145,53 +135,7 @@ function NavigationMenu({ groups, page, onNavigate }) {
   );
 }
 
-function AppearanceMenu({ prefs, onChange }) {
-  const [open, setOpen] = useState(false);
-  const rootRef = useRef(null);
-
-  useEffect(() => {
-    if (!open) return undefined;
-    const onPointerDown = (event) => { if (rootRef.current && !rootRef.current.contains(event.target)) setOpen(false); };
-    const onKeyDown = (event) => { if (event.key === "Escape") setOpen(false); };
-    document.addEventListener("mousedown", onPointerDown);
-    document.addEventListener("keydown", onKeyDown);
-    return () => { document.removeEventListener("mousedown", onPointerDown); document.removeEventListener("keydown", onKeyDown); };
-  }, [open]);
-
-  const set = (patch) => onChange({ ...normalizePreferences(prefs), ...patch });
-
-  return (
-    <div className="relative" ref={rootRef}>
-      <button type="button" onClick={() => setOpen((value) => !value)} aria-haspopup="menu" aria-expanded={open} aria-label="Display preferences" title="Display preferences" data-testid="appearance-menu-button" className="rounded p-2 hover:bg-black/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500" style={{ color: "var(--onepos-text-body)" }}>
-        <Palette size={18} />
-      </button>
-      {open && (
-        <div role="menu" aria-label="Display preferences" data-testid="appearance-menu" className="absolute right-0 top-full z-[80] mt-2 w-64 rounded-xl border p-3 shadow-xl" style={{ backgroundColor: "var(--onepos-surface-raised)", borderColor: "var(--onepos-border)" }}>
-          <div className="mb-2 text-[10px] font-bold uppercase tracking-[0.14em]" style={{ color: "var(--onepos-text-muted)" }}>Layout</div>
-          <div className="mb-3 flex gap-1" role="radiogroup" aria-label="Layout preset">
-            {APPEARANCE_OPTIONS.map((key) => (
-              <button key={key} type="button" role="radio" aria-checked={prefs.appearance === key} onClick={() => set({ appearance: key })} data-testid={`appearance-${key}`} className="flex-1 rounded-md border px-2 py-1.5 text-xs font-medium capitalize focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500" style={{ borderColor: prefs.appearance === key ? "var(--onepos-accent-600)" : "var(--onepos-border)", backgroundColor: prefs.appearance === key ? "var(--onepos-accent-soft)" : "transparent", color: "var(--onepos-text-primary)" }}>
-                {key}
-              </button>
-            ))}
-          </div>
-          <div className="mb-2 text-[10px] font-bold uppercase tracking-[0.14em]" style={{ color: "var(--onepos-text-muted)" }}>Accent</div>
-          <div className="mb-3 flex gap-2" role="radiogroup" aria-label="Accent color">
-            {ACCENT_OPTIONS.map((key) => (
-              <button key={key} type="button" role="radio" aria-checked={prefs.accent === key} aria-label={String(key) + " accent"} title={String(key) + " accent"} onClick={() => set({ accent: key })} data-testid={`accent-${key}`} className="h-6 w-6 rounded-full border-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500" style={{ background: "hsl(" + (key === "teal" ? 175 : key === "violet" ? 255 : key === "rose" ? 345 : key === "amber" ? 40 : 210) + " 55% 40%)", borderColor: prefs.accent === key ? "var(--onepos-text-primary)" : "transparent" }} />
-            ))}
-          </div>
-          <div className="flex items-center justify-between gap-2">
-            <button type="button" onClick={() => set({ appearance: "light" })} className="flex items-center gap-2 rounded-md border px-2 py-1.5 text-xs font-medium hover:bg-black/5" style={{ borderColor: "var(--onepos-border)", color: "var(--onepos-text-primary)" }}><Sun size={14} />Light</button>
-            <button type="button" onClick={() => set({ appearance: "dark" })} className="flex items-center gap-2 rounded-md border px-2 py-1.5 text-xs font-medium hover:bg-black/5" style={{ borderColor: "var(--onepos-border)", color: "var(--onepos-text-primary)" }}><Moon size={14} />Dark</button>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-export default function AdminShell({ page, apps = [], items = [], reportItems = [], prefs = DEFAULT_PREFERENCES, onPrefsChange, onNavigate, onNavigateAppRoute, onOpenTill, onLogout, onOpenSettings, onResetPassword, onlineOrderCount = 0, onOpenOnlineOrders, user = null, storeName, children }) {
+export default function AdminShell({ page, apps = [], items = [], reportItems = [], prefs = DEFAULT_PREFERENCES, onPrefsChange, onNavigate, onNavigateAppRoute, onOpenTill, onLogout, onOpenSettings, onResetPassword, onOpenProfile, onlineOrderCount = 0, onOpenOnlineOrders, onOpenNotifications, notificationCount = 0, user = null, storeName, children }) {
   const groups = useMemo(() => groupNavItems(items), [items]);
   useAdminAppearance(prefs);
   const displayName = user?.fullName || user?.name || user?.username || "User";
@@ -219,12 +163,10 @@ export default function AdminShell({ page, apps = [], items = [], reportItems = 
           <div className="hidden min-w-0 flex-1 justify-center md:flex"><PlatformSearch /></div>
           <div className="flex shrink-0 items-center gap-0.5">
             <div className="md:hidden"><PlatformSearch mobile /></div>
-            <button type="button" onClick={onOpenOnlineOrders} aria-label={"Online orders" + (onlineOrderCount > 0 ? " (" + onlineOrderCount + " new)" : "")} title="Online Orders" data-testid="header-online-orders" className="relative rounded p-2 hover:bg-black/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500" style={{ color: "var(--onepos-text-body)" }}>
+            <button type="button" onClick={onOpenNotifications || onOpenOnlineOrders} aria-label={"Notifications" + (notificationCount > 0 ? " (" + notificationCount + " new)" : "")} title="Notifications" data-testid="header-notifications" className="relative rounded p-2 hover:bg-black/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500" style={{ color: "var(--onepos-text-body)" }}>
               <Bell size={18} />
-              {onlineOrderCount > 0 && (<span className="absolute -top-0.5 -right-0.5 min-w-[17px] h-[17px] px-0.5 rounded-full text-[10px] font-bold leading-[17px] text-white" style={{ backgroundColor: "#dc2626" }}>{onlineOrderCount > 99 ? "99+" : onlineOrderCount}</span>)}
+              {(notificationCount > 0 || onlineOrderCount > 0) && (<span className="absolute -top-0.5 -right-0.5 min-w-[17px] h-[17px] px-0.5 rounded-full text-[10px] font-bold leading-[17px] text-white" style={{ backgroundColor: "#dc2626" }}>{Math.max(notificationCount, onlineOrderCount) > 99 ? "99+" : Math.max(notificationCount, onlineOrderCount)}</span>)}
             </button>
-            <AppearanceMenu prefs={prefs} onChange={onPrefsChange} />
-            <button type="button" onClick={onOpenSettings} aria-label="Settings" title="Settings" data-testid="header-settings" className="rounded p-2 hover:bg-black/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500" style={{ color: "var(--onepos-text-body)" }}><Settings size={18} /></button>
             <button type="button" onClick={onOpenTill} aria-label="Open Till" title="Open Till" data-testid="header-open-till" className="flex items-center gap-1.5 rounded-md px-2.5 text-[13px] font-medium text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-1" style={{ backgroundColor: "var(--onepos-accent-600)", height: "var(--onepos-control-height, 38px)" }}><Store size={15} /><span className="hidden lg:inline">Open Till</span></button>
             <div className="relative" ref={profileRef}>
               <button type="button" onClick={() => setProfileOpen((value) => !value)} aria-haspopup="menu" aria-expanded={profileOpen} aria-label="User menu" title={displayName} data-testid="header-profile" className="flex items-center gap-2 rounded-md px-1.5 py-1 hover:bg-black/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500">
@@ -238,7 +180,9 @@ export default function AdminShell({ page, apps = [], items = [], reportItems = 
                     <div className="truncate text-sm font-semibold" style={{ color: "var(--onepos-text-primary)" }}>{displayName}</div>
                     <div className="truncate text-xs" style={{ color: "var(--onepos-text-muted)" }}>{user?.username || ""}{user?.storeName || storeName ? ` ? ${user?.storeName || storeName}` : ""}</div>
                   </div>
-                  <button type="button" role="menuitem" data-testid="menu-profile" onClick={() => { setProfileOpen(false); onOpenSettings?.("Users & Permissions"); }} className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-black/5" style={{ color: "var(--onepos-text-primary)" }}><UserCircle size={15} />Profile</button>
+                {onOpenProfile && (
+              <button type="button" role="menuitem" data-testid="menu-profile" onClick={() => { setProfileOpen(false); onOpenProfile?.(); }} className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-black/5" style={{ color: "var(--onepos-text-primary)" }}><UserCircle size={15} />Profile</button>
+            )}
                   <button type="button" role="menuitem" data-testid="menu-settings" onClick={() => { setProfileOpen(false); onOpenSettings?.("General"); }} className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-black/5" style={{ color: "var(--onepos-text-primary)" }}><Settings size={15} />Settings</button>
                   <button type="button" role="menuitem" data-testid="menu-reset-password" onClick={() => { setProfileOpen(false); onResetPassword?.(); }} className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-black/5" style={{ color: "var(--onepos-text-primary)" }}><Monitor size={15} />Reset password</button>
                   <div className="my-1 border-t" style={{ borderColor: "var(--onepos-border)" }} />

@@ -19,7 +19,11 @@ export default function BottomStatusBar({ storeName, till, children }) {
       style={{
         left: 0,
         right: 0,
-        bottom: "1px",
+        /* Sits directly ABOVE the shared dock (same CSS variables the dock
+           uses), so the two fixed chrome layers can never overlap. The old
+           bottom:1px placement slid the whole bar under the dock pill and
+           left a 1px white seam at the viewport edge. */
+        bottom: "calc(var(--dock-offset-bottom, var(--dock-bottom, 12px)) + var(--dock-height, 60px) + 6px)",
         width: "100vw",
         minHeight: "42px",
         borderRadius: 0,

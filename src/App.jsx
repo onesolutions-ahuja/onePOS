@@ -418,7 +418,7 @@ export default function App() {
           {/* A customer-created page inherits the SAME application shell: the
               canonical dock stays mounted above it and only its own content
               surface animates (the dock is never animated). */}
-          <div className="pb-[calc(var(--dock-height)+32px+env(safe-area-inset-bottom))]">
+          <div className="pb-[calc(var(--dock-height)+var(--dock-offset-bottom)+32px)]">
             <div className="onepos-motion-surface onepos-record-enter">
               <CustomPageRuntime pageKey={customPageKey} onClose={() => openAppPage("Dashboard")} />
             </div>
@@ -458,12 +458,6 @@ export default function App() {
             setAdminInitialPage("Dashboard");
             setView("admin");
             window.history.pushState({}, "", "/app/dashboard");
-          }}
-          onSettings={() => {
-            if (offlineSession) return;
-            setAdminInitialPage("Settings");
-            setView("admin");
-            window.history.pushState({}, "", "/app/settings");
           }}
           onOpenOnlineOrders={() => {
             if (offlineSession) return;

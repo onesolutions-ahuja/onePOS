@@ -1,6 +1,6 @@
 import "./AdminNavDock.css";
 import { useEffect, useRef, useState } from "react";
-import { BarChart3, Home, LayoutGrid, Search, Settings, X } from "lucide-react";
+import { BarChart3, Home, LayoutDashboard, LayoutGrid, Search, Settings, Store, X } from "lucide-react";
 import JarvisCorner from "./jarvis/JarvisCorner.jsx";
 import {
   INTERNET_STATES,
@@ -38,6 +38,51 @@ const DOCK_LABELS = {
  * Settings and a custom page render this same bar.
  */
 const SLOT_LIMIT = 6;
+/* The quick slot budget preserves room for fixed actions and the Jarvis
+   pocket. All other destinations remain available through the Apps launcher. */
+const EXTRA_COMPACT_SLOT_LIMIT = 1;
+const COMPACT_SLOT_LIMIT = 2;
+const NARROW_SLOT_LIMIT = 3;
+const TABLET_SLOT_LIMIT = 4;
+const EXTRA_COMPACT_QUERY = "(max-width: 360px)";
+const COMPACT_QUERY = "(max-width: 480px)";
+const NARROW_QUERY = "(max-width: 640px)";
+const TABLET_QUERY = "(max-width: 900px)";
+
+function useDockSlotBudget() {
+  const query = () =>
+    typeof window !== "undefined" && window.matchMedia
+    ? window.matchMedia(EXTRA_COMPACT_QUERY).matches
+      ? EXTRA_COMPACT_SLOT_LIMIT
+      : window.matchMedia(COMPACT_QUERY).matches
+        ? COMPACT_SLOT_LIMIT
+        : window.matchMedia(NARROW_QUERY).matches
+          ? NARROW_SLOT_LIMIT
+          : window.matchMedia(TABLET_QUERY).matches
+            ? TABLET_SLOT_LIMIT
+            : SLOT_LIMIT
+    : SLOT_LIMIT;
+  const [limit, setLimit] = useState(query);
+  useEffect(() => {
+    if (typeof window === "undefined" || !window.matchMedia) return undefined;
+    const compact = window.matchMedia(COMPACT_QUERY);
+    const narrow = window.matchMedia(NARROW_QUERY);
+    const extraCompact = window.matchMedia(EXTRA_COMPACT_QUERY);
+    const tablet = window.matchMedia(TABLET_QUERY);
+    const onChange = () => setLimit(query());
+    compact.addEventListener?.("change", onChange);
+    narrow.addEventListener?.("change", onChange);
+    extraCompact.addEventListener?.("change", onChange);
+    tablet.addEventListener?.("change", onChange);
+    return () => {
+      compact.removeEventListener?.("change", onChange);
+      narrow.removeEventListener?.("change", onChange);
+      extraCompact.removeEventListener?.("change", onChange);
+      tablet.removeEventListener?.("change", onChange);
+    };
+  }, []);
+  return limit;
+}
 
 const GROUPS = [
   { title: "Workspace", pages: ["Dashboard"] },
@@ -80,7 +125,7 @@ function LauncherPopup({ items, objectItems = [], reportItems = [], page, onNavi
       <div
         role="menu"
         aria-label="All pages"
-        className="fixed left-1/2 -translate-x-1/2 bottom-[calc(var(--dock-height)+16px)] z-[1060] w-[560px] max-w-[94vw] rounded-2xl border border-white/10 shadow-2xl overflow-hidden"
+        className="fixed left-1/2 -translate-x-1/2 bottom-[calc(var(--dock-height)+var(--dock-offset-bottom)+16px)] z-[1060] w-[560px] max-w-[94vw] rounded-2xl border border-white/10 shadow-2xl overflow-hidden"
         style={{ background: "rgba(13,52,49,0.92)", backdropFilter: "blur(20px) saturate(160%)", WebkitBackdropFilter: "blur(20px) saturate(160%)" }}
       >
         <div className="flex items-center gap-2 px-4 py-3 border-b border-white/10">
@@ -102,7 +147,7 @@ function LauncherPopup({ items, objectItems = [], reportItems = [], page, onNavi
           </button>
         </div>
 
-        <div className="px-3 py-3 max-h-[52vh] overflow-y-auto">
+        <div className="px-3 py-3 max-h-[52dvh] overflow-y-auto pb-[max(0.75rem,env(safe-area-inset-bottom))]">
           {GROUPS.map(({ title, pages }) => {
             const visible = pages.filter((p) => available.has(p) && match(p));
             if (!visible.length) return null;
@@ -120,7 +165,7 @@ function LauncherPopup({ items, objectItems = [], reportItems = [], page, onNavi
                         key={name}
                         role="menuitem"
                         onClick={() => onNavigate(name)}
-                        className={`flex items-center gap-3 w-full px-3 py-2.5 rounded-xl text-left transition-colors ${
+                        className={`flex min-h-11 items-center gap-3 w-full px-3 py-2.5 rounded-xl text-left transition-colors ${
                           active ? "bg-white/20 text-white" : "text-emerald-50 hover:bg-white/10 active:bg-white/15"
                         }`}
                       >
@@ -146,7 +191,7 @@ function LauncherPopup({ items, objectItems = [], reportItems = [], page, onNavi
                       key={item.key}
                       role="menuitem"
                       onClick={() => onNavigate(item.key)}
-                      className={`flex items-center gap-3 w-full px-3 py-2.5 rounded-xl text-left transition-colors ${
+                      className={`flex min-h-11 items-center gap-3 w-full px-3 py-2.5 rounded-xl text-left transition-colors ${
                         active ? "bg-white/20 text-white" : "text-emerald-50 hover:bg-white/10 active:bg-white/15"
                       }`}
                     >
@@ -171,7 +216,7 @@ function LauncherPopup({ items, objectItems = [], reportItems = [], page, onNavi
                       key={name}
                       role="menuitem"
                       onClick={() => onNavigate(name)}
-                      className={`flex items-center gap-3 w-full px-3 py-2.5 rounded-xl text-left transition-colors ${
+                      className={`flex min-h-11 items-center gap-3 w-full px-3 py-2.5 rounded-xl text-left transition-colors ${
                         active ? "bg-white/20 text-white" : "text-emerald-50 hover:bg-white/10 active:bg-white/15"
                       }`}
                     >
@@ -200,6 +245,7 @@ function DockSlot({ label, Icon, active, onClick, title }) {
     <button
       onClick={onClick}
       aria-current={active ? "page" : undefined}
+      aria-label={title || label}
       title={title || label}
       className={`admin-nav-dock-slot group flex shrink-0 flex-col items-center justify-center gap-1 rounded-2xl py-1 transition-all duration-200 hover:-translate-y-0.5 active:translate-y-0 active:scale-95 ${
         active
@@ -251,11 +297,12 @@ function useDockQuickAccess() {
  * the active destination and a navigation callback; the slot configuration and
  * the geometry are owned here, so no route can present a different dock.
  */
-export default function AdminNavDock({ items, objectItems = [], reportItems = [], page, onNavigate, canOpenSettings = true }) {
+export default function AdminNavDock({ items, objectItems = [], reportItems = [], page, onNavigate, canOpenSettings = true, surface = "admin", onSwitchSurface = null }) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef(null);
   const byName = new Map(items.map(([name, icon]) => [name, icon]));
   const quickAccess = useDockQuickAccess();
+  const slotBudget = useDockSlotBudget();
   /*
    * The canonical quick slots: the ONE saved configuration, reduced to the
    * pages this caller may open (permission + licence filtered — an unavailable
@@ -265,7 +312,7 @@ export default function AdminNavDock({ items, objectItems = [], reportItems = []
    */
   const quickSlots = resolveDockQuickSlots({ quickAccess, permitted: byName.keys() })
     .filter((name) => name !== "Settings")
-    .slice(0, SLOT_LIMIT);
+    .slice(0, Math.min(SLOT_LIMIT, slotBudget));
 
   /*
    * Offline visual state. The dock keeps NO connectivity opinion of its own:
@@ -292,7 +339,8 @@ export default function AdminNavDock({ items, objectItems = [], reportItems = []
 
   useEffect(() => {
     startConnectivityMonitoring({ intervalMs: 30000 });
-    return subscribeConnectivity(setConnectivity);
+    const unsubscribe = subscribeConnectivity(setConnectivity);
+    return unsubscribe;
   }, []);
 
   useEffect(() => {
@@ -331,7 +379,7 @@ export default function AdminNavDock({ items, objectItems = [], reportItems = []
   };
 
   return (
-    <div ref={rootRef} className="admin-nav-dock-root inset-x-0 flex justify-center bottom-[12px]">
+    <div ref={rootRef} className="admin-nav-dock-root inset-x-0 flex justify-center">
       {/* data-connectivity drives ONLY the shadow ring in AdminNavDock.css:
           the same dock, with a subtle red edge while onePOS is offline. */}
       <nav
@@ -349,7 +397,11 @@ export default function AdminNavDock({ items, objectItems = [], reportItems = []
           <JarvisCorner embedded />
         </div>
 
-        {/* FIXED DESTINATIONS — ALL PAGES, then SETTINGS. */}
+        {/* FIXED DESTINATIONS — ALL PAGES, then the ONE contextual ADMIN/TILL
+            switch, then SETTINGS. The switch is a single dock command (never
+            two header buttons): the label is the DESTINATION — "Admin" while
+            the till is open, "Till" while the admin app is open — so both
+            surfaces read the same dock geometry with one contextual item. */}
         <div className="admin-nav-dock-wing">
           <DockSlot
             label="Apps"
@@ -358,6 +410,15 @@ export default function AdminNavDock({ items, objectItems = [], reportItems = []
             onClick={() => setOpen((v) => !v)}
             title={open ? "Close all pages menu" : "All pages"}
           />
+          {onSwitchSurface ? (
+            <DockSlot
+              label={surface === "till" ? "Admin" : "Till"}
+              Icon={surface === "till" ? LayoutDashboard : Store}
+              active={false}
+              onClick={onSwitchSurface}
+              title={surface === "till" ? "Open the admin app" : "Open the till"}
+            />
+          ) : null}
           {canOpenSettings ? (
             <DockSlot
               label="Settings"

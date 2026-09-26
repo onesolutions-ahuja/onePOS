@@ -1,8 +1,48 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import {
+  moveNodeInSections,
+  updateNodeInSections,
+} from "../src/pages/settings/Platform/customPageTree.js";
 
 const read = (path) => fs.readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
+
+/*
+ * Regression: selecting an Object on a MultiContainer blanked the whole builder.
+ *
+ * The customPageTree helpers return a SECTIONS ARRAY, but the builder handed
+ * that array straight to applyDraft as if it were the whole draft. The draft
+ * became a bare array, so `draft.sections` was undefined and the very next
+ * render threw on `draft.sections.find(...)` — unmounting the tree (blank page).
+ *
+ * This asserts the shape contract that was violated: every applyDraft updater
+ * must return a draft OBJECT, never a sections array.
+ */
+test("every applyDraft updater returns a draft object, not a sections array", () => {
+  const builder = read("src/pages/settings/Platform/CustomPageBuilder.jsx");
+  // Every helper call inside applyDraft must be wrapped as { ...current, sections: HELPER(...) }
+  const wrapped = [...builder.matchAll(/applyDraft\(\(current\) => \(\{ \.\.\.current, sections: (updateNodeInSections|moveNodeInSections|removeNodeFromSections|duplicateNodeInSections)\(/g)].map((m) => m[1]);
+  assert.ok(wrapped.length >= 4, `expected the tree helpers to be draft-wrapped, found ${wrapped.length}`);
+  // No helper may be returned bare as the whole draft.
+  assert.doesNotMatch(
+    builder,
+    /applyDraft\(\(current\) => (updateNodeInSections|moveNodeInSections|removeNodeFromSections|duplicateNodeInSections)\(/,
+    "a bare sections array must never replace the draft object",
+  );
+});
+
+/* The helpers genuinely return arrays — this is the contract that was broken. */
+test("tree helpers return sections arrays, so callers must re-wrap them", () => {
+  const sections = [{ id: "s1", width: "full", children: [{ id: "n1", componentKey: "multi_container" }] }];
+  assert.ok(Array.isArray(updateNodeInSections(sections, "n1", (n) => ({ ...n, label: "x" }))));
+  assert.ok(Array.isArray(moveNodeInSections(sections, { nodeId: "n1", targetParentKey: "SECTION", targetIndex: 0, targetSectionId: "s1" })));
+  // A draft object built from that result must keep its own fields.
+  const draft = { label: "Page", device: "desktop", sections };
+  const next = { ...draft, sections: updateNodeInSections(draft.sections, "n1", (n) => ({ ...n, label: "x" })) };
+  assert.equal(next.label, "Page", "draft metadata survives a node update");
+  assert.ok(Array.isArray(next.sections));
+});
 
 /* Shared renderer contract: builder and runtime MUST consume the same renderer. */
 test("builder and runtime render the same shared component renderer", () => {
@@ -77,7 +117,10 @@ test("runtime dispatches clicks with record context through canonical endpoints"
   assert.match(runtime, /record\?\.id \|\| null/);
   assert.match(runtime, /page-interactions\/execute/);
   assert.match(runtime, /runtime-forms/);
-  assert.match(runtime, /buildCustomPagePath/);
+  /* Navigation goes through the ONE canonical target resolver
+     (utils/navigationTargets.js) — never hand-built URLs. */
+  assert.match(runtime, /resolveNavigationTarget/);
+  assert.match(runtime, /navigateToTarget/);
 });
 
 /* Server-side whitelist accepts the nested tree. */

@@ -7,6 +7,18 @@
  * these renderers draw without changing this file.
  */
 import { DASHBOARD_COMPONENTS } from "./platformDashboard.js";
+import { formatDateValue } from "../../utils/dateFormat.js";
+
+/* Raw timestamps arrive as "2026-09-25T23:00:00.000Z" strings; anything in
+   this shape is presented through the shared date formatter instead. */
+const ISO_TIMESTAMP = /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}/;
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
+
+export function displayCellValue(value) {
+  if (typeof value === "string" && ISO_TIMESTAMP.test(value)) return formatDateValue(value, { withTime: false });
+  if (typeof value === "string" && ISO_DATE.test(value)) return formatDateValue(value);
+  return value;
+}
 
 
 const PALETTE = ["#176f6a", "#2f8a82", "#82c1bb", "#4fa69e", "#0d3b39", "#7aa7f8", "#c9a227", "#b4553f", "#6b7f3a", "#8a5fb0"];
@@ -29,7 +41,7 @@ export function seriesFrom(config, result) {
   const valueField = config?.valueField || result?.data?.columns?.find((key) => key !== config?.labelField);
   const labelField = config?.labelField || result?.data?.columns?.find((key) => key !== valueField);
   return rows
-    .map((row) => ({ label: labelField ? String(row[labelField] ?? "—") : "Total", value: Number(row[valueField]) || 0 }))
+    .map((row) => ({ label: labelField ? String(displayCellValue(row[labelField]) ?? "—") : "Total", value: Number(row[valueField]) || 0 }))
     .filter((point) => Number.isFinite(point.value));
 }
 
@@ -119,9 +131,10 @@ function MetricTile({ points, config }) {
   const lead = points[0];
   const showLead = Boolean(config?.labelField);
   const sizeClass = config?.size === "large" ? "text-3xl" : config?.size === "small" ? "text-xl" : "text-2xl";
-  return <div className="h-full flex flex-col justify-center">
+  return <div className="h-full flex flex-col justify-center min-w-0">
     {showLead && <div className="text-sm truncate" style={{ color: "var(--onepos-text-secondary)" }} title={lead.label}>{lead.label}</div>}
-    <div className={`${sizeClass} font-bold tabular-nums mt-1`} style={{ color: "var(--onepos-text-heading)" }}>{formatValue(showLead ? lead.value : total, config?.format)}</div>
+    {/* break-words: a wide currency value must wrap rather than clip on phones. */}
+    <div className={`${sizeClass} font-bold tabular-nums mt-1 break-words`} style={{ color: "var(--onepos-text-heading)" }}>{formatValue(showLead ? lead.value : total, config?.format)}</div>
     {showLead && <div className="text-[11px] mt-0.5" style={{ color: "var(--onepos-text-muted)" }}>{formatValue(lead.value, config?.format)} of {formatValue(total, config?.format)}</div>}
   </div>;
 }
@@ -133,7 +146,7 @@ function RecordTable({ result }) {
   return <div className="h-full overflow-auto">
     <table className="w-full text-sm">
       <thead><tr>{columns.map((column) => <th key={column} className="text-left font-semibold pb-2" style={{ color: "var(--onepos-text-secondary)" }}>{column}</th>)}</tr></thead>
-      <tbody>{rows.map((row, index) => <tr key={index} className="border-t" style={{ borderColor: "var(--onepos-border)" }}>{columns.map((column) => <td key={column} className="py-1.5 truncate">{String(row[column] ?? "—")}</td>)}</tr>)}</tbody>
+      <tbody>{rows.map((row, index) => <tr key={index} className="border-t" style={{ borderColor: "var(--onepos-border)" }}>{columns.map((column) => <td key={column} className="py-1.5 truncate">{String(displayCellValue(row[column]) ?? "—")}</td>)}</tr>)}</tbody>
     </table>
   </div>;
 }

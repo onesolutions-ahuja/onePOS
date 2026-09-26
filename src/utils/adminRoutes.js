@@ -115,6 +115,19 @@ export const SETTINGS_SLUG_TO_TAB = Object.fromEntries(
 export const OBJECT_PATH_PREFIX = "/app/objects/";
 export const CUSTOM_PAGE_PATH_PREFIX = "/app/pages/";
 
+/**
+ * The record segment of the ONE object runtime route: the same generic
+ * /app/objects/<objectKey> path carries an optional /records/<recordId> tail,
+ * so a deep link can open a single record through the SAME runtime (used by
+ * the profile surface and any shell that needs one record in view mode).
+ */
+export function buildObjectRecordPath(objectKey, recordId) {
+  const key = String(objectKey || "").trim();
+  const id = String(recordId || "").trim();
+  if (!key || !id) return buildObjectPath(key);
+  return `${OBJECT_PATH_PREFIX}${encodeURIComponent(key)}/records/${encodeURIComponent(id)}`;
+}
+
 export function buildCustomPagePath(pageKey) {
   const key = String(pageKey || "").trim();
   return key ? `${CUSTOM_PAGE_PATH_PREFIX}${encodeURIComponent(key)}` : "/app";
@@ -156,9 +169,16 @@ export function parseAppPath(pathname) {
   }
   if (head === "objects") {
     /* The caller resolves the key against its permitted configured pages; an
-       unknown/unpermitted key is refused by the runtime API regardless. */
+       unknown/unpermitted key is refused by the runtime API regardless. The
+       optional /records/<recordId> tail targets one record inside the SAME
+       generic runtime (e.g. the signed-in user's own profile record). */
     if (!sub) return { view: "unknown", slug: rest };
-    return { view: "object", objectKey: decodeURIComponent(sub) };
+    const [objectKey, recordHead, recordId] = sub.split("/");
+    if (recordHead === "records" && recordId) {
+      return { view: "object", objectKey: decodeURIComponent(objectKey), recordId: decodeURIComponent(recordId) };
+    }
+    if (recordHead || recordId) return { view: "unknown", slug: rest };
+    return { view: "object", objectKey: decodeURIComponent(objectKey) };
   }
   if (head === "reports") {
     /* The Overview entry is the plain /app/reports page. */

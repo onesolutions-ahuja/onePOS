@@ -32,6 +32,8 @@ export default function DockHost({
   permissionState = null,
   reportItems = [],
   canOpenSettings = true,
+  surface = "admin",
+  onSwitchSurface = null,
 }) {
   const [sessionState, setSessionState] = useState(permissionState || EMPTY_PERMISSION_STATE);
   const [catalogue, setCatalogue] = useState(() => appCatalogueSnapshot());
@@ -91,6 +93,8 @@ export default function DockHost({
       page={page}
       onNavigate={openPage}
       canOpenSettings={canOpenSettings}
+      surface={surface}
+      onSwitchSurface={onSwitchSurface}
     />
   );
 }

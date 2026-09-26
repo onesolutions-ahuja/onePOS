@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useState } from "react";
-import { SETTINGS_TAB_SLUGS } from "../../utils/adminRoutes.js";
 import { ArrowDown, ArrowUp, Building2, Cable, CreditCard, Edit, HardDrive, LayoutGrid, MonitorCog, Plus, ReceiptText, RefreshCw, Search, ShieldCheck, Store, Save, X } from "lucide-react";
 import { apiRequest } from "../../services/api.js";
 import ServerApiSettings from "./ServerApiSettings.jsx";
@@ -12,7 +11,10 @@ import PlatformAdmin from "./PlatformAdmin.jsx";
 import MessageTemplatesAdmin from "./MessageTemplatesAdmin.jsx";
 import AccountPolicySettings from "./AccountPolicySettings.jsx";
 import { settingSectionAccess, sectionIsVisible } from "../../utils/settingsAccess.js";
+import { setDateFormatPattern } from "../../utils/dateFormat.js";
 import { SettingsDetails, SettingsEditDialog, SettingsField, useSettingsEditDialog } from "../../components/settings/SettingsDetails.jsx";
+import SettingsObjectHost from "./SettingsObjectHost.jsx";
+import UberMenuMappingEditor from "./UberMenuMappingEditor.jsx";
 /*
  * Settings navigation - compact grouped tabs.
  *
@@ -42,7 +44,6 @@ const SETTINGS_GROUP_TONES = {
   System: "gray",
   Platform: "teal",
 };
-
 const SETTINGS_GROUP_ICONS = {
   General: Building2,
   "Sales & Tax": ReceiptText,
@@ -55,6 +56,19 @@ const SETTINGS_GROUP_ICONS = {
 };
 
 /*
+ * SETTINGS-HOSTED OBJECT ROUTES (rendering capability only — no Object
+ * migration happens here). A section listed here renders the CANONICAL
+ * generic Object UI in Pane 3 instead of (or above) a custom Settings form,
+ * so Settings never grows a second record/list system. The host reuses the
+ * exact ObjectPage runtime, so permissions and metadata semantics are the
+ * server's own; nothing about the Object is duplicated client-side.
+ */
+const SETTINGS_OBJECT_HOSTS = {
+  // "Users": { objectKey: "employee" },
+  // "Stores": { objectKey: "store" },
+};
+
+/*
  * Legacy section names (pre left-panel navigation) still arrive via deep
  * links and the profile menu; each is redirected to its new section.
  */
@@ -64,7 +78,7 @@ const LEGACY_TAB_REDIRECT = {
   Integrations: "Connections",
 };
 
-function SettingsAdmin({ initialTab = "General", user = null, isAdmin = false, isSuperadmin = false, entitlements = {} }) {
+function SettingsAdmin({ initialTab = "General", onTabChange, user = null, isAdmin = false, isSuperadmin = false, entitlements = {} }) {
   /* One access map for the section list AND every render branch below, so the
      navigation can never offer a section whose content is gated off (or hide
      one whose content is available). */
@@ -87,38 +101,29 @@ function SettingsAdmin({ initialTab = "General", user = null, isAdmin = false, i
     /* Deep-link support (legacy tabs included). */
     return tabs.includes(initialTab) || tabs.includes(mapped) ? mapped : "General";
   };
-  const [tab, setTab] = useState(resolveInitialTab(initialTab));
+  const tab = resolveInitialTab(initialTab);
+  const selectTab = (nextTab) => onTabChange(resolveInitialTab(nextTab));
   const [settingsQuery, setSettingsQuery] = useState("");
   const activeGroup = gatedGroups.find((group) => group.sections.includes(tab)) || gatedGroups[0];
   const searchResults = settingsQuery.trim() ? tabs.filter((item) => item.toLowerCase().includes(settingsQuery.trim().toLowerCase())) : [];
-  /*
-   * T10V: the active section is mirrored into the URL
-   * (/app/settings/<section-slug>) so refresh, direct links and
-   * Back/Forward keep the exact section. One-way sync only — the URL is a
-   * reflection of the section, never a second source of state.
-   */
-  useEffect(() => {
-    const slug = SETTINGS_TAB_SLUGS[tab];
-    if (!slug) return;
-    /* The General tab is the plain /app/settings page. */
-    const target = slug === "general" ? "/app/settings" : `/app/settings/${slug}`;
-    if (window.location.pathname !== target) {
-      window.history.replaceState({}, "", target);
-    }
-  }, [tab]);
   const [settings, setSettings] = useState(null);
   const [terminals, setTerminals] = useState([]);
   const [hardware, setHardware] = useState([]);
   const [health, setHealth] = useState(null);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
+  /* Fatal-only load error: surfaced as the early full-page card. Child
+     features report through onError → `error`, which renders as an in-pane
+     banner below so one failing builder can never unmount the Settings
+     navigation shell. */
+  const [loadError, setLoadError] = useState("");
   const [form, setForm] = useState(null);
   const [loading, setLoading] = useState(true);
 
   const load = async () => {
     try {
       setLoading(true);
-      setError("");
+      setLoadError("");
       /* Isolation: the core /api/settings request is the only one required to
          render the page. Hardware, payment-terminal and integration-health
          are optional sections — if an endpoint is unavailable or forbidden
@@ -132,6 +137,9 @@ function SettingsAdmin({ initialTab = "General", user = null, isAdmin = false, i
       ]);
       if (settingsResponse.success) {
         setSettings(settingsResponse.data);
+        /* Feed the ONE shared date formatter the company's configured pattern
+           so every list, report and chart renders dates the same way. */
+        setDateFormatPattern(settingsResponse.data.general?.dateFormat);
 setForm({
           companyName: settingsResponse.data.company.name,
           legalName: settingsResponse.data.company.legalName || "",
@@ -153,7 +161,7 @@ setForm({
       if (hardwareResponse?.success) setHardware(hardwareResponse.data || []);
       if (healthResponse?.success) setHealth(healthResponse.data);
     } catch (err) {
-      setError(err.message || "Unable to load settings");
+      setLoadError(err.message || "Unable to load settings");
     } finally {
       setLoading(false);
     }
@@ -188,58 +196,75 @@ setForm({
     } catch (err) { setError(err.message || "Unable to test hardware"); }
   };
 
-  if (loading) return <div className="onepos-empty">Loading settings...</div>;
-
-  if (error) return <div className="onepos-card onepos-card-body max-w-2xl"><h2 className="font-semibold text-red-700">Unable to load settings</h2><p className="text-sm text-slate-600 mt-2">{error}</p><button onClick={load} className="mt-5 onepos-btn onepos-btn-primary"><RefreshCw size={16} /> Retry</button></div>;
-
-  if (!settings || !form) return <div className="onepos-card onepos-card-body max-w-2xl"><h2 className="font-semibold text-red-700">Settings are unavailable</h2><p className="text-sm text-slate-600 mt-2">No settings data was returned by the server.</p><button onClick={load} className="mt-5 onepos-btn onepos-btn-primary"><RefreshCw size={16} /> Retry</button></div>;
-
   return (
-    <div className="settings-workspace">
-      <aside className="settings-categories onepos-card onepos-card-body" aria-label="Settings categories">
-        <div className="settings-search-wrap">
-          <Search size={15} aria-hidden="true" />
-          <input value={settingsQuery} onChange={(event) => setSettingsQuery(event.target.value)} placeholder="Search settings" aria-label="Search settings" />
-        </div>
-        {settingsQuery.trim() ? (
-          <div className="settings-search-results">
-            {searchResults.length ? searchResults.map((item) => (
-              <button key={item} type="button" onClick={() => { setTab(item); setSettingsQuery(""); }} className="onepos-settings-tab w-full text-left">
-                <Search size={14} /> <span>{item}</span>
-              </button>
-            )) : <p className="px-2 py-3 text-xs text-slate-400">No permitted settings found.</p>}
-          </div>
-        ) : gatedGroups.map((group) => {
+    <div className="onepos-settings-shell">
+      {/* PANE 1 — Settings Menu: the stable category list. Clicking a
+          category selects its first section; its submenu opens in Pane 2. */}
+      <aside className="onepos-settings-menu" aria-label="Settings menu">
+        <div className="onepos-settings-submenu-body" style={{ paddingTop: 12 }}>
+        {gatedGroups.map((group) => {
           const Icon = SETTINGS_GROUP_ICONS[group.label] || LayoutGrid;
           const selected = activeGroup?.label === group.label;
           return <div key={group.label} className="settings-category-group">
-            <button type="button" onClick={() => setTab(group.sections[0])} className={`settings-category ${selected ? "settings-category-active" : ""}`}>
+            <button type="button" onClick={() => selectTab(group.sections[0])} className={`settings-category ${selected ? "settings-category-active" : ""}`}>
               <span className="settings-category-icon" data-icon-tone={SETTINGS_GROUP_TONES[group.label] || "teal"}><Icon size={18} /></span>
               <span>{group.label}</span>
               <span className="settings-category-chevron">›</span>
             </button>
-            {selected && (
-              <div className="settings-category-sections">
-                {group.sections.map((item) => (
-                  <button key={item} type="button" onClick={() => { setTab(item); setMessage(""); setError(""); }} className={`onepos-settings-tab w-full text-left ${tab === item ? "onepos-settings-tab-active" : ""}`} aria-current={tab === item ? "true" : undefined}>
-                    {item}
-                  </button>
-                ))}
-              </div>
-            )}
           </div>;
         })}
+        </div>
       </aside>
 
-      <div className="settings-content">
-        <div className="settings-detail-heading mb-4">
-          <div>
-            <h1 className="onepos-page-title">{activeGroup?.label || "Settings"}</h1>
-            <p className="text-sm text-slate-500 mt-1">{tab}</p>
+      {/* PANE 2 — Submenu: heading + search stay FIXED; only the items
+          beneath them scroll. Bottom clearance keeps every item reachable
+          above the fixed dockbar. */}
+      <aside className="onepos-settings-submenu" aria-label="Settings sections">
+        <div className="onepos-settings-submenu-head">
+          <h2 className="onepos-settings-submenu-title">{activeGroup?.label || "Settings"}</h2>
+          <div className="settings-search-wrap">
+            <Search size={15} aria-hidden="true" />
+            <input value={settingsQuery} onChange={(event) => setSettingsQuery(event.target.value)} placeholder="Search settings" aria-label="Search settings" />
           </div>
         </div>
-        {message && <div className="mb-4 px-4 py-3 bg-emerald-50 border border-emerald-200 text-emerald-700 rounded-lg text-sm">{message}</div>}
-        {error && <div className="mb-4 px-4 py-3 bg-red-50 border border-red-200 text-red-700 rounded-lg text-sm">{error}</div>}
+        <div className="onepos-settings-submenu-body">
+          {settingsQuery.trim() ? (
+            <div className="settings-search-results">
+              {searchResults.length ? searchResults.map((item) => (
+                <button key={item} type="button" onClick={() => { selectTab(item); setSettingsQuery(""); }} className="onepos-settings-tab w-full text-left">
+                  <Search size={14} /> <span>{item}</span>
+                </button>
+              )) : <p className="px-2 py-3 text-xs text-slate-400">No permitted settings found.</p>}
+            </div>
+          ) : (
+            activeGroup?.sections.map((item) => (
+              <button key={item} type="button" onClick={() => { selectTab(item); setMessage(""); setError(""); }} className={`onepos-settings-tab w-full text-left ${tab === item ? "onepos-settings-tab-active" : ""}`} aria-current={tab === item ? "true" : undefined}>
+                {item}
+              </button>
+            ))
+          )}
+        </div>
+      </aside>
+
+      {/* PANE 3 — Main content workspace: clean page header (no technical
+          breadcrumbs), then the selected section's content. Scrolls inside
+          this pane with dockbar bottom clearance. */}
+      <div className="onepos-settings-workspace">
+        <div className="onepos-settings-workspace-inner">
+          <div className="settings-detail-heading mb-4">
+            <div>
+              <h1 className="onepos-page-title">{tab}</h1>
+            </div>
+          </div>
+          {message && <div className="mb-4 px-4 py-3 bg-emerald-50 border border-emerald-200 text-emerald-700 rounded-lg text-sm">{message}</div>}
+          {error && <div className="mb-4 px-4 py-3 bg-red-50 border border-red-200 text-red-700 rounded-lg text-sm">{error}</div>}
+          {loading && <div className="onepos-empty" role="status">Loading settings...</div>}
+          {loadError && <div className="onepos-alert onepos-alert-error" role="alert"><div><strong>Unable to load settings</strong><p>{loadError}</p></div><button type="button" onClick={load} className="onepos-btn onepos-btn-primary"><RefreshCw size={16} /> Retry</button></div>}
+          {!loading && !loadError && (!settings || !form) && <div className="onepos-alert onepos-alert-error" role="alert"><div><strong>Settings are unavailable</strong><p>No settings data was returned by the server.</p></div><button type="button" onClick={load} className="onepos-btn onepos-btn-primary"><RefreshCw size={16} /> Retry</button></div>}
+          {/* Settings-hosted Object route (rendering capability only): the
+              canonical generic Object UI inside Pane 3. */}
+          {SETTINGS_OBJECT_HOSTS[tab] ? <SettingsObjectHost objectKey={SETTINGS_OBJECT_HOSTS[tab].objectKey} /> : null}
+        {settings && form && <>
         {["General", "Company", "Tax / VAT"].includes(tab) && <SettingsForm tab={tab} form={form} setForm={setForm} onSave={saveSettings} />}
         {tab === "Store & Till" && <StoreTillSettings settings={settings} onMessage={setMessage} onError={setError} />}
         {tab === "Store & Till" && <InvoicePrefixesSetting form={form} onMessage={setMessage} onError={setError} />}
@@ -267,10 +292,12 @@ setForm({
         {tab === "Roles & Permissions" && <RolesSettings onMessage={setMessage} onError={setError} />}
         {tab === "Users & Permissions" && <UsersPermissionsSettings onMessage={setMessage} onError={setError} />}
         {tab === "Receipts" && <ReceiptSettings settings={settings} form={form} setForm={setForm} onSave={saveSettings} />}
+        </>}
         {tab === "Server / API Configuration" && access["Server / API Configuration"] && <ServerApiSettings onMessage={setMessage} onError={setError} />}
         {tab === "Platform" && access["Platform"] && <PlatformAdmin user={user} onMessage={setMessage} onError={setError} />}
         {tab === "Message Templates" && access["Message Templates"] && <MessageTemplatesAdmin onMessage={setMessage} onError={setError} />}
-      </div>
+          </div>
+        </div>
     </div>
   );
 }
@@ -2036,6 +2063,12 @@ function OnlinePlatformSettings({ onMessage, onError, onlyPlatform = null }) {
   const [saving, setSaving] = useState("");
   const [loading, setLoading] = useState(true);
   const [uberTest, setUberTest] = useState({ busy: false, result: null });
+  const [uberStores, setUberStores] = useState([]);
+  const [uberMenuStoreId, setUberMenuStoreId] = useState("");
+  const [oneposStores, setOneposStores] = useState([]);
+  const [uberStoresLoading, setUberStoresLoading] = useState(false);
+  const [editPlatform, setEditPlatform] = useState("");
+  const dialog = useSettingsEditDialog();
   const runUberConnectionTest = async () => {
     setUberTest({ busy: true, result: null });
     try {
@@ -2045,13 +2078,59 @@ function OnlinePlatformSettings({ onMessage, onError, onlyPlatform = null }) {
       setUberTest({ busy: false, result: { success: false, message: err.message || "Test connection failed" } });
     }
   };
+  const loadUberStores = async () => {
+    setUberStoresLoading(true);
+    try {
+      const result = await apiRequest("/api/online/uber/stores");
+      if (!result.success) throw new Error(result.message || "Unable to retrieve Uber stores");
+      const stores = result.data?.stores || [];
+      setUberStores(stores);
+      setUberMenuStoreId((current) =>
+        current && stores.some((store) => store.storeId === current)
+          ? current
+          : (forms.uber?.storeId || stores[0]?.storeId || "")
+      );
+      setUberTest({ busy: false, result });
+    } catch (err) {
+      setUberStores([]);
+      setUberTest({ busy: false, result: { success: false, message: err.message || "Unable to retrieve Uber stores" } });
+    } finally {
+      setUberStoresLoading(false);
+    }
+  };
+
+  const saveUberStoreMappings = async () => {
+    try {
+      setSaving("uber-store-mappings");
+      const storeMappings = forms.uber?.storeMappings || [];
+      const storeMenuMappings = [...(forms.uber?.storeMenuMappings || [])];
+      if (uberMenuStoreId && !storeMenuMappings.some((item) => item.uber_store_id === uberMenuStoreId)) {
+        storeMenuMappings.push({ uber_store_id: uberMenuStoreId, menu_mapping: { fields: {} } });
+      }
+      const result = await apiRequest("/api/settings/online-platforms/uber/store-mappings", {
+        method: "PUT",
+        body: JSON.stringify({ store_mappings: storeMappings, store_menu_mappings: storeMenuMappings }),
+      });
+      if (!result.success) throw new Error(result.message || "Unable to save Uber store mappings");
+      update("uber", "storeMappings", result.data.store_mappings || []);
+      update("uber", "storeMenuMappings", result.data.store_menu_mappings || []);
+      onMessage("Uber store and menu configurations saved.");
+    } catch (err) {
+      onError(err.message || "Unable to save Uber store mappings");
+    } finally {
+      setSaving("");
+    }
+  };
 
   /* T10-UBER-MENU: OnePOS -> Uber Eats menu synchronisation. */
   const [uberMenuSync, setUberMenuSync] = useState({ busy: false, result: null });
   const runUberMenuSync = async () => {
     setUberMenuSync({ busy: true, result: null });
     try {
-      const data = await apiRequest("/api/online/uber/sync-menu", { method: "POST" });
+      const data = await apiRequest("/api/online/uber/sync-menu", {
+        method: "POST",
+        body: JSON.stringify({ store_id: uberMenuStoreId }),
+      });
       setUberMenuSync({ busy: false, result: data });
       if (data.success) await load();
     } catch (err) {
@@ -2064,6 +2143,8 @@ function OnlinePlatformSettings({ onMessage, onError, onlyPlatform = null }) {
       setLoading(true);
       const data = await apiRequest("/api/settings/online-platforms");
       if (!data.success) throw new Error(data.message || "Unable to load online platform settings");
+      const storeMappingOptions = await apiRequest("/api/settings/online-platforms/uber/store-mappings").catch(() => null);
+      setOneposStores(storeMappingOptions?.data?.onepos_stores || []);
       /* When a specific platform section is open (Uber Eats / Deliveroo),
          show only that platform. */
       const list = onlyPlatform
@@ -2082,8 +2163,17 @@ function OnlinePlatformSettings({ onMessage, onError, onlyPlatform = null }) {
         requireOtpOnCompletion: platform.require_otp_on_completion === true,
         apiKey: "",
         webhookSecret: "",
+        menuMapping: platform.menu_mapping || { fields: {} },
+        storeMappings: platform.store_mappings || [],
+        storeMenuMappings: platform.store_menu_mappings || [],
         notes: platform.notes || "",
       }])));
+      const uberPlatform = list.find((platform) => platform.platform === "uber");
+      setUberMenuStoreId((current) =>
+        current && uberPlatform?.store_menu_mappings?.some((entry) => entry.uber_store_id === current)
+          ? current
+          : (uberPlatform?.store_id || uberPlatform?.store_menu_mappings?.[0]?.uber_store_id || "")
+      );
     } catch (err) { onError(err.message || "Unable to load online platform settings"); }
     finally { setLoading(false); }
   };
@@ -2106,6 +2196,8 @@ function OnlinePlatformSettings({ onMessage, onError, onlyPlatform = null }) {
       body.orderAcceptance = body.orderAcceptance === "auto" ? "auto" : "manual";
       body.requireOtpOnCompletion = body.requireOtpOnCompletion === true;
       body.notes = body.notes || null;
+      if (platform === "uber") body.menuMapping = body.menuMapping || { fields: {} };
+      else delete body.menuMapping;
       const data = await apiRequest(`/api/settings/online-platforms/${platform}`, { method: "PUT", body: JSON.stringify(body) });
       if (!data.success) throw new Error(data.message || "Unable to save configuration");
       onMessage(data.message || "Configuration saved.");
@@ -2125,16 +2217,14 @@ function OnlinePlatformSettings({ onMessage, onError, onlyPlatform = null }) {
     ["apiKey", "API key / access token", "password", "api_key_configured", "api_key_masked"],
     ["webhookSecret", "Webhook secret", "password", "webhook_secret_configured", "webhook_secret_masked"],
   ];
-
   return <div className="space-y-4">{platforms.map((platform) => {
     const form = forms[platform.platform] || {};
     const configured = platform.client_id || platform.client_secret_configured || platform.api_key_configured;
-    const dialog = useSettingsEditDialog();
     return <div key={platform.platform} className="onepos-card onepos-card-body">
       <SettingsDetails
         title={platform.name}
         description={`Saved ${platform.name} integration configuration and status.`}
-        onEdit={dialog.openEdit}
+        onEdit={() => { setEditPlatform(platform.platform); dialog.openEdit(); }}
         fields={[
           { label: "Status", value: platform.enabled ? "Enabled" : "Disabled" },
           { label: "Configuration", value: configured ? "Credentials configured" : "Not configured" },
@@ -2191,14 +2281,22 @@ function OnlinePlatformSettings({ onMessage, onError, onlyPlatform = null }) {
           </p>
         </div>
       )}
-      <SettingsEditDialog open={dialog.open} title={`Edit ${platform.name}`} onClose={dialog.closeEdit}>
+      <SettingsEditDialog open={dialog.open && editPlatform === platform.platform} title={`Edit ${platform.name}`} onClose={dialog.closeEdit}>
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <label className="flex items-center gap-2 text-sm text-slate-600 col-span-2">
           <Toggle checked={Boolean(form.enabled)} onChange={(event) => update(platform.platform, "enabled", event.target.checked)} />
           Enabled
         </label>
         <label className="text-sm text-slate-600"><span className="block mb-1 font-medium">Environment</span>
-          <select value={form.environment || "sandbox"} onChange={(event) => update(platform.platform, "environment", event.target.value)} className="onepos-input"><option value="sandbox">Sandbox</option><option value="production">Production</option></select>
+          <select value={form.environment || "sandbox"} onChange={(event) => {
+            const environment = event.target.value;
+            update(platform.platform, "environment", environment);
+            if (platform.platform === "uber" && environment !== platform.environment) {
+              update("uber", "storeId", "");
+              update("uber", "brandId", "");
+              update("uber", "storeLocationId", "");
+            }
+          }} className="onepos-input"><option value="sandbox">Sandbox</option><option value="production">Production</option></select>
         </label>
         {fields.map(([field, label, type, configuredKey, maskedKey]) => (
           <label key={field} className="text-sm text-slate-600">
@@ -2244,14 +2342,115 @@ function OnlinePlatformSettings({ onMessage, onError, onlyPlatform = null }) {
             <button onClick={runUberConnectionTest} disabled={uberTest.busy || uberMenuSync.busy} className="h-9 px-4 border border-slate-300 rounded-lg text-sm hover:bg-slate-50 disabled:opacity-50">
               {uberTest.busy ? "Testing connection..." : "Test connection / Get sandbox IDs"}
             </button>
-            <button onClick={runUberMenuSync} disabled={uberMenuSync.busy || uberTest.busy} className="onepos-btn onepos-btn-primary">
+            <button onClick={runUberMenuSync} disabled={!uberMenuStoreId || uberMenuSync.busy || uberTest.busy} className="onepos-btn onepos-btn-primary">
               {uberMenuSync.busy ? "Syncing menu..." : "Sync Menu to Uber"}
             </button>
-            <button onClick={runUberConnectionTest} disabled={uberTest.busy} className="h-9 px-4 border border-slate-300 rounded-lg text-sm hover:bg-slate-50 disabled:opacity-50">
-              {uberTest.busy ? "Refreshing..." : "Refresh stores"}
+            <button onClick={loadUberStores} disabled={uberStoresLoading || uberTest.busy} className="h-9 px-4 border border-slate-300 rounded-lg text-sm hover:bg-slate-50 disabled:opacity-50">
+              {uberStoresLoading ? "Loading stores..." : "Get available stores"}
             </button>
-            <span className="text-xs text-slate-400">Calls the official Uber Get Stores endpoint (GET /v1/eats/stores) with the stored credentials and returns the real store/brand IDs. Sync Menu publishes products marked "Available on Uber Eats" to the configured Uber store (sandbox or production per the Environment above) - onePOS data is never modified.</span>
+            <span className="text-xs text-slate-400">Retrieve available stores, configure each store's product mappings, then sync its menu independently.</span>
           </div>
+          {uberStores.length > 0 && (
+            <div className="mt-3 rounded-lg border border-slate-200 p-3">
+              <label className="block text-sm font-medium text-slate-700" htmlFor="uber-store-select">Uber Eats store</label>
+              <select
+                id="uber-store-select"
+                className="onepos-input mt-1"
+                value={form.storeId || ""}
+                onChange={(event) => {
+                  const selected = uberStores.find((store) => store.storeId === event.target.value);
+                  update("uber", "storeId", selected?.storeId || "");
+                  update("uber", "brandId", selected?.brandId || "");
+                    setUberMenuStoreId(selected?.storeId || "");
+                  }}
+              >
+                <option value="">Select an available store</option>
+                {uberStores.map((store) => (
+                  <option key={store.storeId} value={store.storeId}>
+                    {store.name || store.storeId}{store.brandId ? ` · ${store.brandName || store.brandId}` : ""}
+                  </option>
+                ))}
+              </select>
+              <button type="button" onClick={() => save("uber")} disabled={!form.storeId || saving === "uber"} className="mt-2 onepos-btn onepos-btn-primary">
+                {saving === "uber" ? "Saving..." : "Save selected store"}
+              </button>
+            </div>
+          )}
+          {uberStores.length > 0 && (
+            <section className="mt-3 rounded-lg border border-slate-200 p-3" aria-labelledby="uber-store-mappings-heading">
+              <h3 id="uber-store-mappings-heading" className="font-semibold text-slate-800">Uber to onePOS store mappings</h3>
+              <p className="mt-1 mb-3 text-xs text-slate-500">Each Uber store is mapped explicitly to one active store in this company. Menu mappings are configured separately for each Uber store.</p>
+              {uberStores.map((uberStore) => {
+                const mapping = (form.storeMappings || []).find((item) => item.uber_store_id === uberStore.storeId);
+                return (
+                  <label key={uberStore.storeId} className="grid grid-cols-1 gap-2 border-t border-slate-100 py-2 text-sm sm:grid-cols-2">
+                    <span className="self-center text-slate-700">{uberStore.name || uberStore.storeId}<span className="ml-2 font-mono text-xs text-slate-500">{uberStore.storeId}</span></span>
+                    <select
+                      aria-label={`onePOS store for Uber store ${uberStore.name || uberStore.storeId}`}
+                      className="onepos-input"
+                      value={mapping?.onepos_store_id || ""}
+                      onChange={(event) => {
+                        const retained = (forms.uber?.storeMappings || []).filter((item) => item.uber_store_id !== uberStore.storeId);
+                        if (event.target.value) retained.push({ uber_store_id: uberStore.storeId, onepos_store_id: event.target.value });
+                        update("uber", "storeMappings", retained);
+                      }}
+                    >
+                      <option value="">Do not map</option>
+                      {oneposStores.map((store) => <option key={store.id} value={store.id}>{store.name}{store.code ? ` (${store.code})` : ""}</option>)}
+                    </select>
+                  </label>
+                );
+              })}
+              <button
+                type="button"
+                onClick={saveUberStoreMappings}
+                disabled={saving === "uber-store-mappings"}
+                className="mt-2 onepos-btn onepos-btn-primary"
+              >
+                {saving === "uber-store-mappings" ? "Saving..." : "Save store and menu configurations"}
+              </button>
+            </section>
+          )}
+          {uberStores.length > 0 && (
+            <section className="mt-3 rounded-lg border border-slate-200 p-3" aria-labelledby="uber-store-menu-heading">
+              <h3 id="uber-store-menu-heading" className="font-semibold text-slate-800">Per-store menu configuration</h3>
+              <p className="mt-1 mb-3 text-xs text-slate-500">Each Uber store has its own product-field mappings. Save the configuration before syncing that store's menu.</p>
+              <label className="block text-sm font-medium text-slate-700" htmlFor="uber-menu-store-select">Menu destination</label>
+              <select
+                id="uber-menu-store-select"
+                className="onepos-input mt-1"
+                value={uberMenuStoreId}
+                onChange={(event) => setUberMenuStoreId(event.target.value)}
+              >
+                <option value="">Select an available store</option>
+                {uberStores.map((store) => (
+                  <option key={store.storeId} value={store.storeId}>
+                    {store.name || store.storeId}{store.brandId ? ` · ${store.brandName || store.brandId}` : ""}
+                  </option>
+                ))}
+              </select>
+              {uberMenuStoreId && (
+                <UberMenuMappingEditor
+                  schema={platform.menu_mapping_schema || []}
+                  value={(form.storeMenuMappings || []).find((item) => item.uber_store_id === uberMenuStoreId)?.menu_mapping || { fields: {} }}
+                  onChange={(menuMapping) => {
+                    const current = forms.uber?.storeMenuMappings || [];
+                    const retained = current.filter((item) => item.uber_store_id !== uberMenuStoreId);
+                    retained.push({ uber_store_id: uberMenuStoreId, menu_mapping: menuMapping });
+                    update("uber", "storeMenuMappings", retained);
+                  }}
+                />
+              )}
+              <button
+                type="button"
+                onClick={saveUberStoreMappings}
+                disabled={!uberMenuStoreId || saving === "uber-store-mappings"}
+                className="mt-2 onepos-btn onepos-btn-primary"
+              >
+                {saving === "uber-store-mappings" ? "Saving..." : "Save this store configuration"}
+              </button>
+            </section>
+          )}
           {uberMenuSync.result && (
             <div className={`mt-3 rounded-lg border p-3 text-sm ${uberMenuSync.result.success ? "bg-emerald-50 border-emerald-200" : "bg-amber-50 border-amber-200"}`}>
               <p className={`font-medium ${uberMenuSync.result.success ? "text-emerald-800" : "text-amber-800"}`}>{uberMenuSync.result.message || (uberMenuSync.result.success ? "Menu synced" : "Menu sync failed")}</p>
@@ -2288,11 +2487,6 @@ function OnlinePlatformSettings({ onMessage, onError, onlyPlatform = null }) {
                           <span>
                             Store ID: {store.storeId}{store.name ? ` (${store.name})` : ""}{store.brandId ? ` | Brand ID: ${store.brandId}${store.brandName ? ` (${store.brandName})` : ""}` : ""}{store.status ? ` | Status: ${store.status}` : ""}{store.integrationEnabled !== null && store.integrationEnabled !== undefined ? ` | Integration: ${store.integrationEnabled ? "enabled" : "disabled"}` : ""}
                           </span>
-                          {store.storeId && (
-                            <button onClick={() => save("uber", { storeId: store.storeId, brandId: store.brandId || null })} disabled={saving === "uber"} className="h-7 px-2 border border-slate-300 rounded text-xs hover:bg-slate-50 disabled:opacity-50 shrink-0">
-                              {saving === "uber" ? "Saving..." : "Save this Store ID"}
-                            </button>
-                          )}
                         </li>
                       ))}
                     </ul>

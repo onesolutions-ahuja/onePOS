@@ -118,6 +118,15 @@ const CATALOG = [
     category: "Administration",
   },
   {
+    key: "uber_eats",
+    name: "Uber Eats",
+    description: "Uber Eats connection and online order integration.",
+    route: "/app/integrations",
+    permissions: ["online_orders.view", "online_orders.configure"],
+    storeScoped: false,
+    category: "Administration",
+  },
+  {
     key: "platform",
     name: "Platform",
     description: "Configurable objects, metadata, apps and workflow administration.",

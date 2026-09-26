@@ -1,9 +1,28 @@
 import { useEffect, useState } from "react";
-import { Edit, Package, Plus, RefreshCw, Search, Store, Users, X } from "lucide-react";
+import { Eye, Edit, Plus, Power, RefreshCw } from "lucide-react";
 import { apiRequest } from "../../services/api.js";
+import ObjectList from "../../components/records/ObjectList.jsx";
 import SupplierAccountsModal from "./SupplierAccountsModal.jsx";
 import GenericSupplierFormModal from "./SupplierFormModal.jsx";
 import StandardObjectViewModal from "../../components/platform/StandardObjectViewModal.jsx";
+
+/* Column formatting for the shared global list — data shaping only, the
+   presentation (header, spacing, pills, primary link, actions) is ObjectList. */
+const SUPPLIER_COLUMNS = [
+  { key: "name", label: "Supplier", primary: true },
+  { key: "phone", label: "Phone", format: (value) => value || "-" },
+  { key: "email", label: "Email", format: (value) => value || "-" },
+  { key: "address", label: "Address", format: (value) => value || "-" },
+  { key: "purchase_count", label: "Purchases", format: (value) => String(value ?? 0) },
+  { key: "total_purchase_value", label: "Total value", format: (value) => `£${Number(value || 0).toFixed(2)}` },
+  {
+    key: "active",
+    label: "Status",
+    pill: (value) => (value ? "success" : "neutral"),
+    format: (value) => (value ? "Active" : "Inactive"),
+  },
+];
+
 function SuppliersAdmin({ permissions = [], isAdmin = false }) {
   const [suppliers, setSuppliers] = useState([]);
   const [search, setSearch] = useState("");
@@ -66,19 +85,18 @@ function SuppliersAdmin({ permissions = [], isAdmin = false }) {
     <div>
       <div className="onepos-page-header">
         <div><h1 className="onepos-page-title">Suppliers</h1><p className="onepos-page-subtitle">Manage suppliers used by purchasing.</p></div>
-        <div className="flex gap-2">
+        <div className="onepos-page-header-actions">
           <button onClick={loadSuppliers} className="onepos-btn onepos-btn-secondary"><RefreshCw size={16} /> Refresh</button>
-          <button onClick={() => setFormSupplier({})} className="onepos-btn onepos-btn-primary"><Plus size={17} /> Add Supplier</button>
+          <button onClick={() => setFormSupplier({})} className="onepos-btn onepos-btn-primary"><Plus size={17} /> New Supplier</button>
         </div>
       </div>
       {message && <div className="onepos-alert onepos-alert-success mb-4">{message}</div>}
       {error && <div className="onepos-alert onepos-alert-error mb-4">{error}</div>}
       <div className="onepos-card overflow-hidden">
-        <div className="onepos-toolbar relative max-w-md"><Search size={18} className="absolute left-7 top-1/2 -translate-y-1/2 text-slate-400" /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search suppliers..." className="onepos-input pl-10" /></div>
-        {loading ? <div className="onepos-empty">Loading suppliers...</div> : filtered.length === 0 ? <div className="onepos-empty"><span className="onepos-empty-title">No suppliers found.</span></div> : <div className="overflow-x-auto"><table className="onepos-table"><thead><tr>{["Supplier", "Phone", "Email", "Address", "Purchases", "Total value", "Status", "Actions"].map((heading) => <th key={heading}>{heading}</th>)}</tr></thead><tbody>{filtered.map((supplier) => <tr key={supplier.id}><td className="px-4 py-4 text-sm font-medium">{supplier.name}</td><td className="px-4 py-4 text-sm text-slate-600">{supplier.phone || "-"}</td><td className="px-4 py-4 text-sm text-slate-600">{supplier.email || "-"}</td><td className="px-4 py-4 text-sm text-slate-600 max-w-[220px] truncate">{supplier.address || "-"}</td><td className="px-4 py-4 text-sm">{supplier.purchase_count}</td><td className="px-4 py-4 text-sm font-semibold">£{Number(supplier.total_purchase_value || 0).toFixed(2)}</td><td className="px-4 py-4"><span className={`onepos-badge ${supplier.active ? "onepos-badge-success" : "onepos-badge-neutral"}`}>{supplier.active ? "Active" : "Inactive"}</span></td><td className="px-4 py-4 whitespace-nowrap"><button onClick={() => viewSupplierDetails(supplier)} className="px-2 py-2 text-blue-700 bg-blue-50 rounded-lg text-sm mr-1">View</button><button onClick={() => setFormSupplier(supplier)} className="p-2 text-slate-500 hover:bg-slate-100 rounded-lg" title="Edit supplier"><Edit size={16} /></button><button onClick={() => toggleSupplier(supplier)} className="ml-1 px-2 py-2 text-slate-600 hover:bg-slate-100 rounded-lg text-sm">{supplier.active ? "Deactivate" : "Activate"}</button></td></tr>)}</tbody></table></div>}
+        {loading ? <div className="onepos-empty">Loading suppliers...</div> : <ObjectList records={filtered} columns={SUPPLIER_COLUMNS} searchValue={search} onSearchChange={setSearch} searchPlaceholder="Search suppliers..." emptyMessage="No suppliers found." onOpenRecord={(supplier) => viewSupplierDetails(supplier)} renderActions={(supplier) => <div className="inline-flex items-center gap-0.5"><button onClick={() => viewSupplierDetails(supplier)} className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-500" title="View supplier"><Eye size={16} /></button><button onClick={() => setFormSupplier(supplier)} className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-500" title="Edit supplier"><Edit size={16} /></button><button onClick={() => toggleSupplier(supplier)} className="p-1.5 rounded-lg hover:bg-red-50 text-red-500" title={supplier.active ? "Deactivate" : "Activate"}><Power size={16} /></button></div>} />}
       </div>
       {formSupplier && <GenericSupplierFormModal supplier={formSupplier} onClose={() => setFormSupplier(null)} onSaved={supplierSaved} />}
-      {viewSupplier && <StandardObjectViewModal objectKey="supplier" record={viewSupplier} title={viewSupplier.name} onClose={() => setViewSupplier(null)}><div className="mt-6 border-t pt-4"><h3 className="font-semibold mb-3">Purchase history</h3><p className="text-sm text-slate-500">{viewSupplier.purchase_count || 0} purchases · £{Number(viewSupplier.total_purchase_value || 0).toFixed(2)} total</p></div></StandardObjectViewModal>}
+      {viewSupplier && <StandardObjectViewModal objectKey="supplier" record={viewSupplier} title={viewSupplier.name} onClose={() => setViewSupplier(null)} onEdit={() => { setViewSupplier(null); setFormSupplier(viewSupplier); }}><div className="mt-6 border-t pt-4"><h3 className="font-semibold mb-3">Purchase history</h3><p className="text-sm text-slate-500">{viewSupplier.purchase_count || 0} purchases · £{Number(viewSupplier.total_purchase_value || 0).toFixed(2)} total</p></div></StandardObjectViewModal>}
       {accountsSupplier && <SupplierAccountsModal supplier={accountsSupplier} canManage={canManageAccounts} canManagePayments={canManagePayments} onClose={() => setAccountsSupplier(null)} />}
     </div>
   );

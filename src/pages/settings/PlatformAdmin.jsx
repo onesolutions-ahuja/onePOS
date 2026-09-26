@@ -277,8 +277,10 @@ function PlatformSectionNav({ activeKey, onSelect }) {
           className="onepos-input psnav-search-input"
           value={query}
           onChange={(event) => setQuery(event.target.value)}
-          placeholder="Search settings…"
-          aria-label="Search platform settings"
+          /* Wording distinguishes this rail filter from Pane 2's "Search
+             settings" (they sit side-by-side on the Platform tab). */
+          placeholder="Search platform settings"
+          aria-label="Filter platform navigation"
         />
       </label>
       <div className="psnav-rail">
@@ -466,14 +468,16 @@ export default function PlatformAdmin({ user, onMessage, onError }) {
     selectedObject?.object_key ||
     "Object";
 
+  /* Object-scope crumb: configured display label first — the technical key
+     only appears when no label exists. */
+  const objectCrumbLabel = selectedObject?.label || selectedObject?.name || "Object";
+
   const objectFrame = (content) => (
     <div className="platform-object-context">
       <div className="platform-object-crumb">
-        <span>Platform</span>
-        <span aria-hidden="true">/</span>
         <button type="button" onClick={() => setView("objects")}>Objects</button>
         <span aria-hidden="true">/</span>
-        <strong>{objectLabel}</strong>
+        <strong>{objectCrumbLabel}</strong>
       </div>
 
       {content}
@@ -555,6 +559,10 @@ export default function PlatformAdmin({ user, onMessage, onError }) {
           } else if (target === "relationships") {
             setView("relationships");
           } else if (target === "layouts") {
+            setLayoutPageTypes(["create", "edit", "quick_create"]);
+            setView("layouts");
+          } else if (target === "page-layouts") {
+            setLayoutPageTypes(["list", "detail", "view"]);
             setView("layouts");
           } else if (target === "rules") {
             setView("rules");

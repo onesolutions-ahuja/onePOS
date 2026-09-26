@@ -185,13 +185,23 @@ describe("T10V wiring — AdminLayout", () => {
     assert.match(layoutSrc, /REPORT_MENU_ITEMS\.find\(\(item\) => slugifyReportKey\(item\.key\) === parsed\.reportKey\)/);
     /* T-UI-SHELL: the profile menu moved into AdminShell; the deep tab is
        passed through onOpenSettings → navigate ("Users & Permissions" is a
-       legacy redirect inside SettingsAdmin). */
+       legacy redirect inside SettingsAdmin). T-PROFILE-RECORD: "Profile" now
+       opens the signed-in user's OWN record through the generic object
+       runtime (onOpenProfile), so it no longer deep-links to the Users
+       settings tab — Settings remains reachable through its own menu item. */
     assert.match(
       readShellSrc(),
-      /onOpenSettings\?\.\("Users & Permissions"\)/,
-      "profile menu keeps its deep tab (via AdminShell onOpenSettings)"
+      /onOpenSettings\?\.\("General"\)/,
+      "profile menu keeps a Settings entry with its deep tab"
+    );
+    assert.match(
+      readShellSrc(),
+      /onOpenProfile\?\.\(\)/,
+      "profile menu opens the user's own record via onOpenProfile"
     );
     assert.match(layoutSrc, /onOpenSettings=\{\(tab\) => \{[\s\S]*?navigate\("Settings", \{ settingsTab: tab/);
+    assert.match(layoutSrc, /onOpenProfile=\{openOwnRecord\}/);
+    assert.match(layoutSrc, /api\/platform\/runtime\/my-record/, "the profile resolves through the ONE canonical runtime feed");
   });
 
   test("permission gating is untouched (reports, returns, replenishment, integrations)", () => {
@@ -202,10 +212,25 @@ describe("T10V wiring — AdminLayout", () => {
   });
 });
 
-describe("T10V wiring — SettingsAdmin + server", () => {
-  test("settings sections mirror into /app/settings/<slug>", () => {
-    assert.match(settingsSrc, /SETTINGS_TAB_SLUGS\[tab\]/);
-    assert.match(settingsSrc, /history\.replaceState\(\{\}, "", target\)/);
+describe("Settings URL and view synchronization", () => {
+  test("the parent route initializes and controls the selected Settings section", () => {
+    assert.match(layoutSrc, /const \[settingsTab, setSettingsTab\] = useState\(\(\) => resolveRoute\(\)\.settingsTab \|\| "General"\)/);
+    assert.match(layoutSrc, /<SettingsAdmin initialTab=\{settingsTab\} onTabChange=\{\(tab\) => navigate\("Settings", \{ settingsTab: tab \}\)\}/);
+    assert.doesNotMatch(settingsSrc, /window\.history\.replaceState/, "the child view must not overwrite the route from stale local state");
+  });
+
+  test("tab navigation and browser Back/Forward keep the Settings route authoritative", () => {
+    assert.match(layoutSrc, /if \(nextPage === "Settings" && options\.settingsTab\) setSettingsTab\(options\.settingsTab\)/);
+    assert.match(layoutSrc, /window\.history\.pushState\(\{\}, "", target\)/);
+    assert.match(layoutSrc, /if \(route\.page === "Settings"\) setSettingsTab\(route\.settingsTab \|\| "General"\)/);
+    assert.match(layoutSrc, /addEventListener\("popstate", onPopState\)/);
+  });
+
+  test("settings API errors stay inside the Settings workspace", () => {
+    assert.match(settingsSrc, /<aside className="onepos-settings-menu"/);
+    assert.match(settingsSrc, /<aside className="onepos-settings-submenu"/);
+    assert.match(settingsSrc, /role="alert"[\s\S]*?Unable to load settings/);
+    assert.doesNotMatch(settingsSrc, /if \(loadError\) return/);
   });
 
   test("server serves the SPA shell for every /app/* deep link (direct URL load works)", () => {

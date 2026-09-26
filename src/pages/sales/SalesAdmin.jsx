@@ -1,12 +1,28 @@
 import { useEffect, useState } from "react";
-import { FileText, MessageCircle, RefreshCw, Search, X } from "lucide-react";
+import { FileText, MessageCircle, RefreshCw, X } from "lucide-react";
 import { apiRequest } from "../../services/api.js";
+import ObjectList from "../../components/records/ObjectList.jsx";
+
+/* Column formatting for the shared global list — data shaping only, the
+   presentation (header, spacing, pills, primary link) comes from ObjectList. */
+const SALE_COLUMNS = [
+  { key: "receipt_number", label: "Sale", primary: true, format: (value, sale) => value || sale.id?.slice(0, 8) || "" },
+  { key: "created_at", label: "Date/time", format: (value) => new Date(value).toLocaleString() },
+  { key: "store_name", label: "Store", format: (value) => value || "-" },
+  { key: "customer_name", label: "Customer" },
+  { key: "item_count", label: "Items" },
+  { key: "total", label: "Total", format: (value) => `£${Number(value || 0).toFixed(2)}` },
+  { key: "payment_method", label: "Payment", format: (value) => value || "-" },
+  { key: "status", label: "Status", pill: (value) => (String(value).toLowerCase() === "completed" ? "success" : String(value).toLowerCase() === "void" ? "danger" : "info") },
+  { key: "cashier", label: "Cashier", format: (value) => value || "-" },
+];
+
 function SalesAdmin() {
   const [sales, setSales] = useState([]); const [loading, setLoading] = useState(true); const [error, setError] = useState(""); const [search, setSearch] = useState(""); const [detail, setDetail] = useState(null);
   const load = async () => { try { setLoading(true); setError(""); const data = await apiRequest(`/api/sales${search.trim() ? `?search=${encodeURIComponent(search.trim())}` : ""}`); if (!data.success) throw new Error(data.message); setSales(data.data || []); } catch (err) { setError(err.message || "Unable to load sales"); } finally { setLoading(false); } };
   useEffect(() => { const timer = setTimeout(load, 250); return () => clearTimeout(timer); }, [search]);
   const open = async (sale) => { try { const data = await apiRequest(`/api/sales/${sale.id}`); if (!data.success) throw new Error(data.message); setDetail(data.data); } catch (err) { setError(err.message || "Unable to load sale"); } };
-  return <div><div className="onepos-page-header"><div><h1 className="onepos-page-title">Sales</h1><p className="onepos-page-subtitle">Completed and recorded till transactions.</p></div><button onClick={load} className="onepos-btn onepos-btn-secondary"><RefreshCw size={16} /> Refresh</button></div><div className="onepos-card overflow-hidden"><div className="onepos-toolbar"><div className="relative max-w-md"><Search size={17} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search sale, customer or ID..." className="onepos-input pl-10" /></div></div>{loading ? <div className="onepos-empty">Loading sales...</div> : error ? <div className="onepos-empty text-red-600"><span>{error}</span><button onClick={load} className="onepos-btn onepos-btn-primary mt-3">Retry</button></div> : sales.length === 0 ? <div className="onepos-empty"><span className="onepos-empty-title">No sales found.</span></div> : <div className="overflow-x-auto"><table className="onepos-table"><thead><tr>{["Sale", "Date/time", "Store", "Customer", "Items", "Total", "Payment", "Status", "Cashier"].map((heading) => <th key={heading}>{heading}</th>)}</tr></thead><tbody>{sales.map((sale) => <tr key={sale.id} onClick={() => open(sale)} className="cursor-pointer"><td className="px-4 py-3 text-sm font-medium">{sale.receipt_number || sale.id.slice(0, 8)}</td><td className="px-4 py-3 text-xs text-slate-500">{new Date(sale.created_at).toLocaleString()}</td><td className="px-4 py-3 text-sm">{sale.store_name || "-"}</td><td className="px-4 py-3 text-sm">{sale.customer_name}</td><td className="px-4 py-3 text-sm">{sale.item_count}</td><td className="px-4 py-3 text-sm font-semibold">£{Number(sale.total).toFixed(2)}</td><td className="px-4 py-3 text-sm">{sale.payment_method || "-"}</td><td className="px-4 py-3 text-sm">{sale.status}</td><td className="px-4 py-3 text-sm">{sale.cashier || "-"}</td></tr>)}</tbody></table></div>}</div>{detail && <SaleDetailModal sale={detail} onClose={() => setDetail(null)} />}</div>;
+  return <div><div className="onepos-page-header"><div><h1 className="onepos-page-title">Sales</h1><p className="onepos-page-subtitle">Completed and recorded till transactions.</p></div><div className="onepos-page-header-actions"><button onClick={load} className="onepos-btn onepos-btn-secondary"><RefreshCw size={16} /> Refresh</button></div></div><div className="onepos-card overflow-hidden">{loading ? <div className="onepos-empty">Loading sales...</div> : error ? <div className="onepos-empty text-red-600"><span className="onepos-empty-title">{error}</span><button onClick={load} className="onepos-btn onepos-btn-secondary mt-3">Try Again</button></div> : <ObjectList records={sales} columns={SALE_COLUMNS} searchValue={search} onSearchChange={setSearch} onOpenRecord={(sale) => open(sale)} searchPlaceholder="Search sale, customer or ID..." emptyMessage="No sales found." />}</div>{detail && <SaleDetailModal sale={detail} onClose={() => setDetail(null)} />}</div>;
 }
 
 function SaleDetailModal({ sale, onClose }) {

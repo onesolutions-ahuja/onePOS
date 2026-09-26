@@ -12,6 +12,7 @@ import {
   transitionGenericOrder,
 } from "../services/onlineOrders/genericOrderService.js";
 import { syncBatchMovement } from "../services/inventory.js";
+import { executeWorkflowAction } from "../services/platformWorkflow.js";
 
 /*
  * ONLINE ORDERS FOUNDATION (Uber Eats / Deliveroo)
@@ -930,33 +931,6 @@ export default function createOnlineRouter({
   });
 
   /*
-   * Extracts the store/brand identifiers needed for menu and order testing
-   * from an official Uber "Get Stores" response:
-   *   { stores: [ { id, name, brand: { id, description }, location, status } ] }
-   * Tolerates minor shape variations; never invents IDs.
-   */
-  function extractUberStoreIds(data) {
-    const stores = Array.isArray(data && data.stores) ? data.stores : Array.isArray(data) ? data : [];
-
-    return stores.map((store) => ({
-      storeId: store.id || store.store_id || null,
-      name: store.name || null,
-      brandId: (store.brand && store.brand.id) || store.brand_id || null,
-      brandName:
-        (store.brand && (store.brand.description || store.brand.name)) || store.brand_name || null,
-      status: store.status
-        ? typeof store.status === "string"
-          ? store.status
-          : store.status.type || null
-        : null,
-      integrationEnabled:
-        store.integration_enabled === undefined || store.integration_enabled === null
-          ? null
-          : store.integration_enabled === true,
-    }));
-  }
-
-  /*
    * POST /api/online/uber/sync-menu            (T10-UBER-MENU)
    *
    * OnePOS -> Uber Eats menu synchronisation. The EXISTING Product Master is
@@ -976,9 +950,14 @@ export default function createOnlineRouter({
    */
   router.post("/online/uber/sync-menu", authenticate, authorize("online_orders.configure"), async (req, res) => {
     try {
-      const runtime = await loadPlatformConfig(db, req.user.companyId, "uber");
+      const syncResult = await executeWorkflowAction({
+        db,
+        req,
+        companyId: req.user.companyId,
+        action: { type: "UBER_UPLOAD_MENU", storeId: req.body?.store_id || null },
+      });
 
-      if (runtime.enabled !== true) {
+      if (syncResult.code === "PLATFORM_DISABLED") {
         return res.status(409).json({
           success: false,
           code: "PLATFORM_DISABLED",
@@ -986,34 +965,14 @@ export default function createOnlineRouter({
         });
       }
 
-      /* Read-only, company-scoped product fetch: the Product Master stays
-       * untouched - the direction of authority is strictly onePOS -> Uber. */
-      const productResult = await db(
-        `
-        SELECT p.id, p.name, p.description, p.price, p.vat_rate, p.active,
-               p.uber_item_id, p.available_on_uber, c.name AS category_name
-        FROM products p
-        LEFT JOIN categories c ON c.id = p.category_id
-        WHERE p.company_id = $1
-          AND (p.available_on_uber = true OR p.uber_item_id IS NOT NULL)
-        ORDER BY c.display_order, c.name, p.name
-        `,
-        [req.user.companyId]
-      );
-
-      const products = productResult.rows;
-
-      if (!products.length) {
+      if (syncResult.code === "NOTHING_TO_SYNC") {
         return res.json({
           success: false,
           code: "NOTHING_TO_SYNC",
           message: "No products are marked 'Available on Uber Eats' in the Product Master",
-          data: { published: 0, skipped: products.length },
+          data: { published: 0, skipped: syncResult.productCount },
         });
       }
-
-      const service = getPlatformService("uber");
-      const syncResult = await service.syncMenu(products, runtime);
 
       /* Persist the sync outcome on the integration configuration for the
        * Settings status display (last successful sync / last error). */
@@ -1048,12 +1007,49 @@ export default function createOnlineRouter({
           skippedInactive: syncResult.meta ? syncResult.meta.skippedInactiveCount : 0,
           categories: syncResult.meta ? syncResult.meta.categoryCount : 0,
           itemIds: syncResult.meta ? syncResult.meta.publishedItemIds : [],
+          invalidItems: syncResult.details ? syncResult.details.invalidItems : [],
           uberResponse: syncResult.data ?? null,
         },
       });
     } catch (error) {
       console.error("Uber menu sync error:", error);
       res.status(500).json({ success: false, message: "Uber menu sync failed" });
+    }
+  });
+
+  /*
+   * Store selection uses the package's registered UBER_GET_STORES action.
+   * The action loads this tenant's connector and the active environment,
+   * keeping discovery scoped to the authenticated company.
+   */
+  router.get("/online/uber/stores", authenticate, authorize("online_orders.configure"), async (req, res) => {
+    try {
+      const result = await executeWorkflowAction({
+        db,
+        req,
+        companyId: req.user.companyId,
+        action: { type: "UBER_GET_STORES" },
+      });
+      const response = result?.data || {};
+      const rawStores = Array.isArray(response.stores) ? response.stores : Array.isArray(response) ? response : [];
+      const stores = rawStores.map((store) => ({
+        storeId: store.id || store.store_id || null,
+        name: store.name || null,
+        brandId: store.brand?.id || store.brand_id || null,
+        brandName: store.brand?.description || store.brand?.name || store.brand_name || null,
+        status: typeof store.status === "string" ? store.status : store.status?.type || null,
+        integrationEnabled: store.integration_enabled == null ? null : store.integration_enabled === true,
+      })).filter((store) => store.storeId);
+
+      return res.json({
+        success: result?.success === true,
+        code: result?.code || null,
+        message: result?.message || null,
+        data: { stores, httpStatus: result?.httpStatus ?? null },
+      });
+    } catch (error) {
+      console.error("Uber store discovery error:", error);
+      return res.status(500).json({ success: false, message: error.message || "Uber store discovery failed" });
     }
   });
 
@@ -1074,9 +1070,14 @@ export default function createOnlineRouter({
    */
   router.get("/online/uber/test-connection", authenticate, authorize("online_orders.configure"), async (req, res) => {
     try {
-      const runtime = await loadPlatformConfig(db, req.user.companyId, "uber");
+      const connectionResult = await executeWorkflowAction({
+        db,
+        req,
+        companyId: req.user.companyId,
+        action: { type: "UBER_TEST_CONNECTION" },
+      });
 
-      if (runtime.enabled !== true) {
+      if (connectionResult.code === "PLATFORM_DISABLED") {
         return res.json({
           success: false,
           code: "PLATFORM_DISABLED",
@@ -1085,57 +1086,13 @@ export default function createOnlineRouter({
         });
       }
 
-      const service = getPlatformService("uber");
-      const environments = [runtime.environment || "sandbox"];
-
-      if (environments[0] !== "production") {
-        environments.push("production"); // diagnostic second host
-      }
-
-      const attempts = [];
-
-      for (const environment of environments) {
-        const response = await service.getStores({ ...runtime, environment });
-
-        attempts.push({
-          environment,
-          success: response.success === true,
-          httpStatus: response.httpStatus ?? null,
-          code: response.code || null,
-          message: response.message || null,
-          stores: response.success ? extractUberStoreIds(response.data) : [],
-          uberResponse: response.data ?? null,
-        });
-
-        if (response.success) {
-          break; // first successful host wins
-        }
-      }
-
-      const successAttempt = attempts.find((attempt) => attempt.success);
-      const lastAttempt = attempts[attempts.length - 1];
-
-      /*
-       * HTTP 200 with an empty stores list is NOT an authentication failure -
-       * it means connectivity is fine but Uber has not provisioned a Sandbox
-       * store for this application yet (per the official sandbox guide, test
-       * stores are provisioned by Uber's Integration Tech Support).
-       */
-      const successMessage = successAttempt
-        ? successAttempt.stores.length
-          ? `Uber connection OK (${successAttempt.environment}) - ${successAttempt.stores.length} store(s) found`
-          : successAttempt.environment === "sandbox"
-            ? "No Sandbox stores are currently provisioned for this application."
-            : "No stores are currently provisioned for this application."
-        : null;
-
       return res.json({
-        success: Boolean(successAttempt),
-        message: successMessage || lastAttempt.message || "Uber API rejected the request - see the raw response",
-        code: successAttempt ? null : lastAttempt.code || null,
+        success: connectionResult.success,
+        message: connectionResult.message,
+        code: connectionResult.code || null,
         data: {
-          attempts,
-          stores: successAttempt ? successAttempt.stores : [],
+          attempts: connectionResult.attempts,
+          stores: connectionResult.stores,
         },
       });
     } catch (error) {
@@ -1355,7 +1312,16 @@ export default function createOnlineRouter({
 
       if (runtime.order_acceptance === "auto") {
         const service = getPlatformService(platform);
-        const acceptResponse = await service.acceptOrder(order, runtime);
+        const acceptResponse = platform === "uber"
+          ? await executeWorkflowAction({
+              db,
+              client,
+              req,
+              companyId: req.user.companyId,
+              recordId: order.id,
+              action: { type: "UBER_ACCEPT_ORDER", orderId: order.id },
+            })
+          : await service.acceptOrder(order, runtime);
 
         await logSimulatedPlatformCall({
           companyId: req.user.companyId,
@@ -1547,7 +1513,7 @@ export default function createOnlineRouter({
       const service = getPlatformService(order.platform);
 
       console.time(`[${req.params.id}] ${toStatus} - callPlatform`);
-      const platformResponse = await callPlatform(service, order, runtime);
+      const platformResponse = await callPlatform(service, order, runtime, client);
       console.timeEnd(`[${req.params.id}] ${toStatus} - callPlatform`);
 
       // Queue logging for after commit to avoid lock conflicts
@@ -1589,6 +1555,12 @@ export default function createOnlineRouter({
         const httpStatus =
           failureCode === "PLATFORM_DISABLED"
             ? 409
+            : failureCode === "ORDER_NOT_FOUND"
+              ? 404
+              : failureCode === "STORE_SCOPE_MISMATCH"
+                ? 403
+                : failureCode === "INVALID_STATUS"
+                  ? 409
             : failureCode === "INVALID_OTP" || failureCode === "OTP_REQUIRED"
               ? 400
               : 502;
@@ -1789,7 +1761,16 @@ export default function createOnlineRouter({
        * accepted_at and preparing_at are stamped here (preparing_at is the
        * existing timestampColumn below; accepted_at is written explicitly). */
       timestampColumn: "preparing_at",
-      callPlatform: (service, order, runtime) => service.acceptOrder(order, runtime),
+      callPlatform: (service, order, runtime, client) => order.platform === "uber"
+        ? executeWorkflowAction({
+            db,
+            client,
+            req,
+            companyId: req.user.companyId,
+            recordId: order.id,
+            action: { type: "UBER_ACCEPT_ORDER", orderId: order.id },
+          })
+        : service.acceptOrder(order, runtime),
       buildMessage: (order) => `Order accepted - preparation started (platform call ${order.platform})`,
       onTransition: async (client, { order, toStatus }) => {
         await client.query(
@@ -1820,7 +1801,16 @@ export default function createOnlineRouter({
       releaseInventory: true,
       reason,
       timestampColumn: "cancelled_at",
-      callPlatform: (service, order, runtime) => service.rejectOrder(order, reason, runtime),
+      callPlatform: (service, order, runtime, client) => order.platform === "uber"
+        ? executeWorkflowAction({
+            db,
+            client,
+            req,
+            companyId: req.user.companyId,
+            recordId: order.id,
+            action: { type: "UBER_DENY_ORDER", orderId: order.id, reason },
+          })
+        : service.rejectOrder(order, reason, runtime),
       buildMessage: (order) => `Order rejected; inventory reservation released (${order.platform})`,
     });
   });
@@ -2222,10 +2212,21 @@ export default function createOnlineRouter({
    *   3. the company's default store so the order is still recorded when no
    *      explicit mapping exists.
    */
-  async function resolveUberStoreId(companyId, { storeId = null, locationId = null } = {}) {
+  async function resolveUberStoreId(companyId, { storeId = null, locationId = null } = {}, configuration = {}) {
     const candidates = [storeId, locationId].filter(Boolean).map(String);
 
     for (const candidate of candidates) {
+      const configuredMapping = Array.isArray(configuration.store_mappings)
+        ? configuration.store_mappings.find((mapping) => String(mapping.uber_store_id) === candidate)
+        : null;
+      if (configuredMapping?.onepos_store_id) {
+        const mappedStore = await db(
+          "SELECT id FROM stores WHERE company_id = $1 AND id = $2 LIMIT 1",
+          [companyId, configuredMapping.onepos_store_id]
+        );
+        return mappedStore.rows[0]?.id || null;
+      }
+
       const matchedStore = await db(
         "SELECT id FROM stores WHERE company_id = $1 AND code = $2 LIMIT 1",
         [companyId, candidate]
@@ -2236,12 +2237,14 @@ export default function createOnlineRouter({
       }
     }
 
+    if (candidates.length) return null;
+
     const fallback = await db(
-      "SELECT id FROM stores WHERE company_id = $1 ORDER BY created_at LIMIT 1",
+      "SELECT id FROM stores WHERE company_id = $1 ORDER BY created_at LIMIT 2",
       [companyId]
     );
 
-    return fallback.rows.length ? fallback.rows[0].id : null;
+    return fallback.rows.length === 1 ? fallback.rows[0].id : null;
   }
 
   /*
@@ -2719,6 +2722,7 @@ export default function createOnlineRouter({
       let attachedOrderId = null;
       let storeMappingResult = null;
       let intakeResult = null;
+      let cancellationResult = null;
 
       /*
        * STORE PROVISIONING: remember the Uber store on the integration
@@ -2727,7 +2731,7 @@ export default function createOnlineRouter({
        */
       if (event && (event.eventKind === "store_provisioned" || event.eventKind === "store_deprovisioned")) {
         try {
-          const resolvedStoreId = await resolveUberStoreId(companyId, { storeId: event.storeId });
+          const resolvedStoreId = await resolveUberStoreId(companyId, { storeId: event.storeId }, configuration);
 
           await db(
             `UPDATE integrations
@@ -2766,7 +2770,7 @@ export default function createOnlineRouter({
 
         if (normalized) {
           try {
-            const storeId = await resolveUberStoreId(companyId, normalized);
+            const storeId = await resolveUberStoreId(companyId, normalized, configuration);
 
             intakeResult = await createUberOrder({
               companyId,
@@ -2788,6 +2792,79 @@ export default function createOnlineRouter({
           }
         } else {
           console.error("Uber orders.notification could not be normalised - no order created");
+        }
+      } else if (event && event.eventKind === "order_cancelled") {
+        cancellationResult = { applied: false, reason: null };
+
+        if (signatureState !== "verified") {
+          cancellationResult.reason = "signature_not_verified";
+        } else if (!event.externalOrderId) {
+          cancellationResult.reason = "missing_external_order_id";
+        } else {
+          try {
+            const orderRow = await db(
+              `SELECT id, status, store_id
+               FROM online_orders
+               WHERE company_id = $1 AND platform = 'uber' AND external_order_id = $2
+               LIMIT 1`,
+              [companyId, event.externalOrderId]
+            );
+            const order = orderRow.rows[0] || null;
+
+            if (!order) {
+              cancellationResult.reason = "order_not_mapped";
+            } else if (!order.store_id) {
+              cancellationResult.reason = "order_store_not_mapped";
+            } else {
+              const uberStoreId = event.storeId || event.userId || configuration.store_id || null;
+              let resolvedStoreId = order.store_id;
+
+              if (uberStoreId) {
+                resolvedStoreId = await resolveUberStoreId(
+                  companyId,
+                  { storeId: String(uberStoreId) },
+                  configuration
+                );
+              } else {
+                const ownedStore = await db(
+                  "SELECT id FROM stores WHERE company_id = $1 AND id = $2 LIMIT 1",
+                  [companyId, order.store_id]
+                );
+                resolvedStoreId = ownedStore.rows[0] ? ownedStore.rows[0].id : null;
+              }
+
+              if (!resolvedStoreId) {
+                cancellationResult.reason = "uber_store_not_mapped";
+              } else if (String(resolvedStoreId) !== String(order.store_id)) {
+                cancellationResult.reason = "order_store_mismatch";
+              } else {
+                const transition = await transitionGenericOrder({
+                  pool,
+                  companyId,
+                  orderId: order.id,
+                  userId: null,
+                  toStatus: "CANCELLED",
+                  reason: `Uber cancellation notification (${event.eventType})`,
+                  createInventoryMovement,
+                });
+
+                if (transition.success) {
+                  attachedOrderId = order.id;
+                  cancellationResult = { applied: true, fromStatus: order.status, toStatus: "CANCELLED" };
+                } else if (order.status === "CANCELLED") {
+                  // A redelivered cancellation is already reflected by the
+                  // existing status event; do not append another event or release stock twice.
+                  attachedOrderId = order.id;
+                  cancellationResult = { applied: false, reason: "already_cancelled" };
+                } else {
+                  cancellationResult.reason = "unsupported_order_state";
+                }
+              }
+            }
+          } catch (cancelError) {
+            cancellationResult.reason = "cancellation_processing_failed";
+            console.error("Uber cancellation webhook could not be applied:", cancelError);
+          }
         }
       } else if (event && event.externalOrderId) {
         try {
@@ -2839,6 +2916,7 @@ export default function createOnlineRouter({
         responseBody: {
           order_attached: Boolean(attachedOrderId),
           store_mapping: storeMappingResult,
+          cancellation: cancellationResult,
         },
         success: true,
         orderId: attachedOrderId,

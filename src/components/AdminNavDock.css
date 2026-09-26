@@ -13,25 +13,26 @@
   --dock-width: 1200px;
   --dock-slot-width: 80px;
   --dock-bottom: 12px;
+  --dock-offset-bottom: max(var(--dock-bottom), calc(env(safe-area-inset-bottom, 0px) + var(--dock-bottom)));
   --dock-radius: 32px;
 
   --onepos-dock-bg: rgba(24, 31, 38, 0.92);
 
   --dock-shadow:
-    0 14px 40px rgba(4, 26, 24, 0.45),
-    0 3px 10px rgba(4, 26, 24, 0.30),
-    inset 0 1px 0 rgba(255, 255, 255, 0.10);
+    0 14px 40px rgba(4,26,24,.45),
+    0 3px 10px rgba(4,26,24,.30),
+    inset 0 1px 0 rgba(255,255,255,.10);
 
   /*
    * Offline state:
    * Keep the exact same dock but add a subtle red outer glow.
    */
   --dock-offline-shadow:
-    0 0 0 1px rgba(248, 113, 113, 0.34),
-    0 0 20px 3px rgba(248, 113, 113, 0.26),
-    0 14px 40px rgba(4, 26, 24, 0.45),
-    0 3px 10px rgba(4, 26, 24, 0.30),
-    inset 0 1px 0 rgba(255, 255, 255, 0.10);
+    0 0 0 1px rgba(248,113,113,.34),
+    0 0 20px 3px rgba(248,113,113,.26),
+    0 14px 40px rgba(4,26,24,.45),
+    0 3px 10px rgba(4,26,24,.30),
+    inset 0 1px 0 rgba(255,255,255,.10);
 
   --dock-blur: 18px;
   --dock-border: rgba(255, 255, 255, 0.15);
@@ -47,13 +48,12 @@
 
   inset-inline: 0;
 
-  bottom: max(
-    var(--dock-bottom),
-    env(safe-area-inset-bottom)
-  );
+  bottom: var(--dock-offset-bottom);
 
   display: flex;
   justify-content: center;
+  box-sizing: border-box;
+  padding-inline: max(8px, env(safe-area-inset-left, 0px), env(safe-area-inset-right, 0px));
 
   z-index: 900;
 
@@ -79,10 +79,7 @@
 
   width: fit-content;
 
-  max-width: min(
-    var(--dock-width),
-    calc(100vw - 16px)
-  );
+  max-width: min(var(--dock-width), 100%);
 
   height: var(--dock-height);
 
@@ -124,7 +121,7 @@
  */
 
 .admin-nav-dock[data-connectivity="offline"] {
-  box-shadow: var(--dock-offline-shadow);
+  box-shadow: var(--dock-offline-shadow), var(--dock-shadow);
   border-color: rgba(248, 113, 113, 0.34);
 }
 
@@ -212,16 +209,24 @@
 
 
 /*
- * Explicitly disable any old centre pseudo-elements.
- *
- * This protects against an older Jarvis pedestal/notch rule surviving
- * elsewhere in the cascade.
+ * The centre-zone stays a clean, continuous dock surface.
+ * A minimal soft halo sits behind the orb without creating a raised tab,
+ * pedestal or curved backing panel.
  */
+.admin-nav-dock-center {
+  position: relative;
+  z-index: 2;
+}
 
-.admin-nav-dock-center::before,
 .admin-nav-dock-center::after {
-  content: none !important;
-  display: none !important;
+  content: "";
+  position: absolute;
+  inset: 8px 16px -10px;
+  border-radius: 999px;
+  background: radial-gradient(circle at center, rgba(102, 227, 220, 0.20), rgba(102, 227, 220, 0.04) 38%, transparent 72%);
+  box-shadow: 0 0 18px rgba(45, 212, 191, 0.14);
+  z-index: -1;
+  pointer-events: none;
 }
 
 
@@ -239,6 +244,20 @@
    MOBILE
    ========================================================================== */
 
+@media (max-width: 900px) {
+  .admin-nav-dock-slot {
+    --dock-slot-width: clamp(64px, 8vw, 76px);
+    min-width: 48px;
+    min-height: 48px;
+  }
+
+  .admin-nav-dock-center {
+    --dock-center-zone: clamp(76px, 11vw, 100px);
+    flex-basis: var(--dock-center-zone);
+    width: var(--dock-center-zone);
+  }
+}
+
 @media (max-width: 640px) {
 
   .admin-nav-dock {
@@ -246,17 +265,58 @@
   }
 
   .admin-nav-dock-slot {
-    --dock-slot-width: 58px;
+    --dock-slot-width: clamp(48px, 12vw, 58px);
+    min-width: 48px;
+    min-height: 48px;
   }
 
   .admin-nav-dock-center {
-    flex-basis: 82px;
-    width: 82px;
-
-    /*
-     * Still exactly the same height as the dock.
-     */
+    --dock-center-zone: clamp(64px, 12vw, 82px);
+    flex-basis: var(--dock-center-zone);
+    width: var(--dock-center-zone);
     height: var(--dock-height);
+  }
+}
+
+/*
+ * PHONE (≤480px): the bar must always be ONE row inside the viewport.
+ *
+ * The JS slot budget already removes quick slots; the CSS enforces the
+ * geometry so nothing can wrap or spill regardless of label length:
+ *   - nowrap on the bar and wings (the JS budget keeps total width sane)
+ *   - the centre pocket contracts toward the orb size
+ *   - scrollable wings keep every slot reachable without shrinking hit targets
+ */
+@media (max-width: 480px) {
+
+  .admin-nav-dock {
+    gap: 0;
+    padding-inline: 4px;
+    flex-wrap: nowrap;
+  }
+
+  .admin-nav-dock-wing {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    overflow-y: hidden;
+    overscroll-behavior-x: contain;
+    touch-action: pan-x;
+  }
+
+  .admin-nav-dock-slot {
+    --dock-slot-width: clamp(48px, 12vw, 56px);
+    min-width: 48px;
+    min-height: 48px;
+  }
+
+  .admin-nav-dock-slot span {
+    max-width: calc(var(--dock-slot-width) - 4px);
+  }
+
+  .admin-nav-dock-center {
+    --dock-center-zone: clamp(56px, 16vw, 76px);
+    flex: 0 0 var(--dock-center-zone);
+    width: var(--dock-center-zone);
   }
 }
 

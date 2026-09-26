@@ -67,6 +67,16 @@ function getActionLabel(type) {
   return actionOptions.find((option) => option.value === type)?.label || "Action";
 }
 
+/* Trigger values arrive as machine keys ("after_update"); the canvas Start
+   pill and the workflow list present them in words. */
+const TRIGGER_LABELS = {
+  after_create: "When a record is created",
+  after_update: "When a record is updated",
+  after_save: "When a record is created or updated",
+  manual: "Manual trigger",
+};
+const getTriggerLabel = (value) => TRIGGER_LABELS[value] || value || "Manual trigger";
+
 function ProviderStatusPill({ available }) {
   return (
     <span className={`inline-flex items-center rounded-full px-2 py-1 text-[11px] font-medium ${available ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700"}`}>
@@ -386,11 +396,11 @@ function WorkflowCanvas({ workflow, setWorkflow, updateStep, moveStep, duplicate
       </aside>
       <main className="relative overflow-auto rounded-2xl border border-slate-200 bg-slate-50/70 p-5 shadow-inner" onDragOver={(e) => e.preventDefault()} onDrop={(e) => dropAt(e, workflow.steps.length)}>
         <div className="mx-auto flex max-w-xl flex-col items-center">
-          <div className="rounded-full border border-emerald-200 bg-emerald-50 px-5 py-2 text-sm font-semibold text-emerald-800">Start · {workflow.trigger || "manual"}</div>
+          <div className="rounded-full border border-emerald-200 bg-emerald-50 px-5 py-2 text-sm font-semibold text-emerald-800">Start · {getTriggerLabel(workflow.trigger)}</div>
           <div className="h-8 w-px bg-slate-300" />
           {workflow.steps.map((step, index) => <div key={step.id} className="flex w-full flex-col items-center" onDragOver={(e) => e.preventDefault()} onDrop={(e) => { e.stopPropagation(); dropAt(e, index); }}>
             <button type="button" draggable onDragStart={(e) => e.dataTransfer.setData("application/x-onepos-flow-node", step.id)} onClick={() => setSelectedId(step.id)} className={`w-full rounded-2xl border bg-white px-4 py-3 text-left shadow-sm transition ${selectedId === step.id ? "border-blue-400 ring-2 ring-blue-100" : "border-slate-200 hover:border-slate-300"} ${step.enabled === false ? "opacity-50" : ""}`}>
-              <span className="block text-[11px] font-medium uppercase tracking-wide text-slate-400">{step.type}</span>
+              <span className="block text-[11px] font-medium uppercase tracking-wide text-slate-400">{getActionLabel(step.type)}</span>
               <span className="mt-0.5 block font-semibold text-slate-800">{step.label || getActionLabel(step.type)}</span>
               {step.type === "CONDITION" ? <span className="mt-2 block text-xs text-slate-500">Decision branches are evaluated from metadata conditions.</span> : null}
             </button>
@@ -594,7 +604,7 @@ export default function WorkflowAdmin({ onMessage, onError }) {
             <div key={`${item.name || "workflow"}-${index}`} className="flex items-center justify-between gap-3 border-b border-slate-100 p-4 last:border-b-0">
               <div>
                 <strong className="text-sm text-slate-800">{item.name || "Unnamed workflow"}</strong>
-                <span className="block text-xs text-slate-500">{item.object || "No trigger object"} · {item.trigger || "Manual"}</span>
+                <span className="block text-xs text-slate-500">{item.object || "No trigger object"} · {getTriggerLabel(item.trigger)}</span>
               </div>
               <div className="flex gap-3">
                 <button type="button" className="text-sm text-blue-700" onClick={() => { setWorkflowId(item.id || null); setWorkflow(item); setShowBuilder(true); }}>Edit</button>

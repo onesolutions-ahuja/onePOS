@@ -258,7 +258,7 @@ export default function CustomPageBuilder({ onMessage, onError }) {
       const found = findNode(draft.sections, payload.nodeId);
       if (!found) return;
       if (!canDropNode({ parentComponentKey: null, droppedComponentKey: found.node.componentKey })) return;
-      applyDraft((current) => moveNodeInSections(current.sections, { nodeId: payload.nodeId, targetParentKey: "SECTION", targetIndex: index, targetSectionId: sectionId }));
+      applyDraft((current) => ({ ...current, sections: moveNodeInSections(current.sections, { nodeId: payload.nodeId, targetParentKey: "SECTION", targetIndex: index, targetSectionId: sectionId }) }));
       setSelectedNodeId(payload.nodeId); setSelectedSectionId(null);
     }
   };
@@ -270,10 +270,10 @@ export default function CustomPageBuilder({ onMessage, onError }) {
     if (payload.kind === "palette") {
       if (!canDropNode({ parentComponentKey: parentKey, droppedComponentKey: payload.componentKey })) return;
       const node = newNodeFor(payload.componentKey);
-      applyDraft((current) => updateNodeInSections(current.sections, parentNodeId, (parent) => ({
+      applyDraft((current) => ({ ...current, sections: updateNodeInSections(current.sections, parentNodeId, (parent) => ({
         ...parent,
         children: (() => { const children = [...(parent.children || [])]; children.splice(index ?? children.length, 0, node); return children; })(),
-      })));
+      })) }));
       setSelectedNodeId(node.id);
       return;
     }
@@ -281,14 +281,24 @@ export default function CustomPageBuilder({ onMessage, onError }) {
       const moving = findNode(draft.sections, payload.nodeId);
       if (!moving || payload.nodeId === parentNodeId) return;
       if (!canDropNode({ parentComponentKey: parentKey, droppedComponentKey: moving.node.componentKey })) return;
-      applyDraft((current) => moveNodeInSections(current.sections, { nodeId: payload.nodeId, targetParentKey: parentNodeId, targetIndex: index, targetSectionId: null }));
+      applyDraft((current) => ({ ...current, sections: moveNodeInSections(current.sections, { nodeId: payload.nodeId, targetParentKey: parentNodeId, targetIndex: index, targetSectionId: null }) }));
       setSelectedNodeId(payload.nodeId);
     }
   };
 
-  const updateNode = (nodeId, changes) => {
-    applyDraft((current) => updateNodeInSections(current.sections, nodeId, (node) => ({ ...node, ...changes })));
-  };
+  /* The customPageTree helpers return a SECTIONS ARRAY, so the draft object
+     must be re-wrapped around the result. Returning the bare array would
+     replace the whole draft and leave `draft.sections` undefined. */
+const updateNode = (nodeId, changes) => {
+  applyDraft((current) => ({
+    ...current,
+    sections: updateNodeInSections(
+      current.sections,
+      nodeId,
+      (node) => ({ ...node, ...changes })
+    ),
+  }));
+};
 
   const removeSelectedNode = () => {
     if (!selectedNodeId) return;
@@ -562,7 +572,10 @@ export default function CustomPageBuilder({ onMessage, onError }) {
               </select>
             </div>
             <div className="border-t border-slate-100 pt-3">
-              <InteractionProperties node={node} onChange={(changes) => updateNode(node.id, changes)} />
+<InteractionProperties
+  node={node}
+  onChange={(changes) => updateNode(node.id, changes)}
+/>
             </div>
           </div>
         ) : null}
@@ -918,13 +931,14 @@ function SortEditor({ collection, fields, onChange }) {
 }
 
 /** INTERACTION group — delegates to the generic picker. */
-function InteractionProperties({ node, onChange }) {
+function InteractionProperties({ node,onChange }) {
   return (
     <div className="space-y-2">
       <p className="text-[10.5px] font-semibold uppercase tracking-wide text-slate-400">On Click</p>
       <ActionWorkflowPicker
         interaction={node.interaction || { type: "none" }}
         objectKey={node.collection?.objectKey || ""}
+      
         onChange={(interaction) => onChange({ interaction })}
       />
     </div>

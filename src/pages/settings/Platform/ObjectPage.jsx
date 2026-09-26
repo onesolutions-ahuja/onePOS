@@ -5,6 +5,8 @@ import FormRenderer from "./FormRenderer.jsx";
 import RecordModal from "../../../components/RecordModal.jsx";
 import ObjectHistory from "./ObjectHistory.jsx";
 import ObjectRecordDetail from "./ObjectRecordDetail.jsx";
+import ObjectList from "../../../components/records/ObjectList.jsx";
+import { formatRecordDisplayValue, isTechnicalRecordField } from "../../../utils/recordDisplay.js";
 
 function getObjectKey(object) {
   return (
@@ -111,51 +113,17 @@ function getFieldValue(record, field) {
   return undefined;
 }
 
+function layoutPresentationClass(layout) {
+  const mode = layout?.definition?.presentation_mode || "inline";
+  return mode === "overlay_square"
+    ? "platform-record-modal-compact"
+    : mode === "overlay_rectangle"
+      ? "platform-record-modal-rectangle"
+      : "platform-record-modal-inline";
+}
+
 function formatValue(value, field) {
-  if (value === null || value === undefined || value === "") {
-    return "—";
-  }
-
-  function layoutPresentationClass(layout) {
-    const mode = layout?.definition?.presentation_mode || "inline";
-    return mode === "overlay_square"
-      ? "platform-record-modal-compact"
-      : mode === "overlay_rectangle"
-        ? "platform-record-modal-rectangle"
-        : "platform-record-modal-inline";
-  }
-
-  const type = getFieldType(field);
-
-  if (type === "boolean") {
-    return value ? "Yes" : "No";
-  }
-
-  if (type === "date") {
-    const date = new Date(value);
-
-    if (!Number.isNaN(date.getTime())) {
-      return date.toLocaleDateString();
-    }
-  }
-
-  if (type === "datetime") {
-    const date = new Date(value);
-
-    if (!Number.isNaN(date.getTime())) {
-      return date.toLocaleString();
-    }
-  }
-
-  if (typeof value === "object") {
-    try {
-      return JSON.stringify(value);
-    } catch {
-      return String(value);
-    }
-  }
-
-  return String(value);
+  return formatRecordDisplayValue(value, field);
 }
 
 export default function ObjectPage({
@@ -164,6 +132,7 @@ export default function ObjectPage({
   object: suppliedObject,
   recordId,
   suppliedRecord,
+  fields: suppliedFields = null,
   onBack,
   onSelectRecord,
 }) {
@@ -172,8 +141,7 @@ export default function ObjectPage({
 
   const [fields, setFields] = useState([]);
   const [recordTypes, setRecordTypes] = useState([]);
-  const [creating, setCreating] = useState(false);
-  const [quickCreating, setQuickCreating] = useState(false);
+  const [recordModal, setRecordModal] = useState(null);
   const [selectedRecordTypeId, setSelectedRecordTypeId] = useState("");
   const [records, setRecords] = useState(
     suppliedRecord
@@ -189,7 +157,6 @@ export default function ObjectPage({
   const [editLayout, setEditLayout] = useState(null);
   const [quickCreateLayout, setQuickCreateLayout] = useState(null);
   const [relatedLists, setRelatedLists] = useState({});
-  const [editingRecord, setEditingRecord] = useState(false);
   const [executingAction, setExecutingAction] = useState("");
   const [recordButtons, setRecordButtons] = useState([]);
 
@@ -203,11 +170,16 @@ export default function ObjectPage({
   const [error, setError] = useState("");
   const [search, setSearch] = useState("");
   const activeFields = useMemo(
-    () => fields.filter((field) => field?.active !== false),
+    () => fields.filter((field) => field?.active !== false && !isTechnicalRecordField(field)),
     [fields]
   );
-  // Every Platform Object uses the same metadata record command surface.
-  const canWriteRecords = true;
+  /* Every Platform Object uses the same metadata record command surface.
+     A pre-supplied fields list marks the self-service READ-ONLY profile view:
+     the shell opened one specific record (the signed-in user's own), so the
+     admin-only metadata commands (record buttons, create/quick-create, edit
+     lifecycle) stay out of the surface instead of 403-ing at click time. */
+  const canWriteRecords = !suppliedFields;
+  const selfServiceView = Boolean(suppliedFields);
   const filteredRecords = useMemo(() => {
     const query = search.trim().toLowerCase();
     if (!query) return records;
@@ -236,8 +208,10 @@ export default function ObjectPage({
   useEffect(() => {
     if (objectMetadata) {
       loadFields();
-      loadDetailLayout();
-      loadRecordButtons();
+      if (!selfServiceView) {
+        loadDetailLayout();
+        loadRecordButtons();
+      }
     }
   }, [objectMetadata]);
 
@@ -261,10 +235,17 @@ export default function ObjectPage({
       setHistory([]);
       return;
     }
+    /* Self-service profile view: record history is an admin metadata read,
+       so it stays out of the surface (the API would refuse it for a caller
+       without the object's view grant). */
+    if (selfServiceView) {
+      setHistory([]);
+      return;
+    }
     apiRequest(`/api/platform/objects/${encodeURIComponent(key)}/records/${id}/history`)
       .then((response) => setHistory(Array.isArray(response?.data) ? response.data : []))
       .catch((err) => setError(err?.message || "Unable to load record history."));
-  }, [objectMetadata, selectedRecord]);
+  }, [objectMetadata, selectedRecord, selfServiceView]);
 
   useEffect(() => {
     const components = detailLayout?.definition?.components || [];
@@ -305,6 +286,12 @@ export default function ObjectPage({
   }
 
   async function loadFields() {
+    /* Self-service profile view: the shell pre-loaded the canonical readable
+       fields through the runtime feed — no admin metadata calls here. */
+    if (suppliedFields) {
+      setFields(Array.isArray(suppliedFields) ? suppliedFields.filter((field) => field?.active !== false) : []);
+      return;
+    }
     const id =
       objectMetadata?.id ||
       objectMetadata?.object_id;
@@ -347,6 +334,7 @@ export default function ObjectPage({
   }
 
   async function loadRecordButtons() {
+    if (selfServiceView) return;
     const objectId = objectMetadata?.id || objectMetadata?.object_id;
     if (!objectId) return;
     try {
@@ -406,7 +394,7 @@ export default function ObjectPage({
       method: "PUT",
       body: JSON.stringify({ data: values }),
     });
-    setEditingRecord(false);
+    setRecordModal(null);
     await loadRecords();
   }
 
@@ -432,10 +420,11 @@ export default function ObjectPage({
     const parentId = selectedRecord?.id || selectedRecord?.record_id;
     if (!childKey || !childField || !parentId) throw new Error("Related record configuration is incomplete");
     const initialValues = { [childField.api_name || childField.source_column]: parentId };
-    setCreating({ childKey, fields: childFields, initialValues, relationship });
+    setRecordModal({ type: "create", childKey, fields: childFields, initialValues, relationship });
   }
 
   async function createRecord(values) {
+    const creating = recordModal?.type === "create" ? recordModal : null;
     const key = creating?.childKey || getObjectKey(objectMetadata);
     const initialValues = creating?.initialValues || {};
     const payload = { ...initialValues, ...values };
@@ -443,8 +432,7 @@ export default function ObjectPage({
       method: "POST",
       body: JSON.stringify({ data: payload, recordTypeId: creating?.childKey ? null : selectedRecordTypeId || null }),
     });
-    setCreating(false);
-    setQuickCreating(false);
+    setRecordModal(null);
     await loadRecords();
     if (creating?.relationship) {
       const component = (detailLayout?.definition?.components || []).find((item) => item.relationship_key === creating.relationship.relationship_key);
@@ -455,7 +443,7 @@ export default function ObjectPage({
   async function handleMetadataButton(button) {
     const targetType = button?.target_type || "action";
     const targetKey = button?.target_key || button?.action_key;
-    if (targetType === "action" && targetKey === "RECORD_SAVE") return setEditingRecord(true);
+    if (targetType === "action" && targetKey === "RECORD_SAVE") return setRecordModal({ type: "edit" });
     if (targetType === "action" && targetKey === "RECORD_DELETE") return deleteSelectedRecord();
     const recordKey = selectedRecord?.id || selectedRecord?.record_id;
     if (!recordKey || !button?.button_key) return setError("A record and registered button are required.");
@@ -475,7 +463,7 @@ export default function ObjectPage({
   }
 
   async function handleConfiguredAction(component) {
-    if (component.action === "edit") return setEditingRecord(true);
+    if (component.action === "edit") return setRecordModal({ type: "edit" });
     if (component.action === "delete") return deleteSelectedRecord();
     if (component.action === "create_related") return createRelatedRecord(component);
     if (component.action === "open_related") {
@@ -631,15 +619,9 @@ export default function ObjectPage({
           ) : null}
 
           <div>
-            <div className="platform-eyebrow">
-              PLATFORM / OBJECT
-            </div>
-
+            {/* Clean page header — the technical "Platform / Object"
+                breadcrumb and raw key are gone from the visible heading. */}
             <h2>{objectLabel}</h2>
-
-            <p>
-              {getObjectKey(objectMetadata)}
-            </p>
           </div>
         </div>
 
@@ -673,8 +655,8 @@ export default function ObjectPage({
             </div>
             {canWriteRecords ? (
               <div className="flex gap-2">
-                <button type="button" className="platform-secondary-button" onClick={() => setQuickCreating(true)}>Quick Create</button>
-                <button type="button" className="platform-secondary-button" onClick={() => setCreating((value) => !value)}>+ New Record</button>
+                <button type="button" className="platform-secondary-button" onClick={() => setRecordModal({ type: "quick_create" })}>Quick Create</button>
+                <button type="button" className="platform-secondary-button" onClick={() => setRecordModal((current) => current?.type === "create" ? null : { type: "create" })}>+ New Record</button>
               </div>
             ) : null}
 
@@ -684,23 +666,23 @@ export default function ObjectPage({
               </span>
             ) : null}
           </div>
-          {creating ? (
-            <RecordModal open={Boolean(creating)} mode="create" title="Create record" size="lg" className={layoutPresentationClass(createLayout || detailLayout)} onClose={() => setCreating(false)} formId="platform-create-record-form">
+          {recordModal?.type === "create" ? (
+            <RecordModal open mode="create" title="Create record" size="lg" className={layoutPresentationClass(createLayout || detailLayout)} onClose={() => setRecordModal(null)} formId="platform-create-record-form">
             <div className="platform-create-record">
               {recordTypes.length ? <label className="platform-form-field"><span>Record Type</span><select value={selectedRecordTypeId} onChange={(event) => setSelectedRecordTypeId(event.target.value)}><option value="">No record type</option>{recordTypes.map((type) => <option key={type.id} value={type.id}>{type.label}{type.is_default ? " (default)" : ""}</option>)}</select></label> : null}
               <FormRenderer
                 formId="platform-create-record-form"
                 definition={createLayout?.definition || detailLayout?.definition}
-                fields={creating?.fields || activeFields}
-                initialValues={creating?.initialValues || {}}
+                fields={recordModal.fields || activeFields}
+                initialValues={recordModal.initialValues || {}}
                 mode="create"
                 onSubmit={createRecord}
               />
             </div>
             </RecordModal>
           ) : null}
-          {quickCreating ? (
-            <RecordModal open mode="create" title="Quick Create" subtitle="Uses the active Quick Create form for this object." size="md" className={layoutPresentationClass(quickCreateLayout || createLayout || detailLayout)} onClose={() => setQuickCreating(false)} formId="platform-quick-create-form">
+          {recordModal?.type === "quick_create" ? (
+            <RecordModal open mode="create" title="Quick Create" subtitle="Uses the active Quick Create form for this object." size="md" className={layoutPresentationClass(quickCreateLayout || createLayout || detailLayout)} onClose={() => setRecordModal(null)} formId="platform-quick-create-form">
               <FormRenderer
                 formId="platform-quick-create-form"
                 definition={quickCreateLayout?.definition || createLayout?.definition || detailLayout?.definition}
@@ -721,82 +703,35 @@ export default function ObjectPage({
                 available through the platform API.
               </span>
             </div>
-          ) : filteredRecords.length === 0 ? (
-            <div className="platform-object-empty compact">
-              <strong>No matching records</strong>
-              <span>Try a different search.</span>
-            </div>
           ) : (
-            <div className="platform-record-table-wrapper">
-              <table className="platform-record-table">
-                <thead>
-                  <tr>
-                    {activeFields.map((field) => (
-                      <th
-                        key={
-                          field?.id ||
-                          getFieldKey(field)
-                        }
-                      >
-                        {getFieldLabel(field)}
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-
-                <tbody>
-                  {filteredRecords.map(
-                    (record, index) => {
-                      const recordKey =
-                        record?.id ??
-                        record?.record_id ??
-                        index;
-
-                      const selected =
-                        selectedRecord ===
-                        record;
-
-                      return (
-                        <tr
-                          key={recordKey}
-                          className={
-                            selected
-                              ? "selected"
-                              : ""
-                          }
-                          onClick={() =>
-                            handleRecordSelect(
-                              record
-                            )
-                          }
-                        >
-                          {activeFields.map(
-                            (field) => (
-                              <td
-                                key={
-                                  field?.id ||
-                                  getFieldKey(
-                                    field
-                                  )
-                                }
-                              >
-                                {formatValue(
-                                  getFieldValue(
-                                    record,
-                                    field
-                                  ),
-                                  field
-                                )}
-                              </td>
-                            )
-                          )}
-                        </tr>
-                      );
+            /* THE shared global list presentation — one design for every
+               object (no page-specific tables). Columns come from object
+               field metadata; the first field is the clickable primary; the
+               Active field renders as the status pill. */
+            <ObjectList
+              records={filteredRecords}
+              columns={activeFields.map((field) => ({
+                key: getFieldKey(field),
+                label: getFieldLabel(field),
+                primary: false,
+                format: (value) => formatRecordDisplayValue(value, field),
+              }))}
+              primaryColumn={activeFields.length ? getFieldKey(activeFields[0]) : "name"}
+              statusColumn={
+                activeFields.some((field) => getFieldType(field) === "boolean")
+                  ? {
+                      key: getFieldKey(activeFields.find((field) => getFieldType(field) === "boolean")),
+                      labels: { on: "Active", off: "Inactive" },
+                      tones: { on: "success", off: "neutral" },
                     }
-                  )}
-                </tbody>
-              </table>
-            </div>
+                  : null
+              }
+              onOpenRecord={(record) => handleRecordSelect(record)}
+              loading={recordsLoading}
+              searchPlaceholder={`Search ${objectLabel}...`}
+              emptyMessage="No matching records"
+              emptyHint="Try a different search."
+            />
           )}
         </section>
 
@@ -840,8 +775,8 @@ export default function ObjectPage({
                   {executingAction === (component.id || component.key || `${component.action}:${detailLayout.definition.components.indexOf(component)}`) ? "Executing..." : component.label || component.action}
                 </button>
               ))}
-              {editingRecord ? (
-                <RecordModal open mode="edit" title="Edit record" size="lg" className={layoutPresentationClass(editLayout || createLayout || detailLayout)} onClose={() => setEditingRecord(false)} formId="platform-edit-record-form">
+              {recordModal?.type === "edit" ? (
+                <RecordModal open mode="edit" title="Edit record" size="lg" className={layoutPresentationClass(editLayout || createLayout || detailLayout)} onClose={() => setRecordModal(null)} formId="platform-edit-record-form">
                   <FormRenderer formId="platform-edit-record-form" definition={editLayout?.definition || createLayout?.definition || detailLayout?.definition} fields={activeFields} initialValues={selectedRecord} mode="edit" onSubmit={saveEditedRecord} />
                 </RecordModal>
               ) : null}
@@ -850,7 +785,8 @@ export default function ObjectPage({
                 fields={activeFields}
                 objectLabel={getObjectLabel(objectMetadata)}
                 objectKey={getObjectKey(objectMetadata)}
-                definition={detailLayout?.definition || null}
+                definition={selfServiceView ? null : (detailLayout?.definition || null)}
+                onEdit={canWriteRecords ? () => setRecordModal({ type: "edit" }) : undefined}
               />
               {detailLayout?.definition?.components?.filter((component) => component.type === "related_list" && component.visible !== false).map((component) => {
                 const related = relatedLists[component.relationship_key];
@@ -1032,50 +968,8 @@ export default function ObjectPage({
           font-size: 10px !important;
         }
 
-        .platform-record-table-wrapper {
-          overflow: auto;
-          max-height: 620px;
-        }
-
-        .platform-record-table {
-          width: 100%;
-          border-collapse: collapse;
-          font-size: 11px;
-        }
-
-        .platform-record-table th {
-          position: sticky;
-          top: 0;
-          z-index: 1;
-          padding: 10px 12px;
-          border-bottom: 1px solid var(--border-color, #e5e7eb);
-          background: var(--muted-background, #f9fafb);
-          text-align: left;
-          font-size: 10px;
-          font-weight: 700;
-          white-space: nowrap;
-        }
-
-        .platform-record-table td {
-          padding: 10px 12px;
-          border-bottom: 1px solid var(--border-color, #f0f0f0);
-          white-space: nowrap;
-          max-width: 260px;
-          overflow: hidden;
-          text-overflow: ellipsis;
-        }
-
-        .platform-record-table tbody tr {
-          cursor: pointer;
-        }
-
-        .platform-record-table tbody tr:hover {
-          background: var(--muted-background, #f9fafb);
-        }
-
-        .platform-record-table tbody tr.selected {
-          background: var(--onepos-accent-50, var(--muted-background, #f9fafb));
-        }
+        /* The record table is the SHARED ObjectList now; its presentation   */
+        /* lives in index.css (.onepos-object-*).                            */
 
         .platform-field-list {
           padding: 8px 16px 16px;

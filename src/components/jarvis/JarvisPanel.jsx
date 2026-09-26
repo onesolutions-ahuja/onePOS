@@ -164,15 +164,15 @@ export default function JarvisPanel({ onClose, onActivityChange, embedded = fals
         aria-modal="true"
         aria-label="JARVES assistant"
         data-testid="jarvis-panel"
-        className="relative w-full sm:w-[400px] max-h-[78dvh] flex flex-col rounded-2xl border border-white/10 bg-[rgba(12,18,24,0.86)] text-slate-100 shadow-[0_22px_60px_rgba(3,7,18,0.52)] backdrop-blur-xl overflow-hidden"
+        className="relative w-full sm:w-[420px] max-h-[78dvh] flex flex-col rounded-2xl border border-white/15 bg-[rgba(8,13,17,0.92)] text-slate-100 shadow-[0_24px_70px_rgba(2,6,16,0.6)] backdrop-blur-xl overflow-hidden"
       >
         <JarvisStyles />
 
-        <header className="flex items-center gap-2 px-4 py-3 border-b border-white/10 bg-[rgba(15,23,31,0.85)] text-white">
-          <span className="w-7 h-7 rounded-full shrink-0 bg-[radial-gradient(circle_at_34%_28%,#eef7f6_0%,#b0d9d5_18%,#4fa69e_42%,#176F6A_68%,#104744_100%)]" aria-hidden="true" />
+        <header className="flex items-center gap-2.5 px-4 py-3 border-b border-white/10 bg-[rgba(10,20,26,0.95)] text-white shadow-[inset_0_-1px_0_rgba(255,255,255,0.04)]">
+          <span className="w-8 h-8 rounded-full shrink-0 bg-[radial-gradient(circle_at_34%_28%,#eef7f6_0%,#b0d9d5_18%,#4fa69e_42%,#176F6A_68%,#104744_100%)] ring-1 ring-white/25" aria-hidden="true" />
           <div className="flex-1 min-w-0">
             <h2 className="text-sm font-bold tracking-[0.2em]">JARVES</h2>
-            <p className="text-[11px] text-teal-100/80 leading-tight">onePOS AI assistant</p>
+            <p className="text-[11px] text-teal-100/90 leading-tight">onePOS AI assistant</p>
           </div>
           <button
             type="button"
@@ -180,7 +180,7 @@ export default function JarvisPanel({ onClose, onActivityChange, embedded = fals
             aria-label="Close JARVES"
             title="Close"
             data-testid="jarvis-panel-close"
-            className="p-1.5 rounded-lg hover:bg-white/10"
+            className="p-1.5 rounded-lg text-teal-100/80 hover:bg-white/10 hover:text-white"
           >
             <X size={18} />
           </button>
@@ -188,20 +188,20 @@ export default function JarvisPanel({ onClose, onActivityChange, embedded = fals
 
         <div
           ref={listRef}
-          className="flex-1 overflow-y-auto px-4 py-3 space-y-3 bg-slate-50"
+          className="flex-1 overflow-y-auto px-4 py-3 space-y-3 bg-[radial-gradient(circle_at_50%_0%,rgba(23,111,106,0.24),rgba(8,13,17,0)_58%)] bg-[color:rgba(8,13,17,0.55)]"
           data-testid="jarvis-messages"
         >
           {messages.length === 0 && !loading && (
             <div className="text-center py-3" data-testid="jarvis-empty">
               <Sparkles size={22} className="mx-auto text-emerald-300" />
-              <p className="mt-1 text-sm font-semibold text-slate-100">Ask JARVES anything about onePOS.</p>
+              <p className="mt-1 text-sm font-semibold text-white">Ask JARVES anything about onePOS.</p>
               <div className="mt-3 flex flex-wrap justify-center gap-1.5">
                 {SUGGESTIONS.map((suggestion) => (
                   <button
                     key={suggestion}
                     type="button"
                     onClick={() => ask(suggestion)}
-                    className="text-xs px-2.5 py-1 rounded-full border border-white/10 bg-white/5 text-emerald-50 hover:bg-white/10"
+                    className="text-xs px-2.5 py-1 rounded-full border border-teal-300/30 bg-teal-400/10 text-teal-50 hover:bg-teal-400/20 hover:border-teal-200/40 transition-colors"
                     data-testid="jarvis-suggestion"
                   >
                     {suggestion}
@@ -220,8 +220,8 @@ export default function JarvisPanel({ onClose, onActivityChange, embedded = fals
               <div
                 className={`max-w-[85%] whitespace-pre-wrap rounded-2xl px-3 py-2 text-sm leading-relaxed ${
                   message.role === "user"
-                    ? "bg-emerald-500/20 text-emerald-50 border border-emerald-300/20 rounded-br-sm"
-                    : "border border-white/10 bg-white/5 text-slate-100 rounded-bl-sm shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]"
+                    ? "bg-teal-600/35 text-teal-50 border border-teal-300/25 rounded-br-sm"
+                    : "border border-white/12 bg-white/[0.07] text-slate-100 rounded-bl-sm shadow-[inset_0_1px_0_rgba(255,255,255,0.06)]"
                 }`}
               >
                 {message.text}
@@ -231,7 +231,7 @@ export default function JarvisPanel({ onClose, onActivityChange, embedded = fals
 
           {loading && (
             <div className="jarvis-message flex justify-start" data-testid="jarvis-thinking" aria-live="polite">
-            <div className="bg-white/5 border border-white/10 rounded-2xl rounded-bl-sm px-4 py-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.05)] flex items-center gap-1">
+            <div className="bg-white/[0.07] border border-white/12 rounded-2xl rounded-bl-sm px-4 py-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.06)] flex items-center gap-1">
               <span className="jarvis-dot w-1.5 h-1.5 rounded-full bg-emerald-300 inline-block" />
               <span className="jarvis-dot w-1.5 h-1.5 rounded-full bg-emerald-300 inline-block" />
               <span className="jarvis-dot w-1.5 h-1.5 rounded-full bg-emerald-300 inline-block" />
@@ -270,7 +270,7 @@ export default function JarvisPanel({ onClose, onActivityChange, embedded = fals
             event.preventDefault();
             ask(question);
           }}
-          className="flex items-end gap-2 px-3 py-3 border-t border-white/10 bg-[rgba(10,15,19,0.82)]"
+          className="flex items-end gap-2 px-3 py-3 border-t border-white/10 bg-[rgba(7,12,16,0.95)]"
           data-testid="jarvis-form"
         >
           <button
@@ -281,12 +281,12 @@ export default function JarvisPanel({ onClose, onActivityChange, embedded = fals
             title={listening ? "Stop listening" : "Speak your question"}
             data-testid="jarvis-mic"
             data-listening={listening}
-            className={`jarvis-mic shrink-0 w-10 h-10 rounded-full flex items-center justify-center ${
+            className={`jarvis-mic shrink-0 w-10 h-10 rounded-full flex items-center justify-center border ${
               listening
-                ? "jarvis-mic--listening bg-emerald-500 text-white"
+                ? "jarvis-mic--listening bg-emerald-500 border-emerald-300/60 text-white"
                 : speechSupported
-                  ? "bg-white/5 text-emerald-50 hover:bg-white/10"
-                  : "bg-slate-700 text-slate-400"
+                  ? "bg-white/[0.08] border-white/15 text-teal-50 hover:bg-white/[0.14] hover:border-white/25"
+                  : "bg-slate-800 border-white/10 text-slate-500"
             }`}
           >
             {listening ? <Mic size={18} /> : <MicOff size={18} className={speechSupported ? "hidden" : ""} />}
@@ -303,7 +303,7 @@ export default function JarvisPanel({ onClose, onActivityChange, embedded = fals
             disabled={loading}
             data-testid="jarvis-input"
             aria-label="Your question for JARVES"
-            className="flex-1 min-w-0 text-sm px-3 py-2.5 rounded-xl border border-white/10 bg-white/5 text-slate-100 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-emerald-400/70 focus:border-emerald-300 disabled:bg-slate-800/60"
+            className="flex-1 min-w-0 text-sm px-3 py-2.5 rounded-xl border border-white/15 bg-white/[0.08] text-white placeholder:text-slate-300/80 focus:outline-none focus:ring-2 focus:ring-emerald-400/70 focus:border-emerald-300/60 disabled:bg-slate-800/60 disabled:text-slate-400"
           />
 
           <button
@@ -312,7 +312,7 @@ export default function JarvisPanel({ onClose, onActivityChange, embedded = fals
             aria-label="Ask JARVES"
             title="Ask"
             data-testid="jarvis-ask"
-            className="shrink-0 w-10 h-10 rounded-full bg-emerald-400 text-slate-950 flex items-center justify-center hover:bg-emerald-300 disabled:opacity-40 disabled:cursor-not-allowed"
+            className="shrink-0 w-10 h-10 rounded-full bg-emerald-400 text-slate-950 flex items-center justify-center shadow-[0_2px_10px_rgba(52,211,153,0.45)] hover:bg-emerald-300 disabled:opacity-40 disabled:cursor-not-allowed disabled:shadow-none"
           >
             <Send size={16} />
           </button>

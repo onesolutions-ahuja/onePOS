@@ -20,6 +20,10 @@ conversations/
 dist/
 .tmp/
 data/product-master/openfoodfacts_official_starter_raw.tsv
+playwright/.auth/
+playwright-report/
+test-results/
+
 
 # Local test/build artifacts
 .tmp_*

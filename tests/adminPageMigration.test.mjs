@@ -39,34 +39,51 @@ const MIGRATED = {
     "onepos-page-title",
     "onepos-page-subtitle",
     "onepos-card",
-    "onepos-toolbar",
-    "onepos-table",
+    /* The toolbar + table moved INTO the shared global ObjectList           */
+    /* (components/records/ObjectList.jsx → .onepos-object-* primitives),   */
+    /* so this page no longer owns them locally — that IS the migration.    */
     "onepos-empty",
     "onepos-btn",
-    "onepos-input",
   ],
   "src/pages/suppliers/SuppliersAdmin.jsx": [
     "onepos-page-header",
     "onepos-page-title",
     "onepos-card",
-    "onepos-toolbar",
-    "onepos-table",
+    /* The toolbar + table moved INTO the shared global ObjectList           */
+    /* (components/records/ObjectList.jsx → .onepos-object-* primitives),   */
+    /* so this page no longer owns them locally — that IS the migration.    */
     "onepos-empty",
-    "onepos-badge",
+    /* Status pill now renders inside ObjectList (.onepos-badge lives there). */
     "onepos-alert",
     "onepos-btn",
-    "onepos-input",
   ],
   "src/pages/inventory/InventoryAdmin.jsx": [
     "onepos-page-header",
     "onepos-page-title",
     "onepos-card",
-    "onepos-toolbar",
-    "onepos-table",
+    /* The toolbar + table moved INTO the shared global ObjectList           */
+    /* (components/records/ObjectList.jsx → .onepos-object-* primitives),   */
+    /* so this page no longer owns them locally — that IS the migration.    */
     "onepos-empty",
     "onepos-alert",
     "onepos-btn",
-    "onepos-input",
+  ],
+  "src/pages/products/ProductsAdmin.jsx": [
+    /* Phase 4 — operational admin lists converge on ObjectList.           */
+    "onepos-card",
+    "onepos-btn",
+  ],
+  "src/pages/customers/CustomersAdmin.jsx": [
+    /* PageHeader/CardHeader/EmptyState render shared primitives via ui.jsx;  */
+    /* the list itself moved INTO the shared global ObjectList.               */
+    "onepos-card",
+    "onepos-card-title",
+    "onepos-section-title",
+  ],
+  "src/pages/purchases/PurchasesAdmin.jsx": [
+    /* The list moved INTO the shared global ObjectList; the page keeps its   */
+    /* existing header buttons and workflow untouched, so it owns no other    */
+    /* shared primitives directly.                                            */
   ],
   "src/pages/reports/ReportHeader.jsx": [
     "onepos-page-header",

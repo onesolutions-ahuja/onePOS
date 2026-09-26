@@ -1,4 +1,5 @@
 import ReportTable from "./ReportTable.jsx";
+import { formatDateValue } from "../../utils/dateFormat.js";
 
 export default function SalesReport({ daily }) {
   return (
@@ -7,7 +8,7 @@ export default function SalesReport({ daily }) {
       exportName="sales"
       headers={["Date", "Transactions", "Gross", "Returns", "Net", "VAT"]}
       rows={daily.map((row) => [
-        row.date,
+        formatDateValue(row.date) || row.date,
         row.transactions,
         `£${Number(row.grossSales).toFixed(2)}`,
         `£${Number(row.returns).toFixed(2)}`,

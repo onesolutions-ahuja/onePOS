@@ -1,5 +1,6 @@
 import { createChangePasswordHandler } from "./services/changePassword.js";
 import "dotenv/config";
+import { timingSafeEqual } from "node:crypto";
 import express from "express";
 import cors from "cors";
 import bcrypt from "bcryptjs";
@@ -13,6 +14,14 @@ import { createAuditWriter } from "./services/auditLog.js";
 import { createSessionToken, createAuthenticate } from "./services/session.js";
 import { drainDuePlatformJobs } from "./services/platformJobs.js";
 import { executeRegisteredAction } from "./services/platformActions.js";
+import { claimDueScheduledWorkflows, completeScheduledWorkflow, failScheduledWorkflow } from "./services/platformSchedules.js";
+import { deliverPlatformWebhook, verifyWebhookSignature } from "./services/platformEvents.js";
+import { decryptSecret, encryptSecret } from "./services/onlineOrders/platformConfig.js";
+import { decryptCredentials } from "./services/integrationCredentials.js";
+import {
+  createWorkflowRun,
+  executeWorkflowActions,
+} from "./services/platformWorkflow.js";
 import createTillRouter from "./routes/till.js";
 import createHeldSalesRouter from "./routes/heldSales.js";
 import createCustomersRouter from "./routes/customers.js";
@@ -54,6 +63,11 @@ import createSuperadminRouter from "./routes/superadmin.js";
 import createPlatformRouter from "./routes/platform.js";
 import createHospitalityRouter from "./routes/hospitality.js";
 import createPackagesRouter from "./routes/packages.js";
+import createConnectorsRouter from "./routes/connectors.js";
+import createPlatformFilesRouter from "./routes/platformFiles.js";
+import createPlatformSequencesRouter from "./routes/platformSequences.js";
+import createPlatformSchedulesRouter from "./routes/platformSchedules.js";
+import createPlatformEventsRouter from "./routes/platformEvents.js";
 import { saveDomainConfiguration } from "./services/platformDomainRecords.js";
 import createAdvancedPlatformRouter from "./routes/advancedPlatform.js";
 import { initializePlatformMetadata, initializeStandardObjectEcosystem } from "./services/platformMetadata.js";
@@ -102,6 +116,8 @@ app.use("/api/online/deliveroo/webhook", express.raw({ type: "*/*", limit: "1mb"
  * same raw-parsing mechanism as the Deliveroo webhook above.
  */
 app.use("/api/online/uber/webhook", express.raw({ type: "*/*", limit: "1mb" }));
+
+app.use("/api/webhooks/inbound", express.raw({ type: "*/*", limit: "1mb" }));
 
 app.use(express.json({ limit: "10mb" }));
 
@@ -879,6 +895,58 @@ app.use("/api", createPlatformRouter({ authenticate, authorize, db, pool, canVie
 app.use("/api", createHospitalityRouter({ authenticate, authorize, db, pool }));
 app.use("/api", createPackagesRouter({ authenticate, authorize, db, pool }));
 app.use("/api", createAdvancedPlatformRouter({ authenticate, authorize, db }));
+app.use("/api", createConnectorsRouter({ authenticate, authorize, db, writeAudit }));
+app.use("/api", createPlatformFilesRouter({ authenticate, db }));
+app.use("/api", createPlatformSequencesRouter({ authenticate, authorize, db, pool }));
+app.use("/api", createPlatformSchedulesRouter({ authenticate, authorize, db }));
+app.use("/api", createPlatformEventsRouter({
+  authenticate,
+  authorize,
+  db,
+  encryptSecret: (value) => encryptSecret(value),
+  authenticateInbound: async ({ endpoint, rawBody, headers }) => {
+    if (!endpoint.credential_id || !endpoint.connector_id || !endpoint.company_id) return false;
+    const result = await db(
+      `SELECT ciphertext FROM platform_credentials
+       WHERE id=$1 AND company_id=$2 AND connector_id=$3 AND active=TRUE`,
+      [endpoint.credential_id, endpoint.company_id, endpoint.connector_id]
+    );
+    const encrypted = result.rows[0]?.ciphertext;
+    if (!encrypted) return false;
+    const credentials = decryptCredentials(encrypted);
+    const supplied = (name) => headers[String(name).toLowerCase()];
+    const secureEqual = (left, right) => {
+      const a = Buffer.from(String(left || ""));
+      const b = Buffer.from(String(right || ""));
+      return a.length === b.length && timingSafeEqual(a, b);
+    };
+    const authType = String(endpoint.auth_type || "").toLowerCase();
+    if (authType === "bearer") {
+      const token = credentials.token || credentials.bearerToken || credentials.bearer_token;
+      return Boolean(token && secureEqual(supplied("authorization"), `Bearer ${token}`));
+    }
+    if (authType === "api_key") {
+      const key = credentials.apiKey || credentials.api_key || credentials.key;
+      const headerName = credentials.headerName || credentials.header_name || "x-api-key";
+      return Boolean(key && secureEqual(supplied(headerName), key));
+    }
+    if (authType === "basic") {
+      if (credentials.username === undefined || credentials.password === undefined) return false;
+      const expected = `Basic ${Buffer.from(`${credentials.username}:${credentials.password}`).toString("base64")}`;
+      return secureEqual(supplied("authorization"), expected);
+    }
+    if (authType === "hmac_sha256") {
+      const secret = credentials.webhookSecret || credentials.webhook_secret || credentials.secret;
+      return Boolean(secret && verifyWebhookSignature({
+        secret,
+        timestamp: supplied("x-onepos-timestamp"),
+        signature: supplied("x-onepos-signature"),
+        body: rawBody.toString("utf8"),
+      }));
+    }
+    return false;
+  },
+}));
 app.use("/api", createAccountLifecycleRouter({ authenticate, authorize, db }));
 
 app.use("/api", createSettingsRouter({
@@ -1732,9 +1800,99 @@ async function startServer() {
         await drainDuePlatformJobs({
           db,
           limit: 10,
+          onFailed: async (job, failed) => {
+            if (job.kind === "PLATFORM_SCHEDULED_WORKFLOW" && failed?.status === "FAILED") {
+              await failScheduledWorkflow({ db, payload: job.payload || {}, error: failed.last_error });
+            }
+          },
           handler: async (job) => {
             if (job.kind === "WAIT") return;
             const payload = job.payload || {};
+            if (job.kind === "PLATFORM_WEBHOOK_DELIVERY") {
+              return deliverPlatformWebhook({
+                db,
+                deliveryId: payload.deliveryId,
+                companyId: payload.companyId || job.company_id,
+                decryptSecret,
+              });
+            }
+            if (job.kind === "PLATFORM_SCHEDULED_WORKFLOW") {
+              const workflowResult = await db(
+                `SELECT id,name,object_id,action FROM platform_rules
+                 WHERE id=$1 AND company_id=$2 AND active=TRUE LIMIT 1`,
+                [payload.workflowId, payload.companyId || job.company_id]
+              );
+              const workflow = workflowResult.rows[0];
+              if (!workflow) throw Object.assign(new Error("Scheduled workflow is unavailable"), { retryable: false });
+              const actions = Array.isArray(workflow.action?.actions)
+                ? workflow.action.actions
+                : Array.isArray(workflow.action) ? workflow.action
+                  : workflow.action?.type ? [workflow.action] : [];
+              if (!actions.length) throw Object.assign(new Error("Scheduled workflow has no executable actions"), { retryable: false });
+              const companyId = payload.companyId || job.company_id;
+              const runMetadata = { scheduleId: payload.scheduleId, fireAt: payload.fireAt };
+              const previousRun = await db(
+                `SELECT id FROM platform_workflow_runs
+                 WHERE company_id=$1 AND trigger_key='SCHEDULED'
+                   AND metadata->>'scheduleId'=$2 AND metadata->>'fireAt'=$3
+                 ORDER BY created_at DESC LIMIT 1`,
+                [companyId, String(payload.scheduleId), String(payload.fireAt)]
+              );
+              let run;
+              if (previousRun.rows[0]) {
+                const update = await db(
+                  `UPDATE platform_workflow_runs SET status='RUNNING',error_text=NULL,completed_at=NULL,updated_at=NOW()
+                   WHERE id=$1 AND company_id=$2 RETURNING *`,
+                  [previousRun.rows[0].id, companyId]
+                );
+                run = update.rows[0];
+              } else {
+                run = await createWorkflowRun({
+                  db,
+                  companyId,
+                  workflowId: workflow.id,
+                  workflowName: workflow.name,
+                  objectId: workflow.object_id,
+                  recordId: null,
+                  triggerKey: "SCHEDULED",
+                  status: "RUNNING",
+                  metadata: runMetadata,
+                });
+              }
+              const objectResult = workflow.object_id
+                ? await db(
+                    "SELECT * FROM platform_objects WHERE id=$1 AND active=TRUE AND (company_id IS NULL OR company_id=$2)",
+                    [workflow.object_id, companyId]
+                  )
+                : { rows: [] };
+              try {
+                const results = await executeWorkflowActions({
+                  actions,
+                  db,
+                  req: { user: { companyId } },
+                  companyId,
+                  object: objectResult.rows[0] || null,
+                  record: null,
+                  recordId: null,
+                  runId: run?.id || null,
+                  trigger: "scheduled",
+                });
+                await db(
+                  "UPDATE platform_workflow_runs SET status='COMPLETED',completed_at=NOW(),updated_at=NOW() WHERE id=$1 AND company_id=$2",
+                  [run.id, companyId]
+                );
+                await completeScheduledWorkflow({ db, payload });
+                return { status: "COMPLETED", results };
+              } catch (error) {
+                if (run?.id) {
+                  await db(
+                    "UPDATE platform_workflow_runs SET status='FAILED',error_text=$1,completed_at=NOW(),updated_at=NOW() WHERE id=$2 AND company_id=$3",
+                    [String(error?.message || error).slice(0, 2000), run.id, companyId]
+                  );
+                }
+                throw error;
+              }
+            }
             const result = await executeRegisteredAction({ db, companyId: job.company_id, action: payload, req: { user: { roleId: payload._roleId } } });
             if (payload._stepRunId) {
               await db(
@@ -1751,6 +1909,7 @@ async function startServer() {
             return result;
           },
         });
+        await claimDueScheduledWorkflows({ db, limit: 10 });
       } catch (error) {
         console.error("Platform job worker error:", error.message);
       } finally {

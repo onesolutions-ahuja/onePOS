@@ -169,7 +169,7 @@ test("adjustment writes a movement and returns balance", async () => {
     assert.equal(movement.body.success, true);
     assert.equal(movement.body.data.movement.movement_type, "ADJUSTMENT_OUT");
     assert.equal(movement.body.data.balance, 0);
-    assert.equal(movement.body.data.movement.reason, "Damaged");
+    assert.equal(movement.body.data.movement.reason, "Breakage");
 
     const history = await req(port, "GET", "/api/inventory/movements");
     assert.equal(history.body.success, true);

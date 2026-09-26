@@ -1,5 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { apiRequest } from "../../../services/api.js";
+import BooleanField from "../../../components/records/BooleanField.jsx";
+import { formatRecordDisplayValue, isUuid, parseBooleanValue } from "../../../utils/recordDisplay.js";
 
 function getFieldType(field) {
   if ((field?.fieldType || field?.field_type) === "formula") return field?.config?.resultType || "text";
@@ -32,120 +34,8 @@ function getFieldKey(field) {
   );
 }
 
-function formatDate(value, includeTime = false) {
-  if (!value) {
-    return "-";
-  }
-
-  const date = new Date(value);
-
-  if (Number.isNaN(date.getTime())) {
-    return String(value);
-  }
-
-  return new Intl.DateTimeFormat(
-    undefined,
-    includeTime
-      ? {
-          dateStyle: "medium",
-          timeStyle: "short",
-        }
-      : {
-          dateStyle: "medium",
-        }
-  ).format(date);
-}
-
-function formatNumber(value) {
-  if (
-    value === null ||
-    value === undefined ||
-    value === ""
-  ) {
-    return "-";
-  }
-
-  const number = Number(value);
-
-  if (Number.isNaN(number)) {
-    return String(value);
-  }
-
-  return new Intl.NumberFormat().format(number);
-}
-
-function formatLookupValue(value) {
-  if (
-    value === null ||
-    value === undefined ||
-    value === ""
-  ) {
-    return "-";
-  }
-
-  if (
-    typeof value !== "object" ||
-    Array.isArray(value)
-  ) {
-    return String(value);
-  }
-
-  return (
-    value.label ??
-    value.name ??
-    value.displayName ??
-    value.display_name ??
-    value.value ??
-    value.id ??
-    "-"
-  );
-}
-
 function formatValue(value, field) {
-  const type = getFieldType(field);
-
-  if (
-    value === null ||
-    value === undefined ||
-    value === ""
-  ) {
-    return "-";
-  }
-
-  switch (type) {
-    case "boolean":
-      return value === true ||
-        value === 1 ||
-        value === "true"
-        ? "Yes"
-        : "No";
-
-    case "number":
-    case "decimal":
-    case "currency":
-      return formatNumber(value);
-
-    case "date":
-      return formatDate(value);
-
-    case "datetime":
-      return formatDate(value, true);
-
-    case "lookup":
-      return formatLookupValue(value);
-
-    case "long_text":
-      return String(value);
-
-    default:
-      if (
-        typeof value === "object"
-      ) {
-        return formatLookupValue(value);
-      }
-
-      return String(value);
-  }
+  return formatRecordDisplayValue(value, field);
 }
 
 export default function ObjectFieldRenderer({
@@ -185,6 +75,18 @@ export default function ObjectFieldRenderer({
   }
 
   if (mode === "display" || (field?.fieldType || field?.field_type) === "formula") {
+    /* Boolean display uses THE global read-only toggle (same design language
+       as the editable control); everything else formats to text. */
+    if (fieldType === "boolean" && (field?.fieldType || field?.field_type) !== "formula") {
+      return (
+        <div className={`platform-field-renderer platform-field-display ${className}`}>
+          <div className="platform-field-display-label">{label}</div>
+          <div className="platform-field-display-value">
+            <BooleanField value={parseBooleanValue(value)} mode="display" label={label} />
+          </div>
+        </div>
+      );
+    }
     return (
       <div
         className={`platform-field-renderer platform-field-display ${className}`}
@@ -239,24 +141,18 @@ export default function ObjectFieldRenderer({
 
   switch (fieldType) {
     case "boolean":
+      /* THE global boolean renderer — one shared toggle everywhere. */
       control = (
-        <label className="platform-field-checkbox">
-          <input
-            type="checkbox"
-            checked={Boolean(value)}
+        <div className="platform-form-toggle">
+          <BooleanField
+            value={parseBooleanValue(value)}
+            onChange={(next) => handleChange(next)}
+            mode="edit"
             disabled={disabled}
-            onChange={(event) =>
-              handleChange(
-                event.target.checked
-              )
-            }
+            label={field?.checkboxLabel || label}
           />
-
-          <span>
-            {field?.checkboxLabel ||
-              label}
-          </span>
-        </label>
+          <span className="platform-form-toggle-label">{field?.checkboxLabel || label}</span>
+        </div>
       );
 
       break;
@@ -408,7 +304,7 @@ export default function ObjectFieldRenderer({
           <option value="">Select {label}</option>
           {lookupOptions.map((record) => {
             const recordId = record?.id ?? record?.record_id;
-            const recordLabel = record?.label ?? record?.name ?? record?.display_name ?? recordId;
+            const recordLabel = record?.label ?? record?.name ?? record?.display_name ?? record?.title ?? "Record";
             return <option key={String(recordId)} value={String(recordId)}>{String(recordLabel)}</option>;
           })}
         </select>
@@ -420,9 +316,10 @@ export default function ObjectFieldRenderer({
             value !== null
               ? value?.label ??
                 value?.name ??
-                value?.id ??
-                ""
-              : value ?? ""
+              value?.display_name ??
+              value?.value ??
+              ""
+            : isUuid(String(value ?? "")) ? "" : value ?? ""
           }
           disabled={disabled}
           placeholder={

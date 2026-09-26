@@ -707,7 +707,11 @@ body {
 .onepos-shell-content {
   flex: 1 1 0%; min-height: 0; overflow-y: auto;
   padding: var(--onepos-page-gap, 22px);
-  padding-bottom: 84px; /* clear the fixed onePOS Dockbar + status bar */
+  /* Clear BOTH fixed chrome layers — the dock pill (--dock-height +
+     --dock-offset-bottom, the shared safe-area-aware variable) plus the
+     BottomStatusBar (42px) that sits above it — so no list row ever
+     disappears under fixed navigation. */
+  padding-bottom: calc(var(--dock-height, 60px) + var(--dock-offset-bottom, var(--dock-bottom, 12px)) + 42px + 26px);
   padding-left: max(var(--onepos-page-gap, 22px), env(safe-area-inset-left));
   padding-right: max(var(--onepos-page-gap, 22px), env(safe-area-inset-right));
 }
@@ -720,7 +724,7 @@ body {
   }
   .onepos-shell-content {
     padding: 14px;
-    padding-bottom: 76px;
+    padding-bottom: calc(var(--dock-height, 60px) + var(--dock-offset-bottom, var(--dock-bottom, 12px)) + 42px + 20px);
     padding-left: max(14px, env(safe-area-inset-left));
     padding-right: max(14px, env(safe-area-inset-right));
   }
@@ -910,7 +914,10 @@ body {
 /* safe-area-aware sheet (no separate mobile implementation).           */
 /* ------------------------------------------------------------------ */
 .onepos-modal-overlay {
-  position: fixed; inset: 0; z-index: 80;
+  /* 1020 places EVERY shared dialog above the whole app shell — the fixed
+     dockbar (900), the JARVES panel (960) and the bottom status bar — so an
+     open record editor always overlays, and blocks, the dock. */
+  position: fixed; inset: 0; z-index: 1020;
   display: flex; align-items: flex-end; justify-content: center;
   background-color: rgba(8, 20, 24, 0.5);
 }
@@ -1156,3 +1163,261 @@ body {
   }
   * { scroll-behavior: auto !important; }
 }
+
+/* ==========================================================================
+   GLOBAL RECORD UI — one shared design for Settings + Object surfaces.
+   ObjectList / ObjectRecordView / ObjectForm / BooleanField presentation.
+   Token-driven only: no hex, no preset branching, inherits Light/Dark.
+   ========================================================================== */
+
+/* ------------------------------------------------ global record list --- */
+.onepos-object-list {
+  min-width: 0;
+  border: 1px solid var(--onepos-card-border, var(--onepos-border));
+  border-radius: var(--onepos-card-radius, 12px);
+  background: var(--onepos-card-bg, var(--onepos-surface-raised));
+  overflow: hidden;
+}
+.onepos-object-list-toolbar {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--onepos-card-border, var(--onepos-border));
+}
+.onepos-object-list-search {
+  display: flex; align-items: center; gap: 8px; min-height: 36px; flex: 0 1 320px;
+  padding: 0 10px;
+  border: 1px solid var(--onepos-border); border-radius: 10px;
+  background: var(--onepos-surface-muted); color: var(--onepos-text-secondary);
+}
+.onepos-object-list-search input {
+  width: 100%; min-width: 0; border: 0; outline: 0; background: transparent;
+  color: var(--onepos-text-primary); font-size: 13px;
+}
+.onepos-object-list-toolbar-extra { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.onepos-object-list-error {
+  margin: 12px 14px 0; padding: 10px 12px;
+  border: 1px solid var(--onepos-border); border-radius: 8px;
+  background: var(--onepos-surface-muted); color: var(--onepos-text-primary); font-size: 12.5px;
+}
+.onepos-object-list-scroll { width: 100%; overflow: auto; max-height: 640px; }
+.onepos-object-table {
+  width: 100%; border-collapse: collapse;
+  font-family: var(--onepos-font-body); font-size: 13px; line-height: 1.45;
+}
+.onepos-object-table th {
+  position: sticky; top: 0; z-index: 1;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--onepos-card-border, var(--onepos-border));
+  background: var(--onepos-surface-muted);
+  color: var(--onepos-text-secondary);
+  text-align: left; font-size: 11px; font-weight: 700;
+  letter-spacing: 0.04em; text-transform: uppercase; white-space: nowrap;
+}
+.onepos-object-table td {
+  max-width: 320px; padding: var(--onepos-table-cell-y, 10px) 14px;
+  border-bottom: 1px solid var(--onepos-border);
+  color: var(--onepos-text-primary);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.onepos-object-table tbody tr:last-child td { border-bottom: 0; }
+.onepos-object-table tbody tr:hover { background: var(--onepos-surface-muted); }
+.onepos-object-table-primary {
+  border: 0; padding: 0; background: transparent; cursor: pointer;
+  color: var(--onepos-accent-600); font: inherit; font-weight: 600;
+  text-align: left; text-decoration: none;
+}
+.onepos-object-table-primary:hover { text-decoration: underline; }
+.onepos-object-table-primary:focus-visible { outline: 2px solid var(--onepos-accent-500); outline-offset: 2px; }
+.onepos-object-table-actions { text-align: right; }
+.onepos-object-list-empty {
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px;
+  min-height: 140px; padding: 28px 20px;
+  color: var(--onepos-text-secondary); text-align: center; font-size: 12.5px;
+}
+.onepos-object-list-empty strong { font-size: 14px; }
+@media (max-width: 700px) {
+  .onepos-object-list-toolbar { flex-wrap: wrap; }
+  .onepos-object-list-search { flex: 1 1 100%; }
+}
+
+/* ------------------------------------------------ global record view --- */
+/* Flat + section-based: label/value rows in titled sections, minimal      */
+/* borders — deliberately NOT a grid of boxed cards.                       */
+.onepos-record-view { min-width: 0; color: var(--onepos-text-primary); }
+.onepos-record-view-header {
+  display: flex; align-items: flex-start; justify-content: space-between; gap: 14px;
+  margin-bottom: 12px;
+}
+.onepos-record-view-heading h3 { margin: 0; font-size: 17px; font-weight: 700; color: var(--onepos-text-heading, var(--onepos-text-primary)); }
+.onepos-record-view-heading p { margin: 3px 0 0; font-size: 12.5px; color: var(--onepos-text-secondary); }
+.onepos-record-view-actions { display: flex; align-items: center; gap: 8px; flex: none; }
+.onepos-record-section + .onepos-record-section { margin-top: 18px; }
+.onepos-record-section-title {
+  margin: 0 0 6px; padding-bottom: 6px;
+  border-bottom: 1px solid var(--onepos-border);
+  font-size: 12px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase;
+  color: var(--onepos-text-secondary);
+}
+.onepos-record-rows { margin: 0; }
+.onepos-record-row {
+  display: grid; grid-template-columns: minmax(140px, 220px) minmax(0, 1fr);
+  gap: 8px 18px; padding: 9px 0;
+  border-bottom: 1px solid var(--onepos-border);
+  font-size: 13.5px;
+}
+.onepos-record-rows .onepos-record-row:last-child { border-bottom: 0; }
+.onepos-record-row dt { color: var(--onepos-text-secondary); font-weight: 500; }
+.onepos-record-row dd {
+  margin: 0; min-width: 0; color: var(--onepos-text-primary);
+  overflow-wrap: anywhere; white-space: pre-wrap;
+}
+.onepos-record-row dd .onepos-toggle { vertical-align: middle; }
+.onepos-record-value-empty { color: var(--onepos-text-secondary); opacity: 0.75; }
+@media (max-width: 640px) {
+  .onepos-record-row { grid-template-columns: 1fr; gap: 2px; }
+}
+
+/* ------------------------------------------------ read-only boolean ---- */
+/* The SAME toggle visual, non-interactive: focus ring suppressed, cursor   */
+/* default, glyph muted — clearly "this value is on/off", not a control.    */
+.onepos-toggle-readonly { cursor: default; opacity: 0.92; }
+.onepos-toggle-readonly .onepos-toggle-track { cursor: default; }
+.onepos-toggle-readonly input { pointer-events: none; }
+
+/* Read-only boolean presentation: a static state badge (never switch
+   geometry), used by BooleanField display/view mode so record views and
+   other read-only surfaces cannot be mistaken for editable controls. */
+.onepos-bool-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.6;
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+.onepos-bool-badge--on {
+  color: #065f46;
+  background: rgba(16, 185, 129, 0.12);
+  border-color: rgba(5, 150, 105, 0.25);
+}
+.onepos-bool-badge--off {
+  color: #6b7280;
+  background: rgba(107, 114, 128, 0.10);
+  border-color: rgba(107, 114, 128, 0.22);
+}
+
+/* Production fallback when the app shell cannot render (e.g. a lazy chunk
+   failed after recovery attempts). Styled in the shell's own language instead
+   of bare unstyled text. */
+.onepos-safe-error {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  padding: 24px;
+  text-align: center;
+  color: #374151;
+  font-size: 15px;
+}
+.onepos-safe-error-actions {
+  display: flex;
+  gap: 10px;
+}
+.onepos-safe-error-actions button {
+  padding: 8px 18px;
+  border-radius: 10px;
+  border: 1px solid rgba(13, 148, 136, 0.35);
+  background: #0f766e;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.onepos-safe-error-actions button + button {
+  background: transparent;
+  color: #0f766e;
+}
+
+/* -------------------------------------------- global metadata form grid - */
+/* Desktop: 3 equal columns; tablet: 2; mobile: 1. Wide/full-width fields   */
+/* and section spans opt in via .onepos-form-span (set by the renderer).    */
+.platform-object-form .platform-form-grid,
+.onepos-form-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px 18px;
+}
+.platform-object-form .onepos-form-span,
+.onepos-form-span { grid-column: 1 / -1; }
+@media (max-width: 1023px) {
+  .platform-object-form .platform-form-grid,
+  .onepos-form-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 640px) {
+  .platform-object-form .platform-form-grid,
+  .onepos-form-grid { grid-template-columns: 1fr; }
+}
+
+/* ------------------------------------------- Settings two-pane 3-shell -- */
+/* Pane 1 = category menu, Pane 2 = submenu + sticky search, Pane 3 = the   */
+/* workspace. The whole page scrolls inside Pane 3 only; the menu pane and  */
+/* the submenu's heading+search stay fixed; bottom clearance keeps content  */
+/* reachable above the fixed dockbar (60px + status area).                  */
+.onepos-settings-shell {
+  display: grid;
+  grid-template-columns: minmax(200px, 240px) minmax(210px, 260px) minmax(0, 1fr);
+  gap: 16px;
+  align-items: stretch;
+  height: calc(100dvh - var(--onepos-header-height, 58px) - 96px);
+  min-height: 0;
+}
+.onepos-settings-menu,
+.onepos-settings-submenu {
+  min-height: 0; min-width: 0;
+  display: flex; flex-direction: column;
+  border: 1px solid var(--onepos-card-border, var(--onepos-border));
+  border-radius: var(--onepos-card-radius, 12px);
+  background: var(--onepos-card-bg, var(--onepos-surface-raised));
+  overflow: hidden;
+}
+.onepos-settings-submenu-head {
+  flex: none;
+  padding: 12px 12px 10px;
+  border-bottom: 1px solid var(--onepos-card-border, var(--onepos-border));
+  background: var(--onepos-card-bg, var(--onepos-surface-raised));
+}
+.onepos-settings-submenu-title { margin: 0 0 8px; font-size: 14px; font-weight: 700; color: var(--onepos-text-heading, var(--onepos-text-primary)); }
+.onepos-settings-submenu-body {
+  flex: 1 1 auto; min-height: 0; overflow-y: auto;
+  padding: 8px;
+  /* Dockbar (60px) + status strip + breathing room; the shell height above */
+  /* already reserves 
+ it, this guards zoomed/small viewports. */
+  padding-bottom: max(12px, calc(var(--dock-height, 60px) - 40px));
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+.onepos-settings-workspace {
+  min-width: 0; min-height: 0;
+  overflow-y: auto;
+  padding: 2px 2px max(20px, calc(var(--dock-height, 60px) + 24px));
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+.onepos-settings-workspace-inner { max-width: 1180px; }
+@media (max-width: 1100px) {
+  .onepos-settings-shell { grid-template-columns: minmax(180px, 210px) minmax(0, 1fr); height: auto; }
+  .onepos-settings-submenu { display: none; }
+  .onepos-settings-workspace { overflow: visible; }
+}
+@media (max-width: 860px) {
+  .onepos-settings-shell { grid-template-columns: 1fr; }
+}
+
+/* Selected row highlight for the shared ObjectList (accent-tinted, token-driven). */
+.onepos-object-table tbody tr.onepos-object-row-selected { background: color-mix(in srgb, var(--onepos-accent-600) 8%, transparent); }

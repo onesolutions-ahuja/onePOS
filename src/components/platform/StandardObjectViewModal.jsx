@@ -1,11 +1,15 @@
 import { useEffect, useState } from "react";
-import { X } from "lucide-react";
 import { apiRequest } from "../../services/api.js";
+import RecordModal from "../RecordModal.jsx";
 import ObjectRecordDetail from "../../pages/settings/Platform/ObjectRecordDetail.jsx";
+import { getRecordDisplayTitle } from "../../utils/recordDisplay.js";
 
-export default function StandardObjectViewModal({ objectKey, record, onClose, title, children }) {
+export default function StandardObjectViewModal({ objectKey, record, onClose, onEdit, title, children }) {
   const [runtime, setRuntime] = useState(null);
   const [error, setError] = useState("");
+  const objectLabel = String(objectKey || "Record")
+    .replace(/[_-]+/g, " ")
+    .replace(/^\w/, (character) => character.toUpperCase());
   useEffect(() => {
     let cancelled = false;
     apiRequest(`/api/platform/runtime-forms/${encodeURIComponent(objectKey)}?pageType=detail`)
@@ -14,27 +18,33 @@ export default function StandardObjectViewModal({ objectKey, record, onClose, ti
     return () => { cancelled = true; };
   }, [objectKey]);
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-      <div className="flex max-h-[90vh] w-[850px] max-w-full flex-col overflow-hidden rounded-xl bg-white shadow-2xl">
-        <header className="flex items-center justify-between border-b px-5 py-4">
-          <h2 className="text-lg font-bold">{title || record?.name || "Details"}</h2>
-          <button type="button" onClick={onClose} className="rounded p-2 hover:bg-slate-100" aria-label="Close"><X size={18} /></button>
-        </header>
-        <div className="overflow-auto p-5">
-          {error && <div className="mb-4 rounded border border-red-200 bg-red-50 p-3 text-sm text-red-700">{error}</div>}
-          {runtime && (
-            <ObjectRecordDetail
-              record={record}
-              fields={runtime.fields || []}
-              objectLabel={title || record?.name || "Record"}
-              objectKey={objectKey}
-              definition={runtime.layout?.definition || null}
-              embedded
-            />
-          )}
-          {children}
-        </div>
-      </div>
-    </div>
+    <RecordModal
+      open={true}
+      mode="view"
+      title={getRecordDisplayTitle(record, title || "Details")}
+      subtitle={`${objectLabel} · View`}
+      size="lg"
+      onClose={onClose}
+      onCancel={onClose}
+      footerStart={onEdit ? (
+        <button type="button" className="onepos-btn onepos-btn-secondary" onClick={onEdit}>
+          Edit
+        </button>
+      ) : null}
+    >
+      {error && <div className="mb-4 rounded border border-red-200 bg-red-50 p-3 text-sm text-red-700">{error}</div>}
+      {runtime && (
+        <ObjectRecordDetail
+          record={record}
+          fields={runtime.fields || []}
+          objectLabel={objectLabel}
+          objectKey={objectKey}
+          definition={runtime.layout?.definition || null}
+          embedded
+          showHeader={false}
+        />
+      )}
+      {children}
+    </RecordModal>
   );
 }

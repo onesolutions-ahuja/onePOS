@@ -5,6 +5,10 @@ import { executeInventoryPlatformAction } from "./inventoryPlatform.js";
 import { isSafeIdentifier } from "./platformMetadata.js";
 import { resolveBindingTree } from "./platformRecordPaths.js";
 import { issueAccountToken, normalizeEmail } from "./accountPolicy.js";
+import { getPlatformService } from "./onlineOrders/index.js";
+import { loadPlatformConfig } from "./onlineOrders/platformConfig.js";
+import { resolveUberMenuProducts, UberMenuMappingError } from "./onlineOrders/uberMenuMapping.js";
+import { createConnectorActionExecutor } from "./connectorFramework.js";
 
 import { PLATFORM_FUNCTIONS, PLATFORM_FUNCTION_MAP } from "./platformFunctionRegistry.js";
 const IRREVERSIBLE_ACTIONS = new Set(["SEND_EMAIL", "SEND_SMS", "SEND_WHATSAPP", "CALL_WEBHOOK", "HTTP_REQUEST", "WEBHOOK"]);
@@ -44,6 +48,205 @@ const COMMUNICATION_PROVIDER_ALIASES = {
 
 function normalizeProviderName(value) {
   return String(value || "").trim().toLowerCase();
+}
+
+async function loadUberWorkflowContext({ db, req, companyId }) {
+  const requestCompanyId = req?.user?.companyId || null;
+  const tenantId = companyId || requestCompanyId;
+  if (!db || typeof db !== "function" || !tenantId) {
+    throw new Error("Uber action requires a company-scoped database context");
+  }
+  if (requestCompanyId && String(requestCompanyId) !== String(tenantId)) {
+    throw new Error("Uber action company context is invalid");
+  }
+  return {
+    db,
+    companyId: tenantId,
+    runtime: await loadPlatformConfig(db, tenantId, "uber"),
+    service: getPlatformService("uber"),
+  };
+}
+
+function extractUberStoreIds(data) {
+  const stores = Array.isArray(data?.stores) ? data.stores : Array.isArray(data) ? data : [];
+  return stores.map((store) => ({
+    storeId: store.id || store.store_id || null,
+    name: store.name || null,
+    brandId: store.brand?.id || store.brand_id || null,
+    brandName: store.brand?.description || store.brand?.name || store.brand_name || null,
+    status: typeof store.status === "string" ? store.status : store.status?.type || null,
+    integrationEnabled: store.integration_enabled == null ? null : store.integration_enabled === true,
+  }));
+}
+
+async function runUberStoreConnectionTest(runtime, service) {
+  if (runtime.enabled !== true) {
+    return {
+      success: false,
+      code: "PLATFORM_DISABLED",
+      message: "Uber Eats integration is disabled in Settings - Online Platforms",
+      attempts: [],
+      stores: [],
+    };
+  }
+
+  const environments = [runtime.environment || "sandbox"];
+  if (environments[0] !== "production") environments.push("production");
+  const attempts = [];
+  for (const environment of environments) {
+    const response = await service.getStores({ ...runtime, environment });
+    attempts.push({
+      environment,
+      success: response.success === true,
+      httpStatus: response.httpStatus ?? null,
+      code: response.code || null,
+      message: response.message || null,
+      stores: response.success ? extractUberStoreIds(response.data) : [],
+      uberResponse: response.data ?? null,
+    });
+    if (response.success) break;
+  }
+
+  const successAttempt = attempts.find((attempt) => attempt.success);
+  const lastAttempt = attempts[attempts.length - 1];
+  const successMessage = successAttempt
+    ? successAttempt.stores.length
+      ? `Uber connection OK (${successAttempt.environment}) - ${successAttempt.stores.length} store(s) found`
+      : successAttempt.environment === "sandbox"
+        ? "No Sandbox stores are currently provisioned for this application."
+        : "No stores are currently provisioned for this application."
+    : null;
+  return {
+    success: Boolean(successAttempt),
+    message: successMessage || lastAttempt?.message || "Uber API rejected the request - see the raw response",
+    code: successAttempt ? null : lastAttempt?.code || null,
+    attempts,
+    stores: successAttempt ? successAttempt.stores : [],
+  };
+}
+
+async function executeUberOrderAction(context, operation) {
+  const { db, req, action = {}, recordId, record } = context;
+  const { companyId, runtime, service } = await loadUberWorkflowContext(context);
+  const orderId = action.orderId || recordId || record?.id;
+  if (!orderId) {
+    return { success: false, code: "ORDER_NOT_FOUND", message: "Uber order identifier is required" };
+  }
+
+  const orderDb = context.client
+    ? context.client.query.bind(context.client)
+    : db;
+  const orderResult = await orderDb(
+    `SELECT id, company_id, store_id, platform, external_order_id, status
+       FROM online_orders
+      WHERE id=$1 AND company_id=$2 AND platform='uber'
+      LIMIT 1`,
+    [orderId, companyId]
+  );
+  const order = orderResult.rows?.[0];
+  if (!order || !order.external_order_id) {
+    return { success: false, code: "ORDER_NOT_FOUND", message: "Uber order not found" };
+  }
+  if (req?.user?.storeId && String(req.user.storeId) !== String(order.store_id || "")) {
+    return { success: false, code: "STORE_SCOPE_MISMATCH", message: "Uber order is outside the current store scope" };
+  }
+
+  const validStatuses = operation === "accept" ? ["RECEIVED"] : ["RECEIVED", "ACCEPTED"];
+  if (!validStatuses.includes(order.status)) {
+    return {
+      success: false,
+      code: "INVALID_STATUS",
+      message: `Order in status ${order.status} cannot be ${operation === "accept" ? "accepted" : "denied"}`,
+    };
+  }
+
+  if (runtime.enabled !== true) {
+    return {
+      success: false,
+      code: "PLATFORM_DISABLED",
+      message: "Uber Eats integration is disabled in Settings - Online Platforms",
+    };
+  }
+  if (operation === "accept") return service.acceptOrder(order, runtime);
+  return service.rejectOrder(order, action.reason || null, runtime);
+}
+
+function uberItemId(product) {
+  return product?.uber_item_id || product?.id || null;
+}
+
+function validateUberStore(runtime) {
+  const storeId = runtime.store_id || runtime.store_location_id;
+  return storeId
+    ? { storeId: String(storeId) }
+    : { success: false, code: "STORE_NOT_MAPPED", message: "No Uber store is mapped for this company" };
+}
+
+async function loadUberProductForItem(context, runtime) {
+  const { db, action = {}, recordId, record } = context;
+  const companyId = context.companyId || context.req?.user?.companyId;
+  const productId = action.productId || recordId || record?.id;
+  const itemId = action.itemId || action.uberItemId || null;
+  if (!productId && !itemId) {
+    return { error: { success: false, code: "PRODUCT_REQUIRED", message: "Product or Uber item identifier is required" } };
+  }
+  const result = await db(
+    `SELECT p.id, p.company_id, p.uber_item_id, p.price
+       FROM products p
+      WHERE p.company_id = $1
+        AND (${productId ? "p.id = $2" : "p.uber_item_id = $2"})
+      LIMIT 1`,
+    [companyId, productId || itemId]
+  );
+  const product = result.rows?.[0];
+  if (!product) {
+    return { error: { success: false, code: "PRODUCT_NOT_FOUND", message: "Product is not mapped for this company" } };
+  }
+  const resolvedItemId = uberItemId(product);
+  if (!resolvedItemId) {
+    return { error: { success: false, code: "ITEM_NOT_MAPPED", message: "Product has no stable Uber item mapping" } };
+  }
+  const store = validateUberStore(runtime);
+  if (store.success === false) return { error: store };
+  return { product, itemId: String(resolvedItemId), storeId: store.storeId };
+}
+
+function priceMinorUnits(value) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 0 || Math.round(parsed * 100) !== parsed * 100) return null;
+  return Math.round(parsed * 100);
+}
+
+async function executeUberItemAction(context, operation) {
+  const { action = {} } = context;
+  const { runtime, service } = await loadUberWorkflowContext(context);
+  if (runtime.enabled !== true) {
+    return { success: false, code: "PLATFORM_DISABLED", message: "Uber Eats integration is disabled in Settings - Online Platforms" };
+  }
+  const resolved = await loadUberProductForItem(context, runtime);
+  if (resolved.error) return resolved.error;
+
+  let body;
+  if (operation === "price") {
+    const price = priceMinorUnits(action.priceMinorUnits ?? action.price ?? resolved.product.price);
+    if (price === null) {
+      return { success: false, code: "INVALID_PRICE", message: "Price must be a non-negative amount with at most two decimal places" };
+    }
+    body = { price_info: { price, overrides: [] } };
+  } else if (operation === "available") {
+    body = { suspension_info: { suspension: { suspend_until: null } } };
+  } else {
+    const suspendUntil = Number(action.suspendUntil ?? action.suspend_until);
+    if (!Number.isInteger(suspendUntil) || suspendUntil <= Math.floor(Date.now() / 1000)) {
+      return { success: false, code: "INVALID_SUSPENSION", message: "suspendUntil must be a future Unix timestamp in seconds" };
+    }
+    body = { suspension_info: { suspension: { suspend_until: suspendUntil, reason: "Out of stock" } } };
+  }
+
+  const response = await service.updateMenuItem(resolved.storeId, resolved.itemId, body, runtime);
+  return response.success === true
+    ? { ...response, productId: resolved.product.id, itemId: resolved.itemId, storeId: resolved.storeId }
+    : { ...response, code: response.code || "UBER_ITEM_UPDATE_FAILED", productId: resolved.product.id, itemId: resolved.itemId, storeId: resolved.storeId };
 }
 
 export async function hasConfiguredCommunicationProvider({ db, companyId, providerKind }) {
@@ -186,6 +389,47 @@ export const WORKFLOW_ACTION_REGISTRY = Object.freeze([
       companyId: companyId || req?.user?.companyId,
       userId: userId || req?.user?.id || null,
     }),
+  },
+  {
+    key: "CALL_CONNECTOR",
+    displayName: "Call Connector",
+    description: "Execute a registered operation through a tenant connector connection.",
+    schema: {
+      type: "object",
+      properties: {
+        connectionId: { type: "string" },
+        operation: { type: "string" },
+        input: { type: "object" },
+      },
+      required: ["connectionId", "operation"],
+    },
+    validation: (action) => {
+      if (typeof action?.connectionId !== "string" || !/^[0-9a-f-]{36}$/i.test(action.connectionId)) {
+        throw new Error("Call Connector requires a valid connectionId");
+      }
+      if (typeof action?.operation !== "string" || !/^[a-zA-Z0-9_.-]{1,100}$/.test(action.operation)) {
+        throw new Error("Call Connector requires a valid operation key");
+      }
+      if (action.input !== undefined && (!action.input || typeof action.input !== "object" || Array.isArray(action.input))) {
+        throw new Error("Call Connector input must be an object");
+      }
+    },
+    async: false,
+    requiredPermissions: ["integration.manage"],
+    executor: async ({ action, db, companyId, req }) => {
+      const execute = createConnectorActionExecutor({ db });
+      return {
+        status: "completed",
+        ...(await execute({
+          companyId: companyId || req?.user?.companyId,
+          connectionId: action.connectionId,
+          operation: action.operation,
+          input: action.input || {},
+          platformCredentialAccess: req?.user?.isSuperadmin === true || req?.user?.is_superadmin === true,
+          actorUserId: req?.user?.id || null,
+        })),
+      };
+    },
   },
   {
     key: "RECONCILE_INVENTORY",
@@ -939,6 +1183,237 @@ export const WORKFLOW_ACTION_REGISTRY = Object.freeze([
       });
       return { status: job ? "waiting" : "skipped", jobId: job?.id || null, resumeAt: runAt.toISOString() };
     },
+  },
+  {
+    key: "UBER_GET_STORES",
+    displayName: "Get Uber Eats Stores",
+    description: "List Uber Eats stores available to the configured company connector.",
+    validation: () => undefined,
+    async: true,
+    requiredPermissions: ["online_orders.configure"],
+    executor: async (context) => {
+      const { runtime, service } = await loadUberWorkflowContext(context);
+      if (runtime.enabled !== true) {
+        return {
+          success: false,
+          code: "PLATFORM_DISABLED",
+          message: "Uber Eats integration is disabled in Settings - Online Platforms",
+          httpStatus: null,
+          data: null,
+        };
+      }
+      return service.getStores(runtime);
+    },
+  },
+  {
+    key: "UBER_TEST_CONNECTION",
+    displayName: "Test Uber Eats Connection",
+    description: "Test the configured Uber Eats connector and discover its accessible stores.",
+    validation: () => undefined,
+    async: true,
+    requiredPermissions: ["online_orders.configure"],
+    executor: async (context) => {
+      const { runtime, service } = await loadUberWorkflowContext(context);
+      return runUberStoreConnectionTest(runtime, service);
+    },
+  },
+  {
+    key: "UBER_UPLOAD_MENU",
+    displayName: "Upload Uber Eats Menu",
+    description: "Publish the tenant's Uber-enabled Product Master items to its configured Uber Eats store.",
+    validation: () => undefined,
+    async: true,
+    requiredPermissions: ["online_orders.configure"],
+    executor: async (context) => {
+      const { db, runtime, service } = await loadUberWorkflowContext(context);
+      if (runtime.enabled !== true) {
+        return {
+          success: false,
+          code: "PLATFORM_DISABLED",
+          message: "Uber Eats integration is disabled in Settings - Online Platforms",
+          productCount: 0,
+          meta: { publishedCount: 0, skippedInactiveCount: 0, categoryCount: 0, publishedItemIds: [] },
+          httpStatus: null,
+          data: null,
+        };
+      }
+      const productsResult = await db(
+        `SELECT p.id, p.name, p.description, p.price, p.vat_rate, p.active,
+                p.uber_item_id, p.available_on_uber, p.category_id,
+                c.name AS category_name
+           FROM products p
+           LEFT JOIN categories c ON c.id = p.category_id
+          WHERE p.company_id = $1
+            AND (p.available_on_uber = true OR p.uber_item_id IS NOT NULL)
+          ORDER BY c.display_order, c.name, p.name`,
+        [context.companyId || context.req?.user?.companyId]
+      );
+      const products = productsResult.rows;
+      if (!products.length) {
+        return {
+          success: false,
+          code: "NOTHING_TO_SYNC",
+          message: "No products are marked 'Available on Uber Eats' in the Product Master",
+          productCount: 0,
+          meta: { publishedCount: 0, skippedInactiveCount: 0, categoryCount: 0, publishedItemIds: [] },
+          httpStatus: null,
+          data: null,
+        };
+      }
+      if (runtime.configured !== true) {
+        return { ...await service.syncMenu(products, runtime), productCount: products.length };
+      }
+      const requestedStoreId = String(context.action?.storeId || "").trim();
+      const storeId = String(context.action?.storeId || runtime.store_id || runtime.store_location_id || "").trim();
+      const storeMenuMappings = runtime.store_menu_mappings || [];
+      const configuredStoreIds = new Set([
+        runtime.store_id,
+        ...runtime.store_mappings.map((entry) => entry.uber_store_id),
+        ...storeMenuMappings.map((entry) => entry.uber_store_id),
+      ].filter(Boolean).map(String));
+      if (requestedStoreId && !configuredStoreIds.has(requestedStoreId)) {
+        return {
+          success: false,
+          code: "UBER_STORE_NOT_CONFIGURED",
+          message: `Uber store ${requestedStoreId} is not configured for this company`,
+          productCount: products.length,
+          meta: { publishedCount: 0, skippedInactiveCount: 0, categoryCount: 0, publishedItemIds: [] },
+          httpStatus: null,
+          data: null,
+        };
+      }
+      const selectedStoreMenuMapping = storeMenuMappings.find(
+        (entry) => entry.uber_store_id === storeId
+      );
+      if (!storeId) {
+        return {
+          success: false,
+          code: "STORE_NOT_MAPPED",
+          message: "Select an Uber store before syncing its menu",
+          productCount: products.length,
+          meta: { publishedCount: 0, skippedInactiveCount: 0, categoryCount: 0, publishedItemIds: [] },
+          httpStatus: null,
+          data: null,
+        };
+      }
+      if (
+        (storeMenuMappings.length > 0 && !selectedStoreMenuMapping) ||
+        (storeMenuMappings.length === 0 && runtime.store_mappings.length > 1)
+      ) {
+        return {
+          success: false,
+          code: "STORE_MENU_CONFIGURATION_REQUIRED",
+          message: `Configure a menu mapping for Uber store ${storeId} before syncing`,
+          productCount: products.length,
+          meta: { publishedCount: 0, skippedInactiveCount: 0, categoryCount: 0, publishedItemIds: [] },
+          httpStatus: null,
+          data: null,
+        };
+      }
+      const menuRuntime = {
+        ...runtime,
+        store_id: storeId,
+        store_location_id: storeId,
+        menu_mapping: selectedStoreMenuMapping?.menu_mapping || runtime.menu_mapping || null,
+      };
+      let mappingProducts = products;
+      let customFields;
+      if (menuRuntime.menu_mapping) {
+        const customFieldResult = await db(
+          `SELECT f.api_name
+             FROM platform_fields f
+             JOIN platform_objects o ON o.id = f.object_id
+            WHERE o.object_key = 'product'
+              AND o.active = true
+              AND f.active = true
+              AND f.config->>'storage' = 'extension'
+              AND (o.company_id IS NULL OR o.company_id = $1)
+              AND (f.company_id IS NULL OR f.company_id = $1)`,
+          [context.companyId || context.req?.user?.companyId]
+        );
+        customFields = customFieldResult.rows.map((field) => field.api_name);
+        const overridesResult = await db(
+          `SELECT a.record_id, a.custom_values
+             FROM platform_record_associations a
+             JOIN platform_objects o ON o.id = a.object_id
+            WHERE o.object_key = 'product'
+              AND o.active = true
+              AND (o.company_id IS NULL OR o.company_id = $1)
+              AND a.company_id = $1
+              AND a.record_id = ANY($2::uuid[])`,
+          [context.companyId || context.req?.user?.companyId, products.map((product) => product.id)]
+        );
+        const overridesById = new Map(
+          overridesResult.rows.map((row) => [String(row.record_id), row.custom_values || {}])
+        );
+        mappingProducts = products.map((product) => ({
+          ...product,
+          custom_values: overridesById.get(String(product.id)) || {},
+        }));
+      }
+
+      try {
+        const { products: mappedProducts } = resolveUberMenuProducts(mappingProducts, menuRuntime.menu_mapping, { customFields });
+        return { ...await service.syncMenu(mappedProducts, menuRuntime), productCount: products.length };
+      } catch (error) {
+        if (!(error instanceof UberMenuMappingError)) throw error;
+        return {
+          success: false,
+          code: error.code,
+          message: error.message,
+          details: error.details,
+          productCount: products.length,
+          meta: { publishedCount: 0, skippedInactiveCount: 0, categoryCount: 0, publishedItemIds: [] },
+          httpStatus: null,
+          data: null,
+        };
+      }
+    },
+  },
+  {
+    key: "UBER_ACCEPT_ORDER",
+    displayName: "Accept Uber Eats Order",
+    description: "Acknowledge a received Uber Eats order using its company-scoped onePOS order record.",
+    validation: () => undefined,
+    async: true,
+    requiredPermissions: ["online_orders.manage"],
+    executor: (context) => executeUberOrderAction(context, "accept"),
+  },
+  {
+    key: "UBER_DENY_ORDER",
+    displayName: "Deny Uber Eats Order",
+    description: "Deny a received or accepted Uber Eats order using its company-scoped onePOS order record.",
+    validation: () => undefined,
+    async: true,
+    requiredPermissions: ["online_orders.manage"],
+    executor: (context) => executeUberOrderAction(context, "deny"),
+  },
+  {
+    key: "UBER_UPDATE_ITEM_PRICE",
+    displayName: "Update Uber Eats Item Price",
+    description: "Update one company-scoped Uber Eats item price.",
+    validation: () => undefined,
+    async: true,
+    requiredPermissions: ["online_orders.configure"],
+    executor: (context) => executeUberItemAction(context, "price"),
+  },
+  {
+    key: "UBER_SET_ITEM_UNAVAILABLE",
+    displayName: "Set Uber Eats Item Unavailable",
+    description: "Suspend one company-scoped Uber Eats item until a future time.",
+    validation: () => undefined,
+    async: true,
+    requiredPermissions: ["online_orders.configure"],
+    executor: (context) => executeUberItemAction(context, "unavailable"),
+  },
+  {
+    key: "UBER_SET_ITEM_AVAILABLE",
+    displayName: "Set Uber Eats Item Available",
+    description: "Remove the suspension from one company-scoped Uber Eats item.",
+    validation: () => undefined,
+    async: true,
+    requiredPermissions: ["online_orders.configure"],
+    executor: (context) => executeUberItemAction(context, "available"),
   },
   {
     key: "STOP",

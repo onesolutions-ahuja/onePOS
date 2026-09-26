@@ -6,7 +6,11 @@ import {
   nodeLabel,
   normalizeCustomPageTree,
 } from "../pages/settings/Platform/customPageTree.js";
-import { buildCustomPagePath } from "../utils/adminRoutes.js";
+import {
+  buildNavigationContext,
+  navigateToTarget,
+  resolveNavigationTarget,
+} from "../utils/navigationTargets.js";
 import HospitalityOperations from "../pages/hospitality/HospitalityOperations.jsx";
 import KitchenDisplay from "../pages/hospitality/KitchenDisplay.jsx";
 
@@ -139,6 +143,13 @@ export default function CustomPageRuntime({ pageKey, onClose }) {
   const [toast, setToast] = useState("");
   const [formModal, setFormModal] = useState(null);
   const [busy, setBusy] = useState(false);
+  /*
+   * NAVIGATION CONTEXT — the resolved catalogues every navigation target is
+   * resolved against. Loaded once from the runtime navigation-targets feed
+   * (custom pages + server-filtered object pages) plus the caller's permission
+   * state; the record context comes from the component being clicked.
+   */
+  const [navigationContext, setNavigationContext] = useState(null);
 
   useEffect(() => {
     let live = true;
@@ -147,6 +158,24 @@ export default function CustomPageRuntime({ pageKey, onClose }) {
       .catch((loadError) => { if (live) setError(loadError.message); });
     return () => { live = false; };
   }, [pageKey]);
+
+  useEffect(() => {
+    let live = true;
+    Promise.all([
+      apiRequest("/api/auth/me/permissions").catch(() => null),
+      apiRequest("/api/platform/runtime/navigation-targets").catch(() => null),
+    ])
+      .then(([permissionResponse, targetResponse]) => {
+        if (!live) return;
+        setNavigationContext(buildNavigationContext({
+          permissionState: permissionResponse?.success ? permissionResponse.data : null,
+          objectPages: targetResponse?.success ? targetResponse.data?.objectPages : [],
+          customPages: targetResponse?.success ? targetResponse.data?.customPages : [],
+        }));
+      })
+      .catch(() => { if (live) setNavigationContext(buildNavigationContext({})); });
+    return () => { live = false; };
+  }, []);
 
   const definition = page?.definition || {};
   const isTree = Array.isArray(definition?.sections) && definition.sections.some((section) => Array.isArray(section?.children));
@@ -176,6 +205,30 @@ export default function CustomPageRuntime({ pageKey, onClose }) {
     return response?.data || null;
   }, []);
 
+  /*
+   * ONE navigation executor for every clickable surface on the page. The
+   * saved target definition is resolved against the safe runtime context
+   * (permissions, catalogues, the clicked component's record) and executed
+   * through the existing URL contract — the app re-resolves the view from
+   * the address bar, so a Custom Page button lands in Sales, on an Object
+   * list or on a Record Page through the SAME runtime as the dock. Failed
+   * resolution (missing page, unavailable object, no record) fails safely
+   * with a toast — never a blank screen.
+   */
+  const runNavigation = useCallback(({ interaction, currentObjectKey = null, currentRecordId = null }) => {
+    const context = buildNavigationContext({
+      ...(navigationContext || {}),
+      currentObjectKey,
+      currentRecordId,
+    });
+    const result = resolveNavigationTarget(interaction?.navigationTarget, context);
+    if (!result.ok) {
+      setToast(result.message || "That destination is not available.");
+      return;
+    }
+    navigateToTarget(result);
+  }, [navigationContext]);
+
   const handleRecordClick = useCallback(async ({ record, node }) => {
     const interaction = node?.interaction || {};
     if (!interaction.type || interaction.type === "none" || busy) return;
@@ -193,10 +246,7 @@ export default function CustomPageRuntime({ pageKey, onClose }) {
         await executeInteraction({ type: "action", objectKey, recordId, interaction });
         setToast("Action executed.");
       } else if (interaction.type === "navigate") {
-        const target = interaction.navigateTo;
-        if (!target) { setToast("No navigation target configured."); return; }
-        window.history.pushState({}, "", buildCustomPagePath(target));
-        window.dispatchEvent(new window.PopStateEvent("popstate"));
+        runNavigation({ interaction, currentObjectKey: objectKey, currentRecordId: recordId });
       } else if (interaction.type === "form_layout") {
         if (!objectKey) { setToast("No object bound to this component."); return; }
         setFormModal({ objectKey, record, presentation: interaction.formPresentation || "screen_modal" });
@@ -206,7 +256,7 @@ export default function CustomPageRuntime({ pageKey, onClose }) {
     } finally {
       setBusy(false);
     }
-  }, [busy, executeInteraction]);
+  }, [busy, executeInteraction, runNavigation]);
 
   const handleButtonClick = useCallback(async (node) => {
     const interaction = node?.interaction || {};
@@ -224,9 +274,7 @@ export default function CustomPageRuntime({ pageKey, onClose }) {
         await executeInteraction({ type: "action", objectKey: null, recordId: null, interaction });
         setToast("Action executed.");
       } else if (interaction.type === "navigate") {
-        if (!interaction.navigateTo) { setToast("No navigation target configured."); return; }
-        window.history.pushState({}, "", buildCustomPagePath(interaction.navigateTo));
-        window.dispatchEvent(new window.PopStateEvent("popstate"));
+        runNavigation({ interaction, currentObjectKey: null, currentRecordId: null });
       } else if (interaction.type === "form_layout") {
         setToast("A Form Layout needs a record — bind it to a record component.");
       }
@@ -235,7 +283,7 @@ export default function CustomPageRuntime({ pageKey, onClose }) {
     } finally {
       setBusy(false);
     }
-  }, [busy, executeInteraction]);
+  }, [busy, executeInteraction, runNavigation]);
 
   if (error) return <div className="onepos-page-enter min-h-screen grid place-items-center"><div className="onepos-card p-6">{error}</div></div>;
   if (!page) return <div className="min-h-screen grid place-items-center text-sm text-slate-500">Loading page…</div>;
@@ -243,6 +291,17 @@ export default function CustomPageRuntime({ pageKey, onClose }) {
   /* Pages with explicit legacy runtime components keep rendering them. */
   if (definition.runtime_component === "hospitality_operations") return <HospitalityOperations />;
   if (definition.runtime_component === "kitchen_display") return <KitchenDisplay />;
+  if (definition.runtime_component === "uber_eats_settings") {
+    return (
+      <main className="onepos-motion-surface onepos-page-enter min-h-screen bg-slate-100 p-6">
+        <section className="onepos-card onepos-card-body mx-auto max-w-3xl">
+          <h1 className="text-2xl font-semibold">Uber Eats</h1>
+          <p className="mt-2 text-sm text-slate-600">Configure this company’s Uber Eats connector, select an available store, and map menu fields in Settings.</p>
+          <a className="mt-4 inline-flex onepos-btn onepos-btn-primary" href="/app/settings/uber-eats">Open Uber Eats settings</a>
+        </section>
+      </main>
+    );
+  }
 
   /* Legacy flat definitions (pre-builder pages) keep their original surface. */
   if (!isTree && Array.isArray(definition.components) && definition.components.length) {

@@ -1,5 +1,7 @@
 import React, { useMemo } from "react";
 import FormRenderer from "./FormRenderer.jsx";
+import ObjectRecordView from "../../../components/records/ObjectRecordView.jsx";
+import { formatRecordDisplayValue, getRecordDisplayTitle, isTechnicalRecordField } from "../../../utils/recordDisplay.js";
 
 function getFieldKey(field) {
   return (
@@ -74,94 +76,8 @@ function getValue(record, field) {
   return undefined;
 }
 
-function formatDate(value, includeTime = false) {
-  const date = new Date(value);
-
-  if (Number.isNaN(date.getTime())) {
-    return String(value);
-  }
-
-  return includeTime
-    ? date.toLocaleString()
-    : date.toLocaleDateString();
-}
-
-function formatNumber(value) {
-  const number = Number(value);
-
-  if (!Number.isFinite(number)) {
-    return String(value);
-  }
-
-  return new Intl.NumberFormat().format(number);
-}
-
 function formatValue(value, field) {
-  if (
-    value === null ||
-    value === undefined ||
-    value === ""
-  ) {
-    return "—";
-  }
-
-  const type = getFieldType(field);
-
-  switch (type) {
-    case "boolean":
-      return value ? "Yes" : "No";
-
-    case "date":
-      return formatDate(value);
-
-    case "datetime":
-      return formatDate(value, true);
-
-    case "number":
-    case "decimal":
-      return formatNumber(value);
-
-    case "email":
-      return String(value);
-
-    case "phone":
-      return String(value);
-
-    case "url":
-      return String(value);
-
-    case "long_text":
-      return String(value);
-
-    case "select":
-      return String(value);
-
-    case "lookup":
-      if (
-        typeof value === "object" &&
-        value !== null
-      ) {
-        return (
-          value.label ||
-          value.name ||
-          value.id ||
-          JSON.stringify(value)
-        );
-      }
-
-      return String(value);
-
-    default:
-      if (typeof value === "object") {
-        try {
-          return JSON.stringify(value);
-        } catch {
-          return String(value);
-        }
-      }
-
-      return String(value);
-  }
+  return formatRecordDisplayValue(value, field);
 }
 
 function isUrl(value) {
@@ -172,20 +88,6 @@ function isUrl(value) {
   return /^https?:\/\//i.test(value);
 }
 
-function getRecordIdentifier(record) {
-  if (!record) {
-    return "";
-  }
-
-  return (
-    record.id ??
-    record.record_id ??
-    record.uuid ??
-    record.key ??
-    ""
-  );
-}
-
 export default function ObjectRecordDetail({
   record,
   fields = [],
@@ -193,20 +95,21 @@ export default function ObjectRecordDetail({
   objectKey = "",
   definition = null,
   embedded = false,
+  showHeader = true,
+  onEdit,
   onBack,
 }) {
   const activeFields = useMemo(
     () =>
       Array.isArray(fields)
         ? fields.filter(
-            (field) => field?.active !== false
+            (field) => field?.active !== false && !isTechnicalRecordField(field)
           )
         : [],
     [fields]
   );
 
-  const recordIdentifier =
-    getRecordIdentifier(record);
+  const recordTitle = getRecordDisplayTitle(record);
 
   if (!record) {
     return (
@@ -222,8 +125,8 @@ export default function ObjectRecordDetail({
   }
 
   return (
-    <div className="platform-record-detail">
-      <div className="platform-record-detail-header">
+    <div className={`platform-record-detail${embedded ? " platform-record-detail-embedded" : ""}`}>
+      {showHeader ? <div className="platform-record-detail-header">
         <div className="platform-record-detail-title">
           {onBack ? (
             <button
@@ -237,23 +140,21 @@ export default function ObjectRecordDetail({
 
           <div>
             <div className="platform-record-detail-eyebrow">
-              {objectKey || "OBJECT"}
+              {objectLabel || objectKey || "Record"}
             </div>
 
-            <h3>{objectLabel}</h3>
-
-            {recordIdentifier !== "" ? (
-              <span className="platform-record-detail-id">
-                ID: {String(recordIdentifier)}
-              </span>
-            ) : null}
+            <h3>{recordTitle}</h3>
           </div>
         </div>
 
-        <span className="platform-read-only-badge">
-          Read only
-        </span>
-      </div>
+        {onEdit ? (
+          <button type="button" className="onepos-btn onepos-btn-secondary onepos-btn-sm" onClick={onEdit} aria-label={`Edit ${recordTitle}`}>
+            Edit
+          </button>
+        ) : (
+          <span className="platform-read-only-badge">Read only</span>
+        )}
+      </div> : null}
 
       <div className="platform-record-detail-body">
         {definition ? (
@@ -272,71 +173,23 @@ export default function ObjectRecordDetail({
             </span>
           </div>
         ) : (
-          <div className="platform-record-field-grid">
-            {activeFields.map((field) => {
-              const key =
-                field?.id ||
-                getFieldKey(field);
-
-              const label =
-                field?.label ||
-                field?.name ||
-                getFieldKey(field);
-
-              const value = getValue(
-                record,
-                field
-              );
-
-              const formatted =
-                formatValue(value, field);
-
-              const url =
-                getFieldType(field) === "url" &&
-                isUrl(value)
-                  ? String(value)
-                  : null;
-
-              return (
-                <div
-                  className="platform-record-field"
-                  key={key}
-                >
-                  <div className="platform-record-field-label">
-                    <span>{label}</span>
-
-                    {field?.required ? (
-                      <span className="platform-record-required">
-                        *
-                      </span>
-                    ) : null}
-                  </div>
-
-                  <div className="platform-record-field-value">
-                    {url ? (
-                      <a
-                        href={url}
-                        target="_blank"
-                        rel="noreferrer"
-                      >
-                        {formatted}
-                      </a>
-                    ) : (
-                      formatted
-                    )}
-                  </div>
-
-                  {getFieldSourceColumn(
-                    field
-                  ) ? (
-                    <div className="platform-record-field-source">
-                      {getFieldSourceColumn(field)}
-                    </div>
-                  ) : null}
-                </div>
-              );
+          /* THE shared flat record view — label/value rows in a General
+             section instead of a grid of bordered cards. */
+          <ObjectRecordView
+            fields={activeFields.map((field) => {
+              const value = getValue(record, field);
+              const type = getFieldType(field);
+              const url = type === "url" && isUrl(value) ? String(value) : null;
+              return {
+                key: getFieldKey(field),
+                label: field?.label || field?.name || getFieldKey(field),
+                type,
+                field,
+                value: url ? undefined : value,
+                ...(url ? { render: () => (<a href={url} target="_blank" rel="noreferrer">{formatValue(value, field)}</a>) } : {}),
+              };
             })}
-          </div>
+          />
         )}
       </div>
 
@@ -398,14 +251,6 @@ export default function ObjectRecordDetail({
           font-size: 16px;
         }
 
-        .platform-record-detail-id {
-          display: block;
-          margin-top: 4px;
-          color: var(--text-secondary, #6b7280);
-          font-family: monospace;
-          font-size: 9px;
-        }
-
         .platform-read-only-badge {
           flex: 0 0 auto;
           padding: 5px 8px;
@@ -421,60 +266,9 @@ export default function ObjectRecordDetail({
           padding: 18px;
         }
 
-        .platform-record-field-grid {
-          display: grid;
-          grid-template-columns:
-            repeat(
-              auto-fit,
-              minmax(220px, 1fr)
-            );
-          gap: 1px;
-          overflow: hidden;
-          border: 1px solid var(--border-color, #e5e7eb);
-          border-radius: 9px;
-          background: var(--border-color, #e5e7eb);
-        }
-
-        .platform-record-field {
-          min-width: 0;
-          padding: 13px;
-          background: var(--card-background, #fff);
-        }
-
-        .platform-record-field-label {
-          display: flex;
-          align-items: center;
-          gap: 3px;
-          margin-bottom: 5px;
-          color: var(--text-secondary, #6b7280);
-          font-size: 10px;
-          font-weight: 600;
-        }
-
-        .platform-record-required {
-          color: #dc2626;
-        }
-
-        .platform-record-field-value {
-          min-height: 18px;
-          color: var(--text-primary, #1f2937);
-          font-size: 12px;
-          line-height: 1.5;
-          overflow-wrap: anywhere;
-          white-space: pre-wrap;
-        }
-
-        .platform-record-field-value a {
-          color: inherit;
-          text-decoration: underline;
-        }
-
-        .platform-record-field-source {
-          margin-top: 5px;
-          color: var(--text-secondary, #9ca3af);
-          font-family: monospace;
-          font-size: 8px;
-        }
+        /* Flat record rows now come from the SHARED ObjectRecordView         */
+        /* (index.css → .onepos-record-*); the old per-field boxed grid is    */
+        /* intentionally gone.                                                */
 
         .platform-record-detail-empty {
           display: flex;
@@ -505,10 +299,6 @@ export default function ObjectRecordDetail({
 
           .platform-record-detail-title {
             width: 100%;
-          }
-
-          .platform-record-field-grid {
-            grid-template-columns: 1fr;
           }
         }
       `}</style>

@@ -38,10 +38,51 @@ export async function getCompanyEntitlements(db, companyId) {
     [companyId]
   );
   const row = result.rows[0];
-  if (!row || row.active !== true ||
-      (row.starts_at && new Date(row.starts_at) > new Date()) ||
-      (row.expires_at && new Date(row.expires_at) < new Date())) return {};
-  return mergeEntitlements(row.entitlements);
+  const activeLicence = row?.active === true &&
+    !(row.starts_at && new Date(row.starts_at) > new Date()) &&
+    !(row.expires_at && new Date(row.expires_at) < new Date());
+  const entitlements = activeLicence ? mergeEntitlements(row.entitlements) : {};
+  const bundleResult = await db(
+    `SELECT be.entitlement_key, be.enabled
+       FROM company_bundle_assignments a
+       JOIN licence_bundles b ON b.id=a.bundle_id AND b.active=true
+       JOIN licence_bundle_entitlements be ON be.bundle_id=b.id
+      WHERE a.company_id=$1 AND a.active=true
+        AND (a.starts_at IS NULL OR a.starts_at<=NOW())
+        AND (a.expires_at IS NULL OR a.expires_at>NOW())`,
+    [companyId]
+  );
+  for (const item of bundleResult.rows) {
+    if (item.enabled === true) entitlements[item.entitlement_key] = true;
+    else if (!(item.entitlement_key in (row?.entitlements || {}))) entitlements[item.entitlement_key] = false;
+  }
+  const packageResult = await db(
+    `SELECT p.manifest->>'entitlementKey' AS entitlement_key
+       FROM company_bundle_assignments a
+       JOIN licence_bundles b ON b.id=a.bundle_id AND b.active=true
+       JOIN licence_bundle_packages bp ON bp.bundle_id=b.id
+       JOIN package_registry p ON p.id=bp.package_id
+      WHERE a.company_id=$1 AND a.active=true AND bp.entitlement_type='COMMERCIAL'
+        AND (a.starts_at IS NULL OR a.starts_at<=NOW())
+        AND (a.expires_at IS NULL OR a.expires_at>NOW())
+        AND p.manifest->>'entitlementKey' IS NOT NULL`,
+    [companyId]
+  );
+  for (const item of packageResult.rows) entitlements[item.entitlement_key] = true;
+  const licensedPackageResult = await db(
+    `SELECT p.manifest->>'entitlementKey' AS entitlement_key
+       FROM companies c
+       JOIN licences l ON l.id=c.licence_id AND l.active=true
+       JOIN licence_packages lp ON lp.licence_id=l.id AND lp.enabled=true
+       JOIN package_registry p ON p.id=lp.package_id
+      WHERE c.id=$1
+        AND (l.starts_at IS NULL OR l.starts_at<=NOW())
+        AND (l.expires_at IS NULL OR l.expires_at>NOW())
+        AND p.manifest->>'entitlementKey' IS NOT NULL`,
+    [companyId]
+  );
+  for (const item of licensedPackageResult.rows) entitlements[item.entitlement_key] = true;
+  return entitlements;
 }
 
 export async function getUserLicenceState(db, companyId, userId) {
@@ -76,6 +117,12 @@ export function hasEntitlement(entitlements, key) {
 }
 
 export function isPackageLicensed(entitlements, packageEntry = {}) {
+  if (
+    packageEntry?.package_type === "FOUNDATION" ||
+    packageEntry?.packageType === "FOUNDATION" ||
+    packageEntry?.manifest?.packageType === "FOUNDATION" ||
+    packageEntry?.manifest?.licenceRequired === false
+  ) return true;
   const key = packageEntry?.manifest?.entitlementKey;
   return !key || hasEntitlement(entitlements, key);
 }

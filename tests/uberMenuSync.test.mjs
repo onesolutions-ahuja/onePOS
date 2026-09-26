@@ -141,6 +141,14 @@ function makeFake() {
       return { rows: row ? [{ active: row.active, configuration: { ...row.configuration } }] : [] };
     }
 
+    if (q.startsWith("SELECT f.api_name FROM platform_fields")) {
+      return { rows: [] };
+    }
+
+    if (q.startsWith("SELECT a.record_id, a.custom_values FROM platform_record_associations")) {
+      return { rows: [] };
+    }
+
     if (q.startsWith("INSERT INTO platform_api_logs") || q.startsWith("UPDATE platform_api_logs")) {
       state.platformLogs.push(values);
       return { rows: [] };
@@ -152,7 +160,7 @@ function makeFake() {
   return { state, db };
 }
 
-async function buildApp({ uberResponse } = {}) {
+async function buildApp({ uberResponse, storesResponse } = {}) {
   const { default: createOnlineRouter } = await import("../routes/online.js");
   const express_ = express;
   const configModule = await import("../services/onlineOrders/platformConfig.js");
@@ -183,13 +191,25 @@ async function buildApp({ uberResponse } = {}) {
       };
     }
 
-    if (target.includes("/v1/eats/stores/") && options.method === "PUT") {
+    if (target.includes("/v2/eats/stores/") && options.method === "PUT") {
       fake.state.uberMenuPuts.push({ url: target, body: JSON.parse(options.body) });
       return (
         uberResponse || {
           ok: true,
           status: 200,
           text: async () => JSON.stringify({ menu_id: "uber-menu-1" }),
+        }
+      );
+    }
+
+    if (target.includes("/v1/eats/stores") && options.method === "GET") {
+      return (
+        storesResponse || {
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({
+            stores: [{ id: UBER_STORE, name: "Test store", brand: { id: "brand-1", description: "Test brand" }, status: { type: "ACTIVE" }, integration_enabled: true }],
+          }),
         }
       );
     }
@@ -258,11 +278,40 @@ test("menu sync route: builds the Uber PUT from the onePOS Product Master and re
 
     assert.equal(fake.state.uberMenuPuts.length, 1);
     const put = fake.state.uberMenuPuts[0];
-    assert.ok(put.url.includes(`/v1/eats/stores/${UBER_STORE}/menus`)); // sandbox host
+    assert.ok(put.url.includes(`/v2/eats/stores/${UBER_STORE}/menus`)); // sandbox host
     const category = put.body.menus[0].categories[0];
     assert.equal(category.id, "onepos-cat-coffee");
     assert.equal(category.items.find((i) => i.id === "uber-777").price, 350);
     assert.equal(category.items.find((i) => i.id === "prod-tea").id, "prod-tea");
+  } finally {
+    restore();
+  }
+});
+
+test("menu sync route targets the selected Uber store and applies only its saved mapping", async () => {
+  const { app, fake, restore } = await buildApp();
+  const selectedStoreId = "uber-menu-store-2";
+  fake.state.integrations[0].configuration.store_mappings = [
+    { uber_store_id: selectedStoreId, onepos_store_id: STORE_1 },
+  ];
+  fake.state.integrations[0].configuration.store_menu_mappings = [
+    {
+      uber_store_id: UBER_STORE,
+      menu_mapping: { fields: { title: { type: "constant", value: "Primary menu item" } } },
+    },
+    {
+      uber_store_id: selectedStoreId,
+      menu_mapping: { fields: { title: { type: "constant", value: "Second-store menu item" } } },
+    },
+  ];
+  try {
+    const res = await postSync(app, { store_id: selectedStoreId });
+    const body = await res.json();
+
+    assert.equal(res.status, 200);
+    assert.equal(body.success, true);
+    assert.ok(fake.state.uberMenuPuts[0].url.includes(`/v2/eats/stores/${selectedStoreId}/menus`));
+    assert.equal(fake.state.uberMenuPuts[0].body.menus[0].categories[0].items[0].title, "Second-store menu item");
   } finally {
     restore();
   }
@@ -313,6 +362,23 @@ test("menu sync: nothing marked Available on Uber -> NOTHING_TO_SYNC, no Uber ca
     const body = await res.json();
     assert.equal(body.success, false);
     assert.equal(body.code, "NOTHING_TO_SYNC");
+    assert.equal(fake.state.uberMenuPuts.length, 0);
+  } finally {
+    restore();
+  }
+});
+
+test("menu sync: missing required mapped product fields is rejected before Uber is called", async () => {
+  const { app, fake, restore } = await buildApp();
+  fake.state.products[COMPANY] = [
+    { id: "p-no-price", name: "Missing price", price: 0, active: true, uber_item_id: null, available_on_uber: true },
+  ];
+  try {
+    const res = await postSync(app);
+    const body = await res.json();
+    assert.equal(body.success, false);
+    assert.equal(body.code, "INVALID_MENU_PAYLOAD");
+    assert.deepEqual(body.data.invalidItems, [{ productId: "p-no-price", fields: ["price"] }]);
     assert.equal(fake.state.uberMenuPuts.length, 0);
   } finally {
     restore();
@@ -376,12 +442,46 @@ test("menu sync route: disabled integration is rejected (409)", async () => {
   }
 });
 
+test("Uber connection route dispatches the registered test action and returns discovered stores", async () => {
+  const { app, restore } = await buildApp();
+  const server = http.createServer(app);
+  const port = await new Promise((resolve) => server.listen(0, "127.0.0.1", () => resolve(server.address().port)));
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}/api/online/uber/test-connection`);
+    const body = await res.json();
+    assert.equal(res.status, 200);
+    assert.equal(body.success, true);
+    assert.equal(body.data.attempts.length, 1);
+    assert.equal(body.data.stores[0].storeId, UBER_STORE);
+    assert.equal(body.data.stores[0].brandId, "brand-1");
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    restore();
+  }
+});
+
+test("Uber workflow actions report missing connector credentials without calling the provider", async () => {
+  const { app, fake, restore } = await buildApp();
+  fake.state.integrations[0].configuration.client_id = null;
+  fake.state.integrations[0].configuration.client_secret = null;
+  try {
+    const syncRes = await postSync(app);
+    const syncBody = await syncRes.json();
+    assert.equal(syncRes.status, 200);
+    assert.equal(syncBody.success, false);
+    assert.equal(syncBody.code, "NOT_CONFIGURED");
+    assert.equal(fake.state.uberMenuPuts.length, 0);
+  } finally {
+    restore();
+  }
+});
+
 test("menu sync source contract: route never writes to products/inventory tables", () => {
   const src = fs.readFileSync(new URL("../routes/online.js", import.meta.url), "utf8");
   const syncSection = src.slice(src.indexOf("POST /api/online/uber/sync-menu"), src.indexOf("GET /api/online/uber/test-connection"));
-  assert.ok(syncSection.includes("SELECT p.id, p.name, p.description"));
+  assert.ok(syncSection.includes("type: \"UBER_UPLOAD_MENU\""));
   assert.ok(!/INSERT INTO products|UPDATE products|DELETE FROM products/.test(syncSection));
   assert.ok(!/INSERT INTO inventory_movements|UPDATE inventory/.test(syncSection));
-  // And the underlying uberRequest is fired for the menu endpoint only via the service.
-  assert.ok(src.includes("service.syncMenu(products, runtime)"));
+  const workflowSrc = fs.readFileSync(new URL("../services/platformWorkflow.js", import.meta.url), "utf8");
+  assert.ok(workflowSrc.includes("service.syncMenu(mappedProducts, menuRuntime)"));
 });

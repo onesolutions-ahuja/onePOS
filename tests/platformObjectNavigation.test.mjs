@@ -34,6 +34,7 @@ import { groupNavItems } from "../src/utils/adminApps.js";
 
 const layoutSource = readFileSync(new URL("../src/pages/admin/AdminLayout.jsx", import.meta.url), "utf8");
 const dockSource = readFileSync(new URL("../src/components/AdminNavDock.jsx", import.meta.url), "utf8");
+const catalogueSource = readFileSync(new URL("../src/utils/navCatalogue.js", import.meta.url), "utf8");
 const studioSource = readFileSync(
   new URL("../src/pages/settings/Platform/PlatformStudio.jsx", import.meta.url),
   "utf8"
@@ -380,8 +381,10 @@ test("built-in operational pages can never be taken over by navigation metadata"
 });
 
 test("the specialised navigation entries themselves are untouched", () => {
+  /* The ONE page catalogue (utils/navCatalogue.js) owns the built-in entries;
+     the admin shell renders from the same list. */
   for (const label of ["Products", "Customers", "Suppliers", "Inventory", "Purchases", "Sales", "Stores", "Reports"]) {
-    assert.match(layoutSource, new RegExp(`\\[\\"${label}\\", `));
+    assert.match(catalogueSource, new RegExp(`\\[\\"${label}\\", `));
   }
   /* The specialised destinations still point at their own components. */
   assert.match(layoutSource, /page ===\s*\n?\s*"Products" \? \(\s*\n\s*<ProductsAdmin/);
@@ -409,8 +412,8 @@ test("Dashboards is an explicit Insights entry and stays separate from the opera
 
 test("Reports (curated) and My Reports (configurable) remain distinct entries", () => {
   assert.match(layoutSource, /canViewCustomReports\) visibleReportItems\.unshift\(\{ key: "My Reports"/);
-  assert.match(layoutSource, /\[\"Reports\", BarChart3\]/);
-  assert.match(layoutSource, /page ===\s*\n?\s*"My Reports" \? \(\s*\n\s*canViewCustomReports \? <CustomReportsAdmin \/>/);
+  assert.match(catalogueSource, /\[\"Reports\", BarChart3\]/);
+  assert.match(layoutSource, /page ===\s*\n?\s*"My Reports" \? \(\s*\n\s*canViewCustomReports \? \(\s*\n\s*<CustomReportsAdmin \/>/);
   assert.match(layoutSource, /"Reports" \? \(\s*\n\s*canViewReports \? \(\s*\n\s*<ReportsAdmin \/>/);
 });
 
@@ -480,10 +483,17 @@ test("the Dock renders configured Objects in their own launcher group, filtered 
   assert.match(dockSource, /!visibleObjects\.length/);
 });
 
-test("the Dock keeps its built-in primary layout and Open Till behaviour", () => {
-  assert.match(dockSource, /const DOCK_PRIMARY = \[\s*\n\s*"Dashboard",/);
-  assert.match(dockSource, /"Open Till"/);
-  assert.match(dockSource, /onOpenTill\?\.\(\)/);
+test("the Dock keeps its built-in primary layout and the admin/till surface switch", () => {
+  /* The dock keeps its structure: customisable quick-access slots, the Jarvis
+     pocket and the fixed destinations (Apps launcher + contextual surface
+     switch + Settings). "Open Till" lives in the AdminShell header. */
+  assert.match(dockSource, /const GROUPS = \[/);
+  assert.match(dockSource, /JarvisCorner embedded/);
+  assert.match(dockSource, /label=\{surface === "till" \? "Admin" : "Till"\}/);
+  assert.match(dockSource, /onSwitchSurface/);
+  assert.match(dockSource, /label="Apps"/);
+  assert.match(dockSource, /label="Settings"/);
+  /* "Open Till" itself lives in the AdminShell header (unchanged behaviour). */
   /* The dock is not part of the preset system. */
   assert.doesNotMatch(dockSource, /onepos-icon-chip|onepos-nav-item-height|data-onepos-preset/);
 });

@@ -25,6 +25,7 @@ const read = (rel) => fs.readFileSync(new URL(rel, import.meta.url), "utf8");
 
 const PAGE = read("../src/pages/employees/AttendanceAdmin.jsx");
 const LAYOUT = read("../src/pages/admin/AdminLayout.jsx");
+const CATALOGUE = read("../src/utils/navCatalogue.js");
 const SETTINGS = read("../src/pages/settings/SettingsAdmin.jsx");
 
 test("Employees page exists and is wired into the AdminLayout", () => {
@@ -32,8 +33,9 @@ test("Employees page exists and is wired into the AdminLayout", () => {
   assert.match(LAYOUT, /const AttendanceAdmin = lazy\(\(\) => import\("\.\.\/employees\/AttendanceAdmin\.jsx"\)\);/);
   assert.match(LAYOUT, /page ===\s*\n?\s*"Employees" \? \(|page === "Employees" \? \(/);
   assert.match(LAYOUT, /"Employees" \? \(?\s*<AttendanceAdmin \/>\s*\)/);
-  /* No second top-level module / duplicated nav entry. */
-  assert.equal((LAYOUT.match(/\["Employees", Users\]/g) || []).length, 1);
+  /* The ONE page catalogue owns the nav entry — exactly one, so there is no
+     duplicated top-level module (the render branch in AdminLayout stays). */
+  assert.equal((CATALOGUE.match(/\["Employees", Users\]/g) || []).length, 1);
 });
 
 test("clock in/out call the real endpoints without client timestamps (1-4)", () => {

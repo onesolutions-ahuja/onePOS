@@ -1,4 +1,6 @@
-import React, { useMemo, useState } from "react";
+import React, { useMemo } from "react";
+import ObjectList from "../../../components/records/ObjectList.jsx";
+import { formatRecordDisplayValue, isTechnicalRecordField } from "../../../utils/recordDisplay.js";
 
 function getFieldKey(field) {
   return (
@@ -20,16 +22,6 @@ function getFieldLabel(field) {
   );
 }
 
-function getFieldType(field) {
-  if ((field?.fieldType || field?.field_type) === "formula") return field?.config?.resultType || "text";
-  return (
-    field?.fieldType ||
-    field?.field_type ||
-    field?.type ||
-    "text"
-  );
-}
-
 function getDisplayOrder(field, index) {
   const order =
     field?.displayOrder ??
@@ -40,119 +32,6 @@ function getDisplayOrder(field, index) {
   return Number.isFinite(Number(order))
     ? Number(order)
     : index;
-}
-
-function getValue(record, field) {
-  if (!record || !field) {
-    return undefined;
-  }
-
-  const apiName = getFieldKey(field);
-
-  if (
-    apiName &&
-    Object.prototype.hasOwnProperty.call(
-      record,
-      apiName
-    )
-  ) {
-    return record[apiName];
-  }
-
-  const sourceColumn =
-    field?.sourceColumn ||
-    field?.source_column ||
-    field?.databaseColumn ||
-    field?.database_column;
-
-  if (
-    sourceColumn &&
-    Object.prototype.hasOwnProperty.call(
-      record,
-      sourceColumn
-    )
-  ) {
-    return record[sourceColumn];
-  }
-
-  return undefined;
-}
-
-function formatValue(value, field) {
-  if (
-    value === null ||
-    value === undefined ||
-    value === ""
-  ) {
-    return "-";
-  }
-
-  const type = getFieldType(field);
-
-  if (type === "boolean") {
-    return value === true || value === "true" || value === 1
-      ? "Yes"
-      : "No";
-  }
-
-  if (type === "date") {
-    const date = new Date(value);
-
-    if (!Number.isNaN(date.getTime())) {
-      return date.toLocaleDateString();
-    }
-  }
-
-  if (type === "datetime") {
-    const date = new Date(value);
-
-    if (!Number.isNaN(date.getTime())) {
-      return date.toLocaleString();
-    }
-  }
-
-  if (
-    type === "number" ||
-    type === "decimal"
-  ) {
-    const number = Number(value);
-
-    if (Number.isFinite(number)) {
-      return new Intl.NumberFormat().format(
-        number
-      );
-    }
-  }
-
-  if (typeof value === "object") {
-    try {
-      if (value.label || value.name || value.title || value.value) {
-        return String(
-          value.label ||
-            value.name ||
-            value.title ||
-            value.value
-        );
-      }
-
-      return JSON.stringify(value);
-    } catch {
-      return String(value);
-    }
-
-  }
-
-  return String(value);
-}
-
-function getRecordId(record, index) {
-  return (
-    record?.id ??
-    record?.record_id ??
-    record?.uuid ??
-    record?.key ??
-    index
-  );
 }
 
 export default function ObjectRecordList({
@@ -167,15 +46,12 @@ export default function ObjectRecordList({
   onRefresh,
   emptyMessage,
 }) {
-  const [search, setSearch] = useState("");
-
+  /* Search and selection live inside the shared ObjectList presentation; the
+     wrapper keeps only the data ordering and the object header. */
   const activeFields = useMemo(
     () =>
       (Array.isArray(fields)
-        ? fields.filter(
-            (field) =>
-              field?.active !== false
-          )
+        ? fields.filter((field) => field?.active !== false && !isTechnicalRecordField(field))
         : []
       )
         .map((field, index) => ({
@@ -188,80 +64,16 @@ export default function ObjectRecordList({
     [fields]
   );
 
-  const safeRecords = useMemo(
-    () =>
-      Array.isArray(records)
-        ? records
-        : [],
+  const filteredRecords = useMemo(
+    () => (Array.isArray(records) ? records : []),
     [records]
   );
 
-  const filteredRecords = useMemo(() => {
-    const query = search
-      .trim()
-      .toLowerCase();
-
-    if (!query) {
-      return safeRecords;
-    }
-
-    return safeRecords.filter((record) =>
-      activeFields.some((field) => {
-        const value = getValue(
-          record,
-          field
-        );
-
-        if (
-          value === null ||
-          value === undefined
-        ) {
-          return false;
-        }
-
-        return String(value)
-          .toLowerCase()
-          .includes(query);
-      })
-    );
-  }, [
-    search,
-    safeRecords,
-    activeFields,
-  ]);
-
-  function isSelected(record) {
-    if (!selectedRecord || !record) {
-      return false;
-    }
-
-    const selectedId =
-      selectedRecord?.id ??
-      selectedRecord?.record_id ??
-      selectedRecord?.uuid ??
-      selectedRecord?.key;
-
-    const recordId =
-      record?.id ??
-      record?.record_id ??
-      record?.uuid ??
-      record?.key;
-
-    if (
-      selectedId !== undefined &&
-      recordId !== undefined
-    ) {
-      return (
-        String(selectedId) ===
-        String(recordId)
-      );
-    }
-
-    return selectedRecord === record;
-  }
-
   return (
     <section className="platform-object-record-list">
+      {/* THE shared global list presentation. This wrapper keeps the object
+          runtime's own header (object label + count + refresh) and hands the
+          records to the ONE ObjectList used by every metadata list surface. */}
       <div className="platform-record-list-header">
         <div>
           <div className="platform-record-list-eyebrow">
@@ -278,32 +90,18 @@ export default function ObjectRecordList({
           </span>
         </div>
 
-        <div className="platform-record-list-actions">
-          <input
-            type="search"
-            value={search}
-            onChange={(event) =>
-              setSearch(
-                event.target.value
-              )
-            }
-            placeholder="Search records..."
-            aria-label="Search records"
-          />
-
-          {onRefresh ? (
-            <button
-              type="button"
-              className="platform-record-refresh"
-              onClick={onRefresh}
-              disabled={loading}
-            >
-              {loading
-                ? "Loading..."
-                : "Refresh"}
-            </button>
-          ) : null}
-        </div>
+        {onRefresh ? (
+          <button
+            type="button"
+            className="platform-record-refresh"
+            onClick={onRefresh}
+            disabled={loading}
+          >
+            {loading
+              ? "Loading..."
+              : "Refresh"}
+          </button>
+        ) : null}
       </div>
 
       {error ? (
@@ -334,110 +132,19 @@ export default function ObjectRecordList({
             before displaying records.
           </span>
         </div>
-      ) : filteredRecords.length === 0 ? (
-        <div className="platform-record-list-empty">
-          <strong>
-            {search
-              ? "No matching records"
-              : "No records"}
-          </strong>
-
-          <span>
-            {search
-              ? "Try a different search."
-              : emptyMessage ||
-                "There are no records available for this object."}
-          </span>
-        </div>
       ) : (
-        <div className="platform-record-table-container">
-          <table className="platform-record-table">
-            <thead>
-              <tr>
-                {activeFields.map(
-                  (field) => (
-                    <th
-                      key={
-                        field?.id ||
-                        getFieldKey(
-                          field
-                        )
-                      }
-                    >
-                      {getFieldLabel(
-                        field
-                      )}
-                    </th>
-                  )
-                )}
-              </tr>
-            </thead>
-
-            <tbody>
-              {filteredRecords.map(
-                (record, index) => {
-                  const recordId =
-                    getRecordId(
-                      record,
-                      index
-                    );
-
-                  const selected =
-                    isSelected(record);
-
-                  return (
-                    <tr
-                      key={recordId}
-                      className={
-                        selected
-                          ? "selected"
-                          : ""
-                      }
-                      onClick={() =>
-                        onSelectRecord?.(
-                          record
-                        )
-                      }
-                    >
-                      {activeFields.map(
-                        (field) => {
-                          const value =
-                            getValue(
-                              record,
-                              field
-                            );
-
-                          return (
-                            <td
-                              key={
-                                field?.id ||
-                                getFieldKey(
-                                  field
-                                )
-                              }
-                              title={
-                                value !==
-                                  null &&
-                                value !==
-                                  undefined
-                                  ? String(
-                                      value
-                                    )
-                                  : ""
-                              }
-                            >
-                              {formatValue(value, field)}
-                            </td>
-                          );
-                        }
-                      )}
-                    </tr>
-                  );
-                }
-              )}
-            </tbody>
-          </table>
-        </div>
+        <ObjectList
+          records={filteredRecords}
+          columns={activeFields.map((field) => ({
+            key: getFieldKey(field),
+            label: getFieldLabel(field),
+            format: (value) => formatRecordDisplayValue(value, field),
+          }))}
+          primaryColumn={activeFields.length ? getFieldKey(activeFields[0]) : "name"}
+          selectedId={selectedRecord ? (selectedRecord?.id ?? selectedRecord?.record_id ?? selectedRecord?.uuid ?? selectedRecord?.key ?? null) : null}
+          onOpenRecord={(record) => onSelectRecord?.(record)}
+          emptyMessage={emptyMessage || "There are no records available for this object."}
+        />
       )}
 
       <style>{`

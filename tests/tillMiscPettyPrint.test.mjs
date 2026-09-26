@@ -742,7 +742,8 @@ describe("Till action bar", () => {
     assert.ok(POS_SRC.includes('data-testid="misc-item-button"'), "Misc Item button");
     assert.ok(POS_SRC.includes('data-testid="petty-cash-button"'), "Petty Cash button");
     assert.ok(POS_SRC.includes('data-testid="print-button"'), "Print button");
-    assert.ok(POS_SRC.indexOf("Misc Item") < POS_SRC.indexOf("<AdminNavDock"), "action bar sits above the dock");
+    /* The till mounts the shared dock through DockHost (Batch 5–6 refactor). */
+    assert.ok(POS_SRC.indexOf("Misc Item") < POS_SRC.indexOf("<DockHost"), "action bar sits above the dock");
   });
 
   test("Print is disabled until a sale completes; enabled by both online and offline completions", () => {

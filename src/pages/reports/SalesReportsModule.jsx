@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import useReportData from "./shared/useReportData.js";
 import ReportTable from "./ReportTable.jsx";
 import { getSalesOverview } from "../../services/reports.js";
+import { formatDateValue } from "../../utils/dateFormat.js";
 import { apiRequest } from "../../services/api.js";
 
 /*
@@ -104,7 +105,9 @@ export default function SalesReportsModule({ from, to }) {
 
   const firstColumn = GROUP_FIRST_COLUMN[by];
   const tableRows = rows.map((row) => [
-    row.label || row.key,
+    /* By-day rows arrive as ISO timestamps — present them in the company's
+       configured date format like every other list/report surface. */
+    by === BY_DAY ? (formatDateValue(row.label || row.key) || row.label || row.key) : (row.label || row.key),
     row.count_sales,
     Number(row.total_qty).toLocaleString(),
     money(row.total_sales),

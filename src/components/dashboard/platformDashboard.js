@@ -12,16 +12,19 @@ export const DASHBOARD_COLUMNS = 12;
    two and then one on tablet and phone. */
 export const dashboardSpanClass = (width) => {
   const w = Math.min(DASHBOARD_COLUMNS, Math.max(1, Number(width) || 4));
+  /* Phones: every component takes the full row (grid-cols-4 base → span 4).
+     Without this, four KPI tiles squeeze into one 390px row and clip both
+     their titles ("Total S…") and values ("£259.3…"). */
   return ({
-    1: "col-span-1",
-    2: "col-span-2",
-    3: "col-span-1 sm:col-span-2 lg:col-span-3",
-    4: "col-span-2 sm:col-span-2 lg:col-span-3",
-    5: "col-span-2 sm:col-span-3 lg:col-span-4",
-    6: "col-span-2 sm:col-span-3 lg:col-span-6",
-    7: "col-span-3 sm:col-span-4 lg:col-span-7",
-    8: "col-span-3 sm:col-span-4 lg:col-span-8",
-    9: "col-span-3 sm:col-span-6 lg:col-span-9",
+    1: "col-span-4 sm:col-span-1",
+    2: "col-span-4 sm:col-span-2",
+    3: "col-span-4 sm:col-span-2 lg:col-span-3",
+    4: "col-span-4 sm:col-span-2 lg:col-span-3",
+    5: "col-span-4 sm:col-span-3 lg:col-span-4",
+    6: "col-span-4 sm:col-span-3 lg:col-span-6",
+    7: "col-span-4 sm:col-span-4 lg:col-span-7",
+    8: "col-span-4 sm:col-span-4 lg:col-span-8",
+    9: "col-span-4 sm:col-span-6 lg:col-span-9",
     10: "col-span-4 sm:col-span-6 lg:col-span-10",
     11: "col-span-4 sm:col-span-6 lg:col-span-11",
     12: "col-span-4 sm:col-span-6 lg:col-span-12",
@@ -30,7 +33,9 @@ export const dashboardSpanClass = (width) => {
 
 export const dashboardHeightClass = (height) => {
   const h = Math.min(12, Math.max(1, Number(height) || 3));
-  if (h <= 1) return "min-h-[104px]";
+  /* KPI row height: 104px clipped the metric value whenever a title wrapped;
+     120px keeps the label + value pair intact without inflating the row. */
+  if (h <= 1) return "min-h-[120px]";
   if (h <= 2) return "min-h-[150px]";
   if (h <= 4) return "min-h-[260px]";
   if (h <= 6) return "min-h-[340px]";

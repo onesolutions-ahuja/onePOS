@@ -41,12 +41,15 @@ const createTestDb = async () => {
   const cat = await db(`INSERT INTO categories(company_id,name) VALUES($1,$2) RETURNING id`, [companyId, `WastageTest-${tag}`]);
   const products = await Promise.all(
     [
-      { name: "Test Product A", stock: 10, tracked: true },
-      { name: "Test Product B", stock: 5, tracked: true },
-    ].map(({ name, stock, tracked }) =>
+      { name: "Below threshold", stock: 3, low: 5, tracked: true },
+      { name: "Above threshold", stock: 7, low: 5, tracked: true },
+      { name: "At threshold", stock: 5, low: 5, tracked: true },
+      { name: "Track off", stock: 0, low: 5, tracked: false },
+      { name: "Track off zero threshold", stock: 0, low: 0, tracked: false },
+    ].map(({ name, stock, low, tracked }) =>
       db(
-        `INSERT INTO products(company_id,category_id,name,sku,price,cost_price,vat_rate,vat_applicable,stock_quantity,low_stock_level,track_stock,active) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,true) RETURNING id,name,stock_quantity,track_stock`,
-        [companyId, cat.rows[0].id, name, `SKU-${crypto.randomUUID().slice(0, 8)}`, 10, 4, 20, true, stock, 5, tracked]
+        `INSERT INTO products(company_id,category_id,name,sku,price,cost_price,vat_rate,vat_applicable,stock_quantity,low_stock_level,track_stock,active) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,true) RETURNING id,name,stock_quantity,low_stock_level,track_stock`,
+        [companyId, cat.rows[0].id, name, `SKU-${crypto.randomUUID().slice(0, 8)}`, 10, 4, 20, true, stock, low, tracked]
       )
     )
   );
@@ -173,7 +176,7 @@ test("adjustment writes a movement and returns balance", async () => {
     assert.equal(movement.body.success, true);
     assert.equal(movement.body.data.movement.movement_type, "ADJUSTMENT_OUT");
     assert.equal(movement.body.data.balance, 0);
-    assert.equal(movement.body.data.movement.reason, "Damaged");
+    assert.equal(movement.body.data.movement.reason, "Breakage");
 
     const history = await req(port, "GET", "/api/inventory/movements");
     assert.equal(history.body.success, true);

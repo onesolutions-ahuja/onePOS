@@ -154,15 +154,23 @@ export default function OnlineOrdersAdmin() {
   /*
    * Quiet 20s refresh of the summary/card data so the processing view stays
    * current on a till. Skipped while an action or the OTP modal is in flight
-   * so an in-flight platform call is never visually disturbed.
+   * so an in-flight platform call is never visually disturbed. The in-flight
+   * check reads refs, so the interval is created once per mount — pausing
+   * during an action no longer tears down and restarts the poller.
    */
+  const busyRef = useRef(busyActions);
+  const completeTargetRef = useRef(completeTarget);
+  useEffect(() => {
+    busyRef.current = busyActions;
+    completeTargetRef.current = completeTarget;
+  });
   useEffect(() => {
     const timer = setInterval(() => {
-      if (Object.keys(busyActions).length || completeTarget) return;
+      if (Object.keys(busyRef.current).length || completeTargetRef.current) return;
       loadAllOrders().catch((err) => console.error("Online orders refresh:", err));
     }, 20000);
     return () => clearInterval(timer);
-  }, [busyActions, completeTarget, loadAllOrders]);
+  }, [loadAllOrders]);
 
   /*
    * Applies the order returned by an action response to BOTH loaded lists,
@@ -366,15 +374,17 @@ export default function OnlineOrdersAdmin() {
 
   return (
     <div>
-      <div className="flex items-center justify-between mb-5">
+      <div className="onepos-page-header">
         <div>
           <h1 className="onepos-page-title">Online Orders</h1>
-          <p className="text-sm text-slate-500 mt-1">Uber Eats &amp; Deliveroo foundation - platform calls are stubbed until credentials are added.</p>
+          <p className="onepos-page-subtitle">Incoming Uber Eats &amp; Deliveroo orders, all in one queue.</p>
         </div>
-        <button onClick={loadAll} className="h-10 px-4 bg-white border border-slate-200 rounded-lg text-sm flex items-center gap-2 hover:bg-slate-50">
-          <RefreshCw size={16} />
-          Refresh
-        </button>
+        <div className="onepos-page-header-actions">
+          <button onClick={loadAll} className="onepos-btn onepos-btn-secondary">
+            <RefreshCw size={16} />
+            Refresh
+          </button>
+        </div>
       </div>
 
       {error && (
@@ -392,9 +402,9 @@ export default function OnlineOrdersAdmin() {
 
       <OnlineOrderSummary orders={allOrders} selectedStatus={viewMode === "processing" ? platformFilter ? `__${platformFilter}` : "__pending" : statusFilter || "__all"} onSelectStatus={handleSummarySelect} />
       <div className="flex flex-wrap items-center gap-2 mb-3">
-        <button onClick={() => { setViewMode("processing"); setPlatformFilter(""); }} aria-pressed={viewMode === "processing"} className={`px-3 py-2 rounded text-sm inline-flex gap-2 items-center ${viewMode === "processing" ? "bg-blue-600 text-white" : "bg-white border"}`}><LayoutGrid size={16} />Pending orders</button>
-        <button onClick={() => setViewMode("all")} aria-pressed={viewMode === "all"} className={`px-3 py-2 rounded text-sm inline-flex gap-2 items-center ${viewMode === "all" ? "bg-blue-600 text-white" : "bg-white border"}`}><Table2 size={16} />All orders / history</button>
-        <span className="text-xs text-slate-500">Counts cover the latest {allOrders.length} loaded orders (maximum 500); platform counts are pending only.</span>
+        <button onClick={() => { setViewMode("processing"); setPlatformFilter(""); }} aria-pressed={viewMode === "processing"} className={`px-3 py-2 rounded text-sm inline-flex gap-2 items-center ${viewMode === "processing" ? "bg-blue-600 text-white" : "onepos-btn onepos-btn-secondary"}`}><LayoutGrid size={16} />Pending orders</button>
+        <button onClick={() => setViewMode("all")} aria-pressed={viewMode === "all"} className={`px-3 py-2 rounded text-sm inline-flex gap-2 items-center ${viewMode === "all" ? "bg-blue-600 text-white" : "onepos-btn onepos-btn-secondary"}`}><Table2 size={16} />All orders / history</button>
+        <span className="text-xs text-slate-500">Showing the latest {allOrders.length} orders. Counts reflect orders awaiting action.</span>
       </div>
       {viewMode === "processing" ? (
         pendingOrders.length ? <div className="grid gap-3 md:grid-cols-2 2xl:grid-cols-3">
@@ -403,8 +413,8 @@ export default function OnlineOrdersAdmin() {
       ) : (
       <div className="onepos-card overflow-hidden">
         <div className="p-5 border-b border-slate-100 flex items-center justify-between">
-          <h2 className="font-bold">Orders</h2>
-          <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="h-9 px-3 border border-slate-200 rounded-lg bg-white text-sm">
+          <h2 className="onepos-card-title">Orders</h2>
+          <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="onepos-input text-sm" style={{ width: "auto" }}>
             <option value="">All statuses</option>
             {Object.keys(STATUS_BADGES).map((status) => (
               <option key={status} value={status}>{status}</option>
@@ -471,7 +481,7 @@ export default function OnlineOrdersAdmin() {
             <div className="p-5 border-b border-slate-200 flex items-center justify-between">
               <div>
                 <h2 className="font-bold text-lg">{detail.order.platform.toUpperCase()} order {detail.order.external_order_id}</h2>
-                <p className="text-xs text-slate-500 mt-1">Status: {detail.order.status} - {detail.order.fulfilment_type}</p>
+                <p className="text-xs text-slate-500 mt-1">Status: {detail.order.status} · {detail.order.fulfilment_type}</p>
               </div>
               <button onClick={() => setDetail(null)} className="p-2 hover:bg-slate-100 rounded"><X size={20} /></button>
             </div>

@@ -121,10 +121,12 @@ test("POS header right-side controls can never overflow the viewport", () => {
   assert.match(header, /min-h-\[58px\]|h-\[58px\]/);
   /* Left side truncates instead of pushing right controls out. */
   assert.match(header, /min-w-0 truncate/);
-  /* Labels collapse below md so the cluster fits small widths. */
+  /* Labels collapse below md so the cluster fits small widths. The Admin
+     switch is no longer a header button: it lives in the canonical dock as
+     the ONE contextual Admin/Till command (components/AdminNavDock.jsx). */
   assert.match(rightCluster, /hidden md:inline">Manage Till/);
-  assert.match(rightCluster, /hidden md:inline">Online Orders/);
-  assert.match(rightCluster, /hidden sm:inline">Admin/);
+  assert.doesNotMatch(header, /Online Orders/i, "POS header must not present a dedicated shortcut button");
+  assert.doesNotMatch(rightCluster, />Admin</);
 });
 
 test("Categories rail lays out vertically and scrolls only inside itself", () => {

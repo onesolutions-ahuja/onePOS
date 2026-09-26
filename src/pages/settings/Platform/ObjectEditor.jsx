@@ -4,6 +4,7 @@ import { apiRequest } from "../../../services/api.js";
 import FieldEditor from "./FieldEditor.jsx";
 import { toSafeApiName, withGeneratedApiName } from "./safeApiName.js";
 import RecordTypeEditor from "./RecordTypeEditor.jsx";
+import ObjectManagerNav from "./ObjectManagerNav.jsx";
 import { objectTypeDescription, objectTypeLabel } from "../../../utils/platformObjectType.js";
 
 const EMPTY_OBJECT = {
@@ -35,6 +36,9 @@ const INTERNAL_TABS = [
   { key: "record-types", label: "Record Types" },
 ];
 
+/* ONE object-scoped navigation model: object configuration stays in a single
+   workspace, while the existing tool views remain exposed as the canonical
+   entry points for the object-scoped features they already own. */
 const TOOL_TABS = [
   { key: "relationships", label: "Relationships" },
   { key: "layouts", label: "Forms" },
@@ -277,6 +281,11 @@ export default function ObjectEditor({
       return;
     }
 
+    if (tab === "records") {
+      onNavigate?.("records");
+      return;
+    }
+
     if (tab === "relationships") {
       onNavigate?.("relationships");
       return;
@@ -288,7 +297,7 @@ export default function ObjectEditor({
     }
 
     if (tab === "page-layouts") {
-      onNavigate?.("layouts");
+      onNavigate?.("page-layouts");
       return;
     }
 
@@ -297,9 +306,13 @@ export default function ObjectEditor({
       return;
     }
 
-    if (tab === "actions" || tab === "automation") {
-      // Actions and automation are stored in the existing object-scoped
-      // platform_rules model; keep both entry points in the same editor.
+    if (tab === "actions") {
+      // Actions are stored in the existing object-scoped platform_rules model.
+      onNavigate?.("rules");
+      return;
+    }
+
+    if (tab === "automation") {
       onNavigate?.("rules");
     }
   }
@@ -476,49 +489,11 @@ export default function ObjectEditor({
       ) : null}
 
       <div className="pobj-config-layout">
-        <nav className="pobj-tabs" aria-label="Object configuration">
-          <div className="pobj-tabs-group">
-            <span className="pobj-tabs-heading">Configuration</span>
-            {INTERNAL_TABS.map((tab) => (
-              <button
-                key={tab.key}
-                type="button"
-                role="tab"
-                aria-selected={activeTab === tab.key}
-                className={
-                  "onepos-tab"
-                  + (activeTab === tab.key ? " onepos-tab-active" : "")
-                }
-                onClick={() => openTab(tab.key)}
-              >
-                <span>{tab.label}</span>
-                {tab.key === "fields" && !isNew ? (
-                  <span className="pobj-tab-count">{fields.length}</span>
-                ) : null}
-              </button>
-            ))}
-          </div>
-
-          <div className="pobj-tabs-group">
-            <span className="pobj-tabs-heading">Tools</span>
-            {TOOL_TABS.map((tab) => (
-              <button
-                key={tab.key}
-                type="button"
-                className="onepos-tab pobj-tab-tool"
-                onClick={() => openTab(tab.key)}
-                disabled={isNew}
-                title={
-                  isNew
-                    ? "Save the object before opening this tool."
-                    : `Open ${tab.label} for this object`
-                }
-              >
-                {tab.label}
-              </button>
-            ))}
-          </div>
-        </nav>
+        <ObjectManagerNav
+          activeKey={activeTab}
+          onSelect={openTab}
+          disabled={isNew}
+        />
 
         <main className="pobj-config-content">
 

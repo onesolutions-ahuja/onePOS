@@ -2,6 +2,7 @@ import { useCallback, useEffect, useId, useRef } from "react";
 import { X } from "lucide-react";
 import { cx } from "./ui.jsx";
 import { DISCARD_MESSAGE, resolveCloseIntent } from "../utils/recordModal.js";
+import { isUuid } from "../utils/recordDisplay.js";
 
 /*
  * onePOS shared Record Modal foundation.
@@ -128,6 +129,7 @@ export default function RecordModal({
   if (!open) return null;
 
   const save = saveLabel || DEFAULT_SAVE_LABEL[mode] || "Save";
+  const displayTitle = typeof title === "string" && isUuid(title) ? "Record" : title;
 
   return (
     <div
@@ -148,7 +150,7 @@ export default function RecordModal({
         <div className="onepos-modal-header">
           <div className="min-w-0">
             <h2 id={titleId} className="onepos-modal-title">
-              {title}
+              {displayTitle}
             </h2>
             {subtitle ? <p className="onepos-modal-subtitle">{subtitle}</p> : null}
           </div>

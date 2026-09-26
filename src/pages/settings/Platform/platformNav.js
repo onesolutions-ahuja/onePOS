@@ -20,14 +20,12 @@ export const PLATFORM_GROUPS = [
     ],
   },
   {
-    /* The platform-wide metadata lists. Grouped and labelled so they read as
-       cross-object lists rather than as duplicates of an object's tabs. */
+    /* The platform-wide metadata lists remain available, but they are kept in
+       the object-scoped editor experience rather than in the general platform
+       sidebar. The global rail is intentionally limited to the non-duplicated
+       surfaces the admin uses day-to-day. */
     label: "Across all objects",
-    items: [
-      { key: "all-relationships", label: "Relationships", view: "relationships" },
-      { key: "all-forms", label: "Forms", view: "layouts" },
-      { key: "all-rules", label: "Validation Rules", view: "rules" },
-    ],
+    items: [],
   },
   {
     label: "Automation",

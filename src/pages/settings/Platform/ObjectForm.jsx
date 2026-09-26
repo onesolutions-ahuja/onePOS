@@ -1,5 +1,7 @@
 ﻿import React, { useEffect, useMemo, useState } from "react";
 import { evaluateFieldCondition } from "../../../utils/platformConditions.js";
+import { isUuid, parseBooleanValue } from "../../../utils/recordDisplay.js";
+import BooleanField from "../../../components/records/BooleanField.jsx";
 
 function getFieldKey(field) {
   return (
@@ -79,7 +81,7 @@ function normalizeInitialValue(value, field) {
   const type = getFieldType(field);
 
   if (type === "boolean") {
-    return Boolean(value);
+    return parseBooleanValue(value);
   }
 
   if (
@@ -171,6 +173,7 @@ export default function ObjectForm({
   contextValues = null,
   formId,
   showActions = true,
+  sections = null,
 }) {
   const Container = embedded ? "div" : "form";
   const activeFields = useMemo(
@@ -218,6 +221,14 @@ export default function ObjectForm({
         }
       }),
     [activeFields, values, conditionFields, contextValues]
+  );
+  const visibleFieldKeys = useMemo(() => new Set(visibleFields.map(getFieldKey)), [visibleFields]);
+  const visibleSections = useMemo(
+    () => (Array.isArray(sections) ? sections.map((section) => ({
+      ...section,
+      fields: (section.fields || []).filter((field) => visibleFieldKeys.has(getFieldKey(field))),
+    })).filter((section) => section.fields.length) : []),
+    [sections, visibleFieldKeys]
   );
 
   function updateValue(field, value) {
@@ -352,25 +363,22 @@ export default function ObjectForm({
         control = <output id={`platform-field-${key}`} aria-label={`${label} (calculated)`}>{value === "" ? "Calculated on save" : String(value)}</output>;
         break;
       case "boolean":
+        /* THE global boolean renderer — the same shared toggle everywhere,
+           never a page-specific checkbox or Yes/No dropdown. */
         control = (
-          <label className="platform-form-checkbox">
-            <input
-              {...commonProps}
-              type="checkbox"
-              checked={Boolean(value)}
-              onChange={(event) =>
-                updateValue(
-                  field,
-                  event.target.checked
-                )
-              }
+          <div className="platform-form-toggle">
+            <BooleanField
+              value={parseBooleanValue(value)}
+              onChange={(next) => updateValue(field, next)}
+              mode="edit"
+              disabled={readOnly || field.writable === false || loading || submitting}
+              label={field?.checkboxLabel || label}
             />
-
-            <span>
-              {field?.checkboxLabel ||
-                `Enable ${label}`}
+            <span className="platform-form-toggle-label">
+              {field?.checkboxLabel || `Enable ${label}`}
+              {field?.required || field?.config?.requiredCondition ? <span className="platform-form-required"> *</span> : null}
             </span>
-          </label>
+          </div>
         );
 
         break;
@@ -437,11 +445,12 @@ export default function ObjectForm({
             value={
               typeof value === "object" &&
               value !== null
-                ? value?.id ??
-                  value?.value ??
+                ? value?.label ??
                   value?.name ??
+                  value?.display_name ??
+                  value?.value ??
                   ""
-                : value
+                : isUuid(String(value ?? "")) ? "" : value
             }
             placeholder={
               field?.placeholder ||
@@ -509,6 +518,10 @@ export default function ObjectForm({
         className={`platform-form-field${
           fieldError
             ? " has-error"
+            : ""
+        }${
+          field.__spanAll || field?.layoutWidth === "full"
+            ? " onepos-form-span"
             : ""
         }`}
         key={
@@ -588,11 +601,19 @@ export default function ObjectForm({
             form.
           </span>
         </div>
-      ) : (
-        <div className="platform-form-grid">
-          {visibleFields.map(renderField)}
-        </div>
-      )}
+      ) : visibleSections.length ? visibleSections.map((section) => (
+          <section className="platform-form-section" key={section.id}>
+            {section.label ? <h3 className="platform-form-section-title">{section.label}</h3> : null}
+            {section.description ? <p className="platform-form-section-description">{section.description}</p> : null}
+            <div className="platform-form-grid" style={{ "--platform-form-columns": Math.min(3, Math.max(1, Number(section.columns) || 1)) }}>
+              {section.fields.map(renderField)}
+            </div>
+          </section>
+        )) : (
+          <div className="platform-form-grid">
+            {visibleFields.map(renderField)}
+          </div>
+        )}
 
       {!embedded && !readOnly && visibleFields.length > 0 ? (
         <div className="platform-form-actions">
@@ -654,14 +675,30 @@ export default function ObjectForm({
           font-size: 11px;
         }
 
+        /* The 3/2/1 responsive field grid lives in the SHARED stylesheet
+           (index.css → .platform-form-grid), so every metadata form renders
+           with the same desktop-3 / tablet-2 / mobile-1 rhythm and wide
+           fields span via .onepos-form-span. */
         .platform-form-grid {
           display: grid;
-          grid-template-columns:
-            repeat(
-              auto-fit,
-              minmax(220px, 1fr)
-            );
-          gap: 15px;
+          grid-template-columns: repeat(var(--platform-form-columns, 3), minmax(0, 1fr));
+          gap: 16px 18px;
+        }
+
+        .platform-form-section + .platform-form-section { margin-top: 22px; }
+        .platform-form-section-title {
+          margin: 0 0 12px;
+          padding-bottom: 7px;
+          border-bottom: 1px solid var(--border-color, #e5e7eb);
+          color: var(--text-primary, #1f2937);
+          font-size: 13px;
+          font-weight: 700;
+        }
+        .platform-form-section-description {
+          margin: -6px 0 12px;
+          color: var(--text-secondary, #6b7280);
+          font-size: 11px;
+          line-height: 1.45;
         }
 
         .platform-form-field {
@@ -724,25 +761,14 @@ export default function ObjectForm({
           opacity: 0.65;
         }
 
-        .platform-form-checkbox {
-          display: flex !important;
+        .platform-form-toggle {
+          display: flex;
           align-items: center;
-          gap: 8px;
+          gap: 10px;
           min-height: 38px;
-          margin: 0 !important;
-          padding: 8px 10px;
-          border: 1px solid var(--border-color, #d1d5db);
-          border-radius: 7px;
-          background: var(--card-background, #fff);
-          cursor: pointer;
         }
 
-        .platform-form-checkbox input {
-          width: auto;
-          margin: 0;
-        }
-
-        .platform-form-checkbox span {
+        .platform-form-toggle-label {
           color: var(--text-primary, #374151);
           font-size: 11px;
         }
@@ -792,6 +818,7 @@ export default function ObjectForm({
         .platform-form-actions button {
           border-radius: 7px;
           padding: 8px 13px;
+          min-height: 36px;
           font-family: inherit;
           font-size: 10px;
           font-weight: 700;
@@ -815,17 +842,18 @@ export default function ObjectForm({
           opacity: 0.55;
         }
 
+        @media (max-width: 760px) {
+          .platform-form-grid {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+          }
+        }
+
         @media (max-width: 650px) {
           .platform-form-grid {
             grid-template-columns: 1fr;
           }
-
           .platform-form-actions {
-            flex-direction: column-reverse;
-          }
-
-          .platform-form-actions button {
-            width: 100%;
+            flex-wrap: wrap;
           }
         }
       `}</style>
