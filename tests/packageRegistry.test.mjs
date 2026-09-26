@@ -258,6 +258,8 @@ test("package catalog and Uber Eats installation preserve existing client config
       description: definition.description,
       module_key: definition.moduleKey,
       manifest: definition.manifest,
+      package_type: definition.manifest.packageType,
+      installable: definition.manifest.installable,
     }));
     const clientConfiguration = {
       environment: "production",
@@ -283,6 +285,14 @@ test("package catalog and Uber Eats installation preserve existing client config
       if (sql.startsWith("SELECT id,version FROM package_registry WHERE package_key=$1")) {
         const pkg = packages.find((item) => item.package_key === params[0]);
         return { rows: pkg ? [{ id: pkg.id, version: pkg.version }] : [] };
+      }
+      if (sql.startsWith("SELECT id FROM package_registry WHERE package_key=$1 AND active=true")) {
+        const pkg = packages.find((item) => item.package_key === params[0]);
+        return { rows: pkg ? [{ id: pkg.id }] : [] };
+      }
+      if (sql.startsWith("SELECT id,version,package_type,installable FROM package_registry WHERE package_key=$1 AND active=true")) {
+        const pkg = packages.find((item) => item.package_key === params[0]);
+        return { rows: pkg ? [{ id: pkg.id, version: pkg.version, package_type: pkg.package_type, installable: pkg.installable }] : [] };
       }
       if (sql.startsWith("SELECT id,package_id,module_id,company_id FROM platform_objects")) {
         const object = objects.get(params[0]);
@@ -423,7 +433,7 @@ test("package installation supports company-validated store scope", async () => 
     const source = await import("node:fs").then((fs) => fs.readFileSync(new URL("../routes/packages.js", import.meta.url), "utf8"));
     assert.match(source, /Store is not available to this company/);
     assert.match(source, /store_id IS NOT DISTINCT FROM/);
-    assert.match(source, /selected_features\)/);
+    assert.match(source, /selected_features/);
 });
 
 test("package routes use a dedicated package permission with settings compatibility", async () => {

@@ -83,6 +83,7 @@ export function packageDefinition(entry) {
     online_orders: "OneOnline",
     integrations: "OneIntegrations",
     uber_eats: "Uber Eats",
+    supplier_core: "Supplier Core",
   };
   const packageDescriptions = {
     retail_pos: "Sales, payments, returns and order processing.",
@@ -92,7 +93,7 @@ export function packageDefinition(entry) {
     hospitality: "Floor plans, tables and reservations.",
     kds: "Kitchen display tickets and preparation status.",
     customer_credit: "Customer credit accounts, payments and protected credit controls.",
-    suppliers: "Suppliers and purchasing operations.",
+    suppliers: "Supplier purchasing operations.",
     customers: "Customer records and customer activity.",
     staff: "Employees, users, roles and store access.",
     reports: "Operational and custom report administration.",
@@ -100,6 +101,7 @@ export function packageDefinition(entry) {
     online_orders: "Online order intake and preparation.",
     integrations: "External delivery, payment and communication integrations.",
     uber_eats: "Uber Eats connection and online order integration.",
+    supplier_core: "Canonical supplier identity and supplier-product sourcing metadata.",
   };
   const entitlementKeys = {
     retail_pos: "pos", products: "pos", inventory: "inventory", batch_expiry: "batch_expiry",
@@ -114,6 +116,7 @@ export function packageDefinition(entry) {
     hospitality: ["retail_pos", "customers"],
     kds: ["hospitality", "retail_pos"],
     customer_credit: ["customers", "retail_pos"],
+    suppliers: ["supplier_core"],
     reports: [],
     platform: [],
     uber_eats: ["integrations", "online_orders"],
@@ -150,6 +153,72 @@ export function packageDefinition(entry) {
       dependencies: Array.isArray(entry.dependencies) ? entry.dependencies : (dependencies[entry.key] || []),
       optionalFeatures: Array.isArray(entry.optionalFeatures) ? entry.optionalFeatures : [],
       capabilities: Array.isArray(entry.capabilities) ? entry.capabilities : [entry.key],
+      ...(entry.key === "supplier_core" ? {
+        objects: [
+          {
+            objectKey: "supplier",
+            label: "Supplier",
+            pluralLabel: "Suppliers",
+            description: "Canonical supplier identity and contact details.",
+            sourceTable: "suppliers",
+            metadataScope: "global",
+            fields: [
+              { apiName: "company_id", label: "Company", fieldType: "lookup", sourceColumn: "company_id", required: true, writable: false },
+              { apiName: "name", label: "Name", fieldType: "text", sourceColumn: "name", required: true, writable: true },
+              { apiName: "contact_name", label: "Contact Name", fieldType: "text", sourceColumn: "contact_name", writable: true },
+              { apiName: "phone", label: "Phone", fieldType: "phone", sourceColumn: "phone", writable: true },
+              { apiName: "email", label: "Email", fieldType: "email", sourceColumn: "email", writable: true },
+              { apiName: "address", label: "Address", fieldType: "text", sourceColumn: "address", writable: true },
+              { apiName: "notes", label: "Notes", fieldType: "text", sourceColumn: "notes", writable: true },
+              { apiName: "active", label: "Active", fieldType: "boolean", sourceColumn: "active", writable: true },
+              { apiName: "created_at", label: "Created", fieldType: "datetime", sourceColumn: "created_at", writable: false },
+              { apiName: "updated_at", label: "Updated", fieldType: "datetime", sourceColumn: "updated_at", writable: false },
+            ],
+          },
+          {
+            objectKey: "supplier_product",
+            label: "Supplier Product",
+            pluralLabel: "Supplier Products",
+            description: "Supplier-specific product references, costs and effective dates.",
+            sourceTable: "supplier_products",
+            metadataScope: "global",
+            fields: [
+              { apiName: "company_id", label: "Company", fieldType: "lookup", sourceColumn: "company_id", required: true, writable: false },
+              { apiName: "supplier_id", label: "Supplier", fieldType: "lookup", sourceColumn: "supplier_id", required: true, writable: true, config: { relationshipKey: "supplier", relatedObjectKey: "supplier" } },
+              { apiName: "product_id", label: "Product", fieldType: "lookup", sourceColumn: "product_id", required: true, writable: true, config: { relationshipKey: "product", relatedObjectKey: "product" } },
+              { apiName: "supplier_sku", label: "Supplier SKU", fieldType: "text", sourceColumn: "supplier_sku", writable: true },
+              { apiName: "supplier_description", label: "Supplier Description", fieldType: "text", sourceColumn: "supplier_description", writable: true },
+              { apiName: "cost_price", label: "Supplier Cost", fieldType: "currency", sourceColumn: "cost_price", required: true, writable: true },
+              { apiName: "effective_from", label: "Effective From", fieldType: "date", sourceColumn: "effective_from", required: true, writable: true },
+              { apiName: "effective_to", label: "Effective To", fieldType: "date", sourceColumn: "effective_to", writable: true },
+              { apiName: "preferred", label: "Preferred Supplier", fieldType: "boolean", sourceColumn: "preferred", writable: true },
+              { apiName: "active", label: "Active", fieldType: "boolean", sourceColumn: "active", writable: true },
+              { apiName: "created_at", label: "Created", fieldType: "datetime", sourceColumn: "created_at", writable: false },
+              { apiName: "updated_at", label: "Updated", fieldType: "datetime", sourceColumn: "updated_at", writable: false },
+            ],
+          },
+        ],
+        relationships: [
+          { parentObjectKey: "supplier", childObjectKey: "supplier_product", relationshipKey: "products", relationshipType: "one_to_many", childFieldApiName: "supplier_id" },
+          { parentObjectKey: "product", childObjectKey: "supplier_product", relationshipKey: "supplier_products", relationshipType: "one_to_many", childFieldApiName: "product_id" },
+          { parentObjectKey: "supplier_product", childObjectKey: "supplier", relationshipKey: "supplier", relationshipType: "lookup", parentFieldApiName: "supplier_id" },
+          { parentObjectKey: "supplier_product", childObjectKey: "product", relationshipKey: "product", relationshipType: "lookup", parentFieldApiName: "product_id" },
+        ],
+        listViews: [
+          { objectKey: "supplier", viewKey: "all", label: "All Suppliers", columns: ["name", "contact_name", "phone", "email", "active", "updated_at"], isDefault: true },
+          { objectKey: "supplier_product", viewKey: "sourcing", label: "Supplier Product Sourcing", columns: ["supplier_id", "product_id", "supplier_sku", "cost_price", "effective_from", "effective_to", "preferred", "active"], isDefault: true },
+        ],
+        permissionDeclarations: [
+          { permission: "inventory.view", label: "View supplier master data" },
+          { permission: "inventory.adjust", label: "Manage supplier master data" },
+          { permission: "purchase.view", label: "View supplier references used in purchasing" },
+        ],
+        lifecycle: {
+          preservesExistingRecords: true,
+          preservesCustomFields: true,
+          disableBehavior: "deactivate-package-access-only",
+        },
+      } : {}),
       ...(entry.key === "batch_expiry" ? {
         objects: [
           {
@@ -626,15 +695,15 @@ export async function provisionPackageMetadata(db, { packageId, moduleId, compan
           throw new Error(`Platform field belongs to another company: ${objectKey}.${apiName}`);
         }
         await db(
-          "UPDATE platform_fields SET label=CASE WHEN user_modified THEN label ELSE $1 END,field_type=CASE WHEN user_modified THEN field_type ELSE $2 END,required=$3,readable=CASE WHEN user_modified THEN readable ELSE $4 END,writable=CASE WHEN user_modified THEN writable ELSE $5 END,options=CASE WHEN user_modified THEN options ELSE $6::jsonb END,config=CASE WHEN user_modified THEN config ELSE $7::jsonb END,source_package_id=$9,source_package_version=$10,managed=true,package_required=$11,active=true WHERE id=$8",
-          [field.label.trim(), field.fieldType || field.field_type || "text", field.required === true, field.readable !== false, field.writable === true, JSON.stringify(field.options || []), JSON.stringify({ ...(field.config || {}), packageContract: field.required === true ? "required" : "default", packageOwned: true, packageId }), existingField.rows[0].id, packageId, packageVersion, field.required === true]
+          "UPDATE platform_fields SET label=CASE WHEN user_modified THEN label ELSE $1 END,field_type=CASE WHEN user_modified THEN field_type ELSE $2 END,required=$3,readable=CASE WHEN user_modified THEN readable ELSE $4 END,writable=CASE WHEN user_modified THEN writable ELSE $5 END,options=CASE WHEN user_modified THEN options ELSE $6::jsonb END,config=CASE WHEN user_modified THEN config ELSE $7::jsonb END,source_package_id=$9,source_package_version=$10,managed=true,package_required=$11,source_column=CASE WHEN user_modified THEN source_column ELSE $12 END,active=true WHERE id=$8",
+          [field.label.trim(), field.fieldType || field.field_type || "text", field.required === true, field.readable !== false, field.writable === true, JSON.stringify(field.options || []), JSON.stringify({ ...(field.config || {}), packageContract: field.required === true ? "required" : "default", packageOwned: true, packageId }), existingField.rows[0].id, packageId, packageVersion, field.required === true, field.sourceColumn || field.source_column || apiName]
         );
       } else {
         await db(
           `INSERT INTO platform_fields
-           (object_id,api_name,label,field_type,required,readable,writable,options,config,company_id,source_package_id,source_package_version,managed,package_required)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9::jsonb,$10,$11,$12,true,$13)`,
-          [object.id, apiName, field.label.trim(), field.fieldType || field.field_type || "text", field.required === true, field.readable !== false, field.writable === true, JSON.stringify(field.options || []), JSON.stringify({ ...(field.config || {}), packageContract: field.required === true ? "required" : "default", packageOwned: true, packageId }), companyId || null, packageId, packageVersion, field.required === true]
+           (object_id,api_name,label,field_type,required,readable,writable,options,config,company_id,source_package_id,source_package_version,managed,package_required,source_column)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9::jsonb,$10,$11,$12,true,$13,$14)`,
+          [object.id, apiName, field.label.trim(), field.fieldType || field.field_type || "text", field.required === true, field.readable !== false, field.writable === true, JSON.stringify(field.options || []), JSON.stringify({ ...(field.config || {}), packageContract: field.required === true ? "required" : "default", packageOwned: true, packageId }), companyId || null, packageId, packageVersion, field.required === true, field.sourceColumn || field.source_column || apiName]
         );
       }
     }
@@ -666,6 +735,14 @@ export async function provisionPackageMetadata(db, { packageId, moduleId, compan
       );
       childFieldId = fieldResult.rows[0]?.id || null;
       if (!childFieldId) throw new Error(`Package relationship field not found: ${childFieldKey}`);
+    }
+    const parentFieldKey = relationship.parentFieldApiName || relationship.parent_field_api_name;
+    if (parentFieldKey) {
+      const fieldResult = await db(
+        "SELECT id FROM platform_fields WHERE object_id=$1 AND api_name=$2 AND (company_id IS NULL OR company_id=$3) LIMIT 1",
+        [parentObjectId, parentFieldKey, companyId]
+      );
+      if (!fieldResult.rows.length) throw new Error(`Package relationship field not found: ${parentFieldKey}`);
     }
     await db(
       `INSERT INTO platform_relationships

@@ -596,11 +596,33 @@ const retailObjects = [
     ],
   },
   {
-    key: "supplier", label: "Supplier", plural: "Suppliers", table: "suppliers",
+    key: "supplier", label: "Supplier", plural: "Suppliers", table: "suppliers", moduleKey: "supplier_core",
     fields: [
+      ["company_id", "Company", "lookup", "company_id", true],
       ["name", "Name", "text", "name", true], ["contact_name", "Contact Name", "text", "contact_name", false],
       ["email", "Email", "email", "email", false], ["phone", "Phone", "phone", "phone", false],
       ["address", "Address", "text", "address", false], ["notes", "Notes", "text", "notes", false],
+      ["active", "Active", "boolean", "active", false],
+      ["created_at", "Created", "datetime", "created_at", false],
+      ["updated_at", "Updated", "datetime", "updated_at", false],
+    ],
+  },
+  {
+    key: "supplier_product", label: "Supplier Product", plural: "Supplier Products",
+    table: "supplier_products", moduleKey: "supplier_core",
+    fields: [
+      ["company_id", "Company", "lookup", "company_id", true],
+      ["supplier_id", "Supplier", "lookup", "supplier_id", true],
+      ["product_id", "Product", "lookup", "product_id", true],
+      ["supplier_sku", "Supplier SKU", "text", "supplier_sku", false],
+      ["supplier_description", "Supplier Description", "text", "supplier_description", false],
+      ["cost_price", "Supplier Cost", "currency", "cost_price", true],
+      ["effective_from", "Effective From", "date", "effective_from", true],
+      ["effective_to", "Effective To", "date", "effective_to", false],
+      ["preferred", "Preferred Supplier", "boolean", "preferred", false],
+      ["active", "Active", "boolean", "active", false],
+      ["created_at", "Created", "datetime", "created_at", false],
+      ["updated_at", "Updated", "datetime", "updated_at", false],
     ],
   },
   {
@@ -741,6 +763,20 @@ export async function initializePlatformMetadata(pool, { includeOperationalObjec
   await pool.query(platformSchema);
   await seedInternalAppCatalog(pool);
   await seedPackageRegistry(pool);
+  await pool.query(
+    `UPDATE platform_objects AS supplier
+        SET module_id=core_module.id, package_id=core_package.id
+       FROM platform_modules AS core_module
+       JOIN package_registry AS core_package ON core_package.package_key='supplier_core'
+       JOIN platform_modules AS retail_module ON retail_module.module_key='retail_pos'
+       LEFT JOIN package_registry AS retail_package ON retail_package.package_key='retail_pos'
+      WHERE supplier.object_key='supplier'
+        AND supplier.company_id IS NULL
+        AND supplier.source_table='suppliers'
+        AND supplier.module_id=retail_module.id
+        AND (supplier.package_id IS NULL OR supplier.package_id=retail_package.id)
+        AND core_module.module_key='supplier_core'`
+  );
   const moduleResult = await pool.query(
     `INSERT INTO platform_modules (module_key, name, version, description, installed)
      VALUES ('retail_pos', 'Retail POS', '1.0.0', 'Core onePOS retail application', TRUE)
@@ -781,7 +817,10 @@ export async function initializePlatformMetadata(pool, { includeOperationalObjec
   const STANDARD_RELATIONSHIPS = [
     ["product", "category", "category", "lookup", "category_id"],
     ["customer", "price_list", "price_list", "lookup", "price_list_id"],
-    ["supplier", "product", "products", "many_to_many", null],
+    ["supplier", "supplier_product", "products", "one_to_many", "supplier_id"],
+    ["product", "supplier_product", "supplier_products", "one_to_many", "product_id"],
+    ["supplier_product", "supplier", "supplier", "lookup", null],
+    ["supplier_product", "product", "product", "lookup", null],
     ["product", "inventory_batch", "batches", "one_to_many", "product_id"],
     ["store", "inventory_batch", "batches", "one_to_many", "store_id"],
     ["sale", "sale_line", "lines", "one_to_many", "sale_id"],

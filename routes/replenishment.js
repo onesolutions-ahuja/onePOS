@@ -57,6 +57,8 @@ export default function createReplenishmentRouter({ authenticate, authorize, db 
                AND sp.product_id = p.id
                AND sp.active = true
                AND s.active = true
+               AND sp.effective_from <= CURRENT_DATE
+               AND (sp.effective_to IS NULL OR sp.effective_to >= CURRENT_DATE)
              ORDER BY sp.preferred DESC, sp.effective_from DESC, sp.cost_price ASC
              LIMIT 1
           ) preferred_supplier ON true
