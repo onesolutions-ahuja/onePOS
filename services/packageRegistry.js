@@ -69,7 +69,7 @@ export const packageRegistrySchema = `
 export function packageDefinition(entry) {
   const packageNames = {
     retail_pos: "OneSales",
-    products: "OneProduct",
+    products: "Product Core",
     inventory: "OneInventory",
     batch_expiry: "OneBatchExpiry",
     hospitality: "OneHospitality",
@@ -86,7 +86,7 @@ export function packageDefinition(entry) {
   };
   const packageDescriptions = {
     retail_pos: "Sales, payments, returns and order processing.",
-    products: "The canonical product catalogue and product references.",
+    products: "Technical foundation for the canonical Product and Category objects.",
     inventory: "Stock, replenishment and inventory movements.",
     batch_expiry: "Batch stock, expiry tracking and FEFO inventory controls.",
     hospitality: "Floor plans, tables and reservations.",
@@ -150,6 +150,183 @@ export function packageDefinition(entry) {
       dependencies: Array.isArray(entry.dependencies) ? entry.dependencies : (dependencies[entry.key] || []),
       optionalFeatures: Array.isArray(entry.optionalFeatures) ? entry.optionalFeatures : [],
       capabilities: Array.isArray(entry.capabilities) ? entry.capabilities : [entry.key],
+      ...(entry.key === "products" ? {
+        packageKey: "products",
+        packageType: "FOUNDATION",
+        name: "Product Core",
+        version: entry.version || "1.0.0",
+        description: "Technical foundation for the canonical Product and Category objects.",
+        dependencies: [],
+        billable: false,
+        licenceRequired: false,
+        visibility: "HIDDEN",
+        installable: true,
+        systemOnly: true,
+        technical: true,
+        upgrade: {
+          strategy: "idempotent_metadata_upsert",
+          adoptsExistingData: true,
+          preservesRecordIds: true,
+          migrations: ["product_core.adopt_canonical_metadata.v1"],
+        },
+        ownedObjects: ["product", "category"],
+        ownedFields: {
+          product: [
+            "name", "sku", "barcode", "description", "category_id", "active",
+            "product_kind", "parent_product_id", "variant_attributes", "image_url",
+          ],
+          category: ["name", "display_order", "active"],
+        },
+        objects: [
+          {
+            objectKey: "product",
+            adoptFromPackageKeys: ["retail_pos"],
+            metadataScope: "global",
+            label: "Product",
+            pluralLabel: "Products",
+            description: "Canonical tenant-scoped product records.",
+            sourceTable: "products",
+            fields: [
+              { apiName: "name", label: "Name", fieldType: "text", sourceColumn: "name", required: true, writable: true, displayOrder: 1 },
+              { apiName: "sku", label: "SKU", fieldType: "text", sourceColumn: "sku", writable: true, displayOrder: 2 },
+              { apiName: "barcode", label: "Barcode / EAN", fieldType: "text", sourceColumn: "barcode", writable: true, displayOrder: 3 },
+              { apiName: "description", label: "Description", fieldType: "text", sourceColumn: "description", writable: true, displayOrder: 4 },
+              { apiName: "category_id", label: "Category", fieldType: "lookup", sourceColumn: "category_id", writable: true, config: { relatedObjectKey: "category" }, displayOrder: 5 },
+              { apiName: "active", label: "Active", fieldType: "boolean", sourceColumn: "active", writable: true, displayOrder: 6 },
+              { apiName: "product_kind", label: "Product Kind", fieldType: "picklist", sourceColumn: "product_kind", writable: true, options: ["standard", "variant", "bundle"], displayOrder: 7 },
+              { apiName: "parent_product_id", label: "Parent Product", fieldType: "lookup", sourceColumn: "parent_product_id", writable: true, config: { relatedObjectKey: "product", relationshipKey: "variants", preventSelfReference: true }, displayOrder: 8 },
+              { apiName: "variant_attributes", label: "Variant Attributes", fieldType: "json", sourceColumn: "variant_attributes", writable: true, displayOrder: 9 },
+              { apiName: "image_url", label: "Image", fieldType: "text", sourceColumn: "image_url", writable: true, displayOrder: 10 },
+              { apiName: "created_at", label: "Created", fieldType: "datetime", sourceColumn: "created_at", writable: false, displayOrder: 11 },
+              { apiName: "updated_at", label: "Updated", fieldType: "datetime", sourceColumn: "updated_at", writable: false, displayOrder: 12 },
+            ],
+          },
+          {
+            objectKey: "category",
+            metadataScope: "global",
+            label: "Category",
+            pluralLabel: "Categories",
+            description: "Canonical product categories.",
+            sourceTable: "categories",
+            fields: [
+              { apiName: "name", label: "Name", fieldType: "text", sourceColumn: "name", required: true, writable: true, displayOrder: 1 },
+              { apiName: "display_order", label: "Display Order", fieldType: "number", sourceColumn: "display_order", writable: true, displayOrder: 2 },
+              { apiName: "active", label: "Active", fieldType: "boolean", sourceColumn: "active", writable: true, displayOrder: 3 },
+            ],
+          },
+        ],
+        relationships: [
+          { parentObjectKey: "category", childObjectKey: "product", relationshipKey: "products", relationshipType: "one_to_many", childFieldApiName: "category_id", required: true },
+          { parentObjectKey: "product", childObjectKey: "product", relationshipKey: "variants", relationshipType: "one_to_many", childFieldApiName: "parent_product_id", required: true },
+        ],
+        listViews: [
+          { objectKey: "product", viewKey: "all_products", label: "All Products", columns: ["name", "sku", "barcode", "category_id", "active"], sort: { field: "name", direction: "asc" }, pageSize: 50, isDefault: true },
+          { objectKey: "category", viewKey: "all_categories", label: "All Categories", columns: ["name", "display_order", "active"], sort: { field: "display_order", direction: "asc" }, pageSize: 50, isDefault: true },
+        ],
+        layouts: [
+          {
+            objectKey: "product",
+            layoutKey: "standard_detail",
+            pageType: "detail",
+            metadataScope: "global",
+            name: "Product Record Page",
+            isDefault: true,
+            definition: {
+              presentation_mode: "inline",
+              sections: [
+                { id: "product_identity", label: "Product Identity", columns: 2, order: 1 },
+                { id: "product_category", label: "Category", columns: 1, order: 2 },
+                { id: "product_variants", label: "Variants", columns: 1, order: 3 },
+              ],
+              components: [
+                { id: "product_name", type: "field", field_key: "name", section_id: "product_identity", width: "full", order: 1 },
+                { id: "product_sku", type: "field", field_key: "sku", section_id: "product_identity", order: 2 },
+                { id: "product_barcode", type: "field", field_key: "barcode", section_id: "product_identity", order: 3 },
+                { id: "product_kind", type: "field", field_key: "product_kind", section_id: "product_identity", order: 4 },
+                { id: "product_status", type: "field", field_key: "active", section_id: "product_identity", order: 5 },
+                { id: "product_category_id", type: "field", field_key: "category_id", section_id: "product_category", order: 1 },
+                { id: "product_parent_id", type: "field", field_key: "parent_product_id", section_id: "product_variants", order: 1 },
+                { id: "product_variant_attributes", type: "field", field_key: "variant_attributes", section_id: "product_variants", order: 2 },
+                { id: "product_image", type: "field", field_key: "image_url", section_id: "product_identity", order: 6 },
+                { id: "product_variants", type: "related_list", relationship_key: "variants", label: "Variants", columns: ["name", "sku", "barcode", "product_kind", "active"], section_id: "product_variants", order: 3 },
+              ],
+            },
+          },
+        ],
+        recordForms: [
+          {
+            objectKey: "product",
+            formKey: "product_create",
+            layoutKey: "standard_create",
+            pageType: "create",
+            metadataScope: "global",
+            name: "Create Product",
+            definition: { presentation_mode: "inline", sections: [{ id: "product_form", label: "Product Details", columns: 2, order: 1 }], components: [] },
+          },
+          {
+            objectKey: "product",
+            formKey: "product_edit",
+            layoutKey: "standard_edit",
+            pageType: "edit",
+            metadataScope: "global",
+            name: "Edit Product",
+            definition: { presentation_mode: "inline", sections: [{ id: "product_form", label: "Product Details", columns: 2, order: 1 }], components: [] },
+          },
+        ],
+        permissionDeclarations: [
+          { key: "product_read", permission: "product.view", access: "read" },
+          { key: "product_create", permission: "product.create", access: "create" },
+          { key: "product_manage", permission: "product.edit", access: "update" },
+          { key: "category_read", permission: "category.view", access: "read" },
+          { key: "category_create", permission: "category.create", access: "create" },
+          { key: "category_manage", permission: "category.edit", access: "update" },
+          { key: "category_deactivate", permission: "category.delete", access: "delete" },
+          { key: "product_deactivate", permission: "product.delete", access: "delete" },
+        ],
+        actions: [
+          { actionKey: "product.create", objectKey: "product", label: "Create Product", handlerKey: "RECORD_SAVE", requiredPermission: "product.create" },
+          { actionKey: "product.update", objectKey: "product", label: "Update Product", handlerKey: "RECORD_SAVE", requiredPermission: "product.edit" },
+          { actionKey: "product.activate", objectKey: "product", label: "Activate Product", handlerKey: "RECORD_SAVE", requiredPermission: "product.edit" },
+          { actionKey: "product.deactivate", objectKey: "product", label: "Deactivate Product", handlerKey: "RECORD_SAVE", requiredPermission: "product.edit" },
+          { actionKey: "product.add_variant", objectKey: "product", label: "Add Variant", handlerKey: "RECORD_SAVE", requiredPermission: "product.create" },
+        ],
+        rules: [
+          {
+            objectKey: "product",
+            name: "Product name is required",
+            triggerKey: "before_save",
+            conditions: [{ field: "name", operator: "is_empty" }],
+            action: { type: "validation", message: "Product name is required" },
+          },
+          {
+            objectKey: "product",
+            name: "Variant requires a parent product",
+            triggerKey: "before_save",
+            conditions: [
+              { field: "product_kind", operator: "equals", value: "variant" },
+              { field: "parent_product_id", operator: "is_empty" },
+            ],
+            action: { type: "validation", message: "A variant must have a parent product" },
+          },
+          {
+            objectKey: "product",
+            name: "Only variants can have a parent product",
+            triggerKey: "before_save",
+            conditions: [
+              { field: "product_kind", operator: "not_equals", value: "variant" },
+              { field: "parent_product_id", operator: "is_not_empty" },
+            ],
+            action: { type: "validation", message: "Only a variant can have a parent product" },
+          },
+        ],
+        validationRules: [
+          { key: "product_name_required", rule: "Product name is required" },
+          { key: "variant_parent_required", rule: "Variant requires a parent product" },
+          { key: "parent_only_for_variant", rule: "Only variants can have a parent product" },
+          { duplicateIdentity: "Enforced by the existing Product API and active-company unique indexes for SKU and barcode." },
+        ],
+        migrations: ["product_core.adopt_canonical_metadata.v1"],
+      } : {}),
       ...(entry.key === "batch_expiry" ? {
         objects: [
           {
@@ -592,14 +769,20 @@ export async function provisionPackageMetadata(db, { packageId, moduleId, compan
     if (existing.rows.length) {
       object = existing.rows[0];
       if (object.package_id && object.package_id !== packageId) {
-        throw new Error(`Platform object is owned by another package: ${objectKey}`);
+        const adoptable = Array.isArray(definition.adoptFromPackageKeys) ? definition.adoptFromPackageKeys : [];
+        const owner = adoptable.length
+          ? await db("SELECT package_key FROM package_registry WHERE id=$1", [object.package_id])
+          : { rows: [] };
+        if (!adoptable.includes(owner.rows[0]?.package_key)) {
+          throw new Error(`Platform object is owned by another package: ${objectKey}`);
+        }
       }
       if (object.company_id && object.company_id !== objectCompanyId) {
         throw new Error(`Platform object belongs to another company: ${objectKey}`);
       }
       await db(
-          "UPDATE platform_objects SET package_id=$1,module_id=COALESCE(module_id,$2),company_id=COALESCE(company_id,$3),label=CASE WHEN user_modified THEN label ELSE $4 END,plural_label=CASE WHEN user_modified THEN plural_label ELSE $5 END,description=CASE WHEN user_modified THEN description ELSE $6 END,source_package_version=$8,managed=true,package_required=$9,active=true,updated_at=NOW() WHERE id=$7 RETURNING *",
-          [packageId, moduleId, objectCompanyId, definition.label.trim(), definition.pluralLabel || definition.plural_label || null, definition.description || null, object.id, packageVersion, definition.required === true]
+          "UPDATE platform_objects SET package_id=$1,module_id=$2,company_id=COALESCE(company_id,$3),label=CASE WHEN user_modified THEN label ELSE $4 END,plural_label=CASE WHEN user_modified THEN plural_label ELSE $5 END,description=CASE WHEN user_modified THEN description ELSE $6 END,source_table=COALESCE(source_table,$7),source_package_version=$9,managed=true,package_required=$10,active=true,updated_at=NOW() WHERE id=$8 RETURNING *",
+          [packageId, moduleId, objectCompanyId, definition.label.trim(), definition.pluralLabel || definition.plural_label || null, definition.description || null, definition.sourceTable || definition.source_table || null, object.id, packageVersion, definition.required === true]
       );
     } else {
       const result = await db(
@@ -617,6 +800,7 @@ export async function provisionPackageMetadata(db, { packageId, moduleId, compan
       if (!safeMetadataKey(apiName) || typeof field.label !== "string" || !field.label.trim()) {
         throw new Error(`Invalid package field on ${objectKey}`);
       }
+      const fieldCompanyId = field.metadataScope === "global" ? null : companyId || null;
       const existingField = await db(
         "SELECT id,company_id FROM platform_fields WHERE object_id=$1 AND api_name=$2 AND (company_id IS NULL OR company_id=$3)",
         [object.id, apiName, companyId]
@@ -626,18 +810,48 @@ export async function provisionPackageMetadata(db, { packageId, moduleId, compan
           throw new Error(`Platform field belongs to another company: ${objectKey}.${apiName}`);
         }
         await db(
-          "UPDATE platform_fields SET label=CASE WHEN user_modified THEN label ELSE $1 END,field_type=CASE WHEN user_modified THEN field_type ELSE $2 END,required=$3,readable=CASE WHEN user_modified THEN readable ELSE $4 END,writable=CASE WHEN user_modified THEN writable ELSE $5 END,options=CASE WHEN user_modified THEN options ELSE $6::jsonb END,config=CASE WHEN user_modified THEN config ELSE $7::jsonb END,source_package_id=$9,source_package_version=$10,managed=true,package_required=$11,active=true WHERE id=$8",
-          [field.label.trim(), field.fieldType || field.field_type || "text", field.required === true, field.readable !== false, field.writable === true, JSON.stringify(field.options || []), JSON.stringify({ ...(field.config || {}), packageContract: field.required === true ? "required" : "default", packageOwned: true, packageId }), existingField.rows[0].id, packageId, packageVersion, field.required === true]
+          "UPDATE platform_fields SET label=CASE WHEN user_modified THEN label ELSE $1 END,field_type=CASE WHEN user_modified THEN field_type ELSE $2 END,source_column=CASE WHEN user_modified THEN source_column ELSE $3 END,required=$4,readable=CASE WHEN user_modified THEN readable ELSE $5 END,writable=CASE WHEN user_modified THEN writable ELSE $6 END,options=CASE WHEN user_modified THEN options ELSE $7::jsonb END,config=CASE WHEN user_modified THEN config ELSE $8::jsonb END,display_order=$9,company_id=COALESCE(company_id,$10),source_package_id=$12,source_package_version=$13,managed=true,package_required=$14,active=true WHERE id=$11",
+          [field.label.trim(), field.fieldType || field.field_type || "text", field.sourceColumn || field.source_column || null, field.required === true, field.readable !== false, field.writable === true, JSON.stringify(field.options || []), JSON.stringify({ ...(field.config || {}), packageContract: field.required === true ? "required" : "default", packageOwned: true, packageId }), Number(field.displayOrder ?? field.display_order ?? 0), fieldCompanyId, existingField.rows[0].id, packageId, packageVersion, field.required === true]
         );
       } else {
         await db(
           `INSERT INTO platform_fields
-           (object_id,api_name,label,field_type,required,readable,writable,options,config,company_id,source_package_id,source_package_version,managed,package_required)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9::jsonb,$10,$11,$12,true,$13)`,
-          [object.id, apiName, field.label.trim(), field.fieldType || field.field_type || "text", field.required === true, field.readable !== false, field.writable === true, JSON.stringify(field.options || []), JSON.stringify({ ...(field.config || {}), packageContract: field.required === true ? "required" : "default", packageOwned: true, packageId }), companyId || null, packageId, packageVersion, field.required === true]
+           (object_id,api_name,label,field_type,source_column,required,readable,writable,options,config,display_order,company_id,source_package_id,source_package_version,managed,package_required)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10::jsonb,$11,$12,$13,$14,true,$15)`,
+          [object.id, apiName, field.label.trim(), field.fieldType || field.field_type || "text", field.sourceColumn || field.source_column || null, field.required === true, field.readable !== false, field.writable === true, JSON.stringify(field.options || []), JSON.stringify({ ...(field.config || {}), packageContract: field.required === true ? "required" : "default", packageOwned: true, packageId }), Number(field.displayOrder ?? field.display_order ?? 0), fieldCompanyId, packageId, packageVersion, field.required === true]
         );
       }
     }
+  }
+
+  const layouts = [
+    ...(Array.isArray(manifest.layouts) ? manifest.layouts : []),
+    ...(Array.isArray(manifest.recordForms) ? manifest.recordForms.map((form) => ({
+      ...form,
+      layoutKey: form.layoutKey || form.layout_key || form.formKey || form.form_key,
+    })) : []),
+  ];
+  for (const layout of layouts) {
+    const objectId = objectIds.get(layout.objectKey || layout.object_key);
+    const layoutKey = layout.layoutKey || layout.layout_key;
+    const pageType = layout.pageType || layout.page_type;
+    if (!objectId || !safeMetadataKey(layoutKey) || !["list", "detail", "view", "create", "edit", "quick_create"].includes(pageType) ||
+        typeof layout.name !== "string" || !layout.name.trim() || !layout.definition || !Array.isArray(layout.definition.components)) {
+      throw new Error("Package layouts and forms require an object, safe key, supported page type, name and component definition");
+    }
+    await db(
+      `INSERT INTO platform_layouts
+       (object_id,page_type,company_id,name,layout_key,definition,active,is_default,source_package_id,source_package_version,managed,package_required)
+       VALUES ($1,$2,$3,$4,$5,$6::jsonb,true,$7,$8,$9,true,$10)
+       ON CONFLICT (object_id,page_type,layout_key) WHERE layout_key <> ''
+       DO UPDATE SET company_id=EXCLUDED.company_id,name=EXCLUDED.name,definition=EXCLUDED.definition,
+         active=true,is_default=EXCLUDED.is_default,source_package_id=EXCLUDED.source_package_id,
+         source_package_version=EXCLUDED.source_package_version,managed=true,package_required=EXCLUDED.package_required,updated_at=NOW()
+       WHERE platform_layouts.user_modified=false
+          OR platform_layouts.source_package_id=EXCLUDED.source_package_id`,
+      [objectId, pageType, layout.metadataScope === "global" ? null : companyId || null, layout.name.trim(), layoutKey,
+        JSON.stringify(layout.definition), layout.isDefault === true, packageId, packageVersion, layout.required === true]
+    );
   }
 
   for (const relationship of Array.isArray(manifest.relationships) ? manifest.relationships : []) {
@@ -809,8 +1023,8 @@ export async function provisionPackageMetadata(db, { packageId, moduleId, compan
     }
     await db(
       `INSERT INTO platform_rules
-       (object_id,name,trigger_key,conditions,action,active,company_id,lifecycle_status)
-       VALUES ($1,$2,$3,$4::jsonb,$5::jsonb,false,$6,'INACTIVE')`,
+       (object_id,name,trigger_key,conditions,action,active,company_id,lifecycle_status,source_package_id,source_package_version,managed,package_required)
+       VALUES ($1,$2,$3,$4::jsonb,$5::jsonb,false,$6,'INACTIVE',$7,$8,true,$9)`,
       [
         objectId,
         rule.name.trim(),
@@ -818,6 +1032,9 @@ export async function provisionPackageMetadata(db, { packageId, moduleId, compan
         JSON.stringify(rule.conditions || []),
         JSON.stringify(ruleAction),
         companyId || null,
+        packageId,
+        packageVersion,
+        rule.required === true,
       ]
     );
   }
@@ -826,7 +1043,7 @@ export async function provisionPackageMetadata(db, { packageId, moduleId, compan
     `WITH owned AS (
        SELECT 'object'::text AS metadata_type,id FROM platform_objects WHERE package_id=$1
        UNION ALL
-       SELECT 'field',f.id FROM platform_fields f JOIN platform_objects o ON o.id=f.object_id WHERE o.package_id=$1
+       SELECT 'field',f.id FROM platform_fields f WHERE f.source_package_id=$1 AND f.managed=true
        UNION ALL
        SELECT 'relationship',r.id FROM platform_relationships r
         WHERE r.source_package_id=$1
@@ -836,6 +1053,10 @@ export async function provisionPackageMetadata(db, { packageId, moduleId, compan
        SELECT 'workflow',id FROM platform_rules WHERE source_package_id=$1
        UNION ALL
        SELECT 'report',id FROM platform_reports WHERE source_package_id=$1
+       UNION ALL
+       SELECT 'list_view',v.id FROM platform_list_views v
+        JOIN platform_objects o ON o.id=v.object_id
+        WHERE o.package_id=$1 AND v.view_key=ANY($3::text[])
        UNION ALL
        SELECT 'action',id FROM platform_registered_actions WHERE config->>'packageId'=$1::text
        UNION ALL
@@ -851,7 +1072,7 @@ export async function provisionPackageMetadata(db, { packageId, moduleId, compan
        FROM owned
      ON CONFLICT(package_id,metadata_type,metadata_id) DO UPDATE SET
        package_version=EXCLUDED.package_version,managed=true,updated_at=NOW()`,
-    [packageId, packageVersion]
+    [packageId, packageVersion, (Array.isArray(manifest.listViews) ? manifest.listViews : []).map((view) => view.viewKey || view.view_key).filter(Boolean)]
   );
   return { objects: objectIds.size, ownedMetadata: ownedMetadata.rowCount || 0 };
 }
@@ -859,13 +1080,22 @@ export async function provisionPackageMetadata(db, { packageId, moduleId, compan
 export async function provisionDefaultCompanyPackages(db, { companyId, installedBy = null, packageKeys = ["retail_pos", "products", "customers"] }) {
   for (const packageKey of packageKeys) {
     const packageResult = await db(
-      `SELECT p.id, p.version, p.module_id
+      `SELECT p.id, p.version, p.module_id, p.manifest
        FROM package_registry p
        WHERE p.package_key=$1 AND p.active=true`,
       [packageKey]
     );
     if (!packageResult.rows.length) continue;
     const pkg = packageResult.rows[0];
+    if (packageKey === "products") {
+      await provisionPackageMetadata(db, {
+        packageId: pkg.id,
+        moduleId: pkg.module_id,
+        companyId,
+        manifest: pkg.manifest || {},
+        packageVersion: pkg.version,
+      });
+    }
     await db(
       `INSERT INTO company_package_installations
        (company_id,package_id,version,status,installed_by)

@@ -43,6 +43,110 @@ test("initial One-* definitions reuse canonical catalog module keys", () => {
   assert.equal(sales.moduleKey, "retail_pos");
 });
 
+test("Product Core is a non-billable foundation declaring canonical Product metadata", () => {
+  const definition = packageDefinitions().find((pkg) => pkg.packageKey === "products");
+  assert.ok(definition);
+  assert.equal(definition.name, "Product Core");
+  assert.equal(definition.version, "1.1.0");
+  assert.deepEqual(definition.dependencies, []);
+  assert.equal(definition.manifest.packageType, "FOUNDATION");
+  assert.equal(definition.manifest.billable, false);
+  assert.equal(definition.manifest.licenceRequired, false);
+  assert.equal(definition.manifest.upgrade.adoptsExistingData, true);
+  assert.ok(definition.manifest.migrations.includes("product_core.adopt_canonical_metadata.v1"));
+  const product = definition.manifest.objects.find(({ objectKey }) => objectKey === "product");
+  const category = definition.manifest.objects.find(({ objectKey }) => objectKey === "category");
+  assert.equal(product.sourceTable, "products");
+  assert.deepEqual(product.adoptFromPackageKeys, ["retail_pos"]);
+  for (const apiName of ["name", "sku", "barcode", "category_id", "active", "product_kind", "parent_product_id", "variant_attributes"]) {
+    assert.ok(product.fields.some((field) => field.apiName === apiName), apiName);
+  }
+  assert.equal(category.sourceTable, "categories");
+  assert.ok(definition.manifest.relationships.some((relationship) =>
+    relationship.parentObjectKey === "category" && relationship.childObjectKey === "product" &&
+    relationship.childFieldApiName === "category_id"
+  ));
+  assert.ok(definition.manifest.relationships.some((relationship) =>
+    relationship.parentObjectKey === "product" && relationship.childObjectKey === "product" &&
+    relationship.relationshipKey === "variants" && relationship.childFieldApiName === "parent_product_id"
+  ));
+  assert.ok(definition.manifest.listViews.some((view) => view.objectKey === "product" && view.isDefault));
+  assert.ok(definition.manifest.layouts.some((layout) => layout.pageType === "detail" && layout.objectKey === "product"));
+  assert.ok(definition.manifest.recordForms.some((form) =>
+    form.pageType === "create" && form.objectKey === "product" && form.definition.components.length === 0
+  ));
+  assert.ok(definition.manifest.rules.some((rule) => rule.objectKey === "product"));
+  assert.deepEqual(definition.manifest.actions.map(({ handlerKey }) => handlerKey), Array(5).fill("RECORD_SAVE"));
+});
+
+test("Product Core idempotently adopts the existing Product Object and owns its declared metadata", async () => {
+  const definition = packageDefinitions().find((pkg) => pkg.packageKey === "products");
+  const objects = new Map([
+    ["product", { id: "existing-product-object", package_id: "retail-pos-package", module_id: "retail-pos-module", company_id: null }],
+    ["category", { id: "existing-category-object", package_id: null, module_id: "retail-pos-module", company_id: null }],
+  ]);
+  const fields = new Map();
+  const rules = new Map();
+  const calls = [];
+  const db = async (sql, params = []) => {
+    calls.push({ sql, params });
+    if (sql.startsWith("SELECT id,package_id,module_id,company_id FROM platform_objects")) {
+      return { rows: [objects.get(params[0])] };
+    }
+    if (sql.startsWith("SELECT package_key FROM package_registry")) return { rows: [{ package_key: "retail_pos" }] };
+    if (sql.startsWith("UPDATE platform_objects")) {
+      const object = [...objects.values()].find((candidate) => candidate.id === params[7]);
+      Object.assign(object, { package_id: params[0], module_id: params[1], company_id: params[2] });
+      return { rows: [object] };
+    }
+    if (sql.startsWith("SELECT id,company_id FROM platform_fields")) {
+      const field = fields.get(`${params[0]}:${params[1]}:${params[2] || "global"}`);
+      return { rows: field ? [field] : [] };
+    }
+    if (sql.startsWith("INSERT INTO platform_fields")) {
+      const key = `${params[0]}:${params[1]}:${params[11] || "global"}`;
+      fields.set(key, { id: `field-${fields.size + 1}`, company_id: params[11] || null });
+      return { rows: [] };
+    }
+    if (sql.startsWith("SELECT id FROM platform_fields WHERE object_id=$1")) return { rows: [{ id: `field-${params[1]}` }] };
+    if (sql.startsWith("SELECT id,object_key FROM platform_objects WHERE object_key=ANY")) return { rows: [] };
+    if (sql.startsWith("INSERT INTO platform_list_views")) return { rows: [] };
+    if (sql.startsWith("INSERT INTO platform_layouts")) return { rows: [] };
+    if (sql.startsWith("INSERT INTO platform_registered_actions")) return { rows: [{ id: `action-${params[2]}` }] };
+    if (sql.startsWith("SELECT id,action FROM platform_rules")) {
+      const rule = rules.get(params[2]);
+      return { rows: rule ? [rule] : [] };
+    }
+    if (sql.startsWith("INSERT INTO platform_rules")) {
+      rules.set(params[1], { id: `rule-${params[1]}`, action: JSON.parse(params[4]) });
+      return { rows: [] };
+    }
+    if (sql.startsWith("WITH owned AS")) return { rowCount: 1, rows: [] };
+    return { rows: [] };
+  };
+
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const result = await provisionPackageMetadata(db, {
+      packageId: "product-core-package",
+      moduleId: "products-module",
+      companyId: "company-a",
+      manifest: definition.manifest,
+      packageVersion: definition.version,
+    });
+    assert.equal(result.objects, 2);
+  }
+
+  assert.equal(objects.get("product").id, "existing-product-object");
+  assert.equal(objects.get("product").package_id, "product-core-package");
+  assert.equal(objects.get("category").id, "existing-category-object");
+  assert.equal(objects.get("category").package_id, "product-core-package");
+  assert.equal(calls.filter(({ sql }) => sql.startsWith("INSERT INTO platform_objects")).length, 0);
+  assert.ok(calls.some(({ sql }) => sql.startsWith("INSERT INTO platform_fields") && /source_column/.test(sql)));
+  assert.equal(calls.filter(({ sql }) => sql.startsWith("INSERT INTO platform_layouts")).length, 6);
+  assert.equal(calls.filter(({ sql }) => sql.startsWith("INSERT INTO platform_rules")).length, 3);
+  assert.ok(calls.some(({ sql }) => sql.startsWith("WITH owned AS") && /source_package_id/.test(sql)));
+});
+
 test("Uber Eats is declared as a licensed package with dependencies and safe metadata", () => {
   const definition = packageDefinitions().find((pkg) => pkg.packageKey === "uber_eats");
   assert.ok(definition);
@@ -204,7 +308,7 @@ test("Uber Eats metadata is idempotent, globally defined, and tenant-scoped", as
         return { rows: field ? [field] : [] };
       }
       if (sql.startsWith("INSERT INTO platform_fields")) {
-        fields.set(`${params[0]}:${params[1]}:${params[9] || "global"}`, { id: `${params[1]}-${params[9]}` });
+        fields.set(`${params[0]}:${params[1]}:${params[11] || "global"}`, { id: `${params[1]}-${params[11]}` });
         return { rows: [] };
       }
       if (sql.startsWith("INSERT INTO platform_apps")) return { rows: [{ id: "uber-app" }] };
@@ -245,7 +349,7 @@ test("Uber Eats metadata is idempotent, globally defined, and tenant-scoped", as
     assert.deepEqual([...views].map((key) => key.split(":")[1]).sort(), ["company-a", "company-b"]);
     assert.equal(calls.filter(({ sql }) => sql.startsWith("INSERT INTO platform_objects")).length, 1);
     assert.equal(calls.filter(({ sql }) => sql.startsWith("INSERT INTO platform_fields")).length, definition.manifest.objects[0].fields.length * 2);
-    assert.ok(calls.filter(({ sql }) => sql.startsWith("INSERT INTO platform_fields")).every(({ params }) => ["company-a", "company-b"].includes(params[9])));
+    assert.ok(calls.filter(({ sql }) => sql.startsWith("INSERT INTO platform_fields")).every(({ params }) => ["company-a", "company-b"].includes(params[11])));
   });
 
 test("package catalog and Uber Eats installation preserve existing client configuration", async (t) => {
@@ -280,9 +384,13 @@ test("package catalog and Uber Eats installation preserve existing client config
         return { rows: [{ active: true, starts_at: null, expires_at: null, entitlements: { integrations: true, online_orders: true } }] };
       }
       if (sql.startsWith("SELECT id FROM platform_modules WHERE module_key=$1")) return { rows: [{ id: `module-${params[0]}` }] };
-      if (sql.startsWith("SELECT id,version FROM package_registry WHERE package_key=$1")) {
+      if (sql.startsWith("SELECT id FROM package_registry WHERE package_key=$1")) {
         const pkg = packages.find((item) => item.package_key === params[0]);
-        return { rows: pkg ? [{ id: pkg.id, version: pkg.version }] : [] };
+        return { rows: pkg ? [{ id: pkg.id }] : [] };
+      }
+      if (sql.startsWith("SELECT id,version,package_type,installable FROM package_registry WHERE package_key=$1")) {
+        const pkg = packages.find((item) => item.package_key === params[0]);
+        return { rows: pkg ? [{ id: pkg.id, version: pkg.version, package_type: pkg.manifest.packageType, installable: true }] : [] };
       }
       if (sql.startsWith("SELECT id,package_id,module_id,company_id FROM platform_objects")) {
         const object = objects.get(params[0]);
@@ -298,7 +406,7 @@ test("package catalog and Uber Eats installation preserve existing client config
         return { rows: field ? [field] : [] };
       }
       if (sql.startsWith("INSERT INTO platform_fields")) {
-        fields.set(`${params[0]}:${params[1]}:${params[9] || "global"}`, { id: `${params[1]}-${params[9]}` });
+        fields.set(`${params[0]}:${params[1]}:${params[11] || "global"}`, { id: `${params[1]}-${params[11]}` });
         return { rows: [] };
       }
       if (sql.startsWith("INSERT INTO platform_apps")) return { rows: [{ id: "uber-app" }] };
@@ -410,20 +518,24 @@ test("fresh company provisioning installs only the declared default packages", a
       queries.push({ sql, params });
       if (sql.includes("FROM package_registry")) {
         const key = params[0];
-        return { rows: key === "retail_pos" ? [{ id: "pkg", version: "1.0.0", module_id: "module" }] : [] };
+        return { rows: [{ id: `pkg-${key}`, version: "1.0.0", module_id: `module-${key}`, manifest: {} }] };
       }
       return { rows: [] };
     };
-    await provisionDefaultCompanyPackages(db, { companyId: "company", installedBy: "user", packageKeys: ["retail_pos"] });
-    assert.equal(queries.filter(({ sql }) => sql.includes("company_package_installations")).length, 1);
-    assert.equal(queries.filter(({ sql }) => sql.includes("platform_module_access")).length, 1);
+    await provisionDefaultCompanyPackages(db, { companyId: "company", installedBy: "user" });
+    assert.deepEqual(
+      queries.filter(({ sql }) => sql.includes("FROM package_registry")).map(({ params }) => params[0]),
+      ["retail_pos", "products", "customers"]
+    );
+    assert.equal(queries.filter(({ sql }) => sql.includes("company_package_installations")).length, 3);
+    assert.equal(queries.filter(({ sql }) => sql.includes("platform_module_access")).length, 3);
 });
 
 test("package installation supports company-validated store scope", async () => {
     const source = await import("node:fs").then((fs) => fs.readFileSync(new URL("../routes/packages.js", import.meta.url), "utf8"));
     assert.match(source, /Store is not available to this company/);
     assert.match(source, /store_id IS NOT DISTINCT FROM/);
-    assert.match(source, /selected_features\)/);
+    assert.match(source, /selected_features\s*,\s*installation_type/);
 });
 
 test("package routes use a dedicated package permission with settings compatibility", async () => {

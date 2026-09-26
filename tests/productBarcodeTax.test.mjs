@@ -171,6 +171,11 @@ describe("Barcode identity & validation", () => {
     assert.equal(validateBarcode("4006381333931").valid, true);
   });
 
+  test("valid EAN-13 with a zero check digit remains accepted", () => {
+    assert.equal(validateBarcode("0000000000130").valid, true);
+    assert.equal(ean13IdentityError("0000000000130"), null);
+  });
+
   test("2. invalid EAN-13 check digit rejected by the identity gate", () => {
     assert.match(ean13IdentityError("4006381333932"), /check digit/i);
     /* and the API rejects it with a clear 400 — no silent corruption */

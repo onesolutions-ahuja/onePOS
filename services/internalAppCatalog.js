@@ -12,11 +12,18 @@ const CATALOG = [
   {
     key: "products",
     name: "Products",
-    description: "Product catalogue, categories and global product references.",
+    description: "Product Core foundation for the canonical product catalogue and categories.",
     route: "/app/products",
-    permissions: ["product.view", "inventory.view"],
+    permissions: [
+      "product.view", "product.create", "product.edit", "product.delete",
+      "category.view", "category.create", "category.edit", "category.delete",
+    ],
     storeScoped: false,
     category: "Catalogue & Supply",
+    packageType: "FOUNDATION",
+    technical: true,
+    billable: false,
+    version: "1.1.0",
   },
   {
     key: "inventory",

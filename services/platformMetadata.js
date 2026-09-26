@@ -779,7 +779,7 @@ export async function initializePlatformMetadata(pool, { includeOperationalObjec
 }
 
   const STANDARD_RELATIONSHIPS = [
-    ["product", "category", "category", "lookup", "category_id"],
+    ["category", "product", "products", "one_to_many", "category_id"],
     ["customer", "price_list", "price_list", "lookup", "price_list_id"],
     ["supplier", "product", "products", "many_to_many", null],
     ["product", "inventory_batch", "batches", "one_to_many", "product_id"],
@@ -1055,6 +1055,15 @@ export async function initializePlatformMetadata(pool, { includeOperationalObjec
         console.error(`onePOS: platform relationship ${declaration} failed to seed:`, error.message);
       }
     }
+
+    await pool.query(
+      `UPDATE platform_relationships r
+          SET active=false
+         FROM platform_objects p, platform_objects c
+        WHERE r.parent_object_id=p.id AND r.child_object_id=c.id
+          AND p.object_key='product' AND c.object_key='category'
+          AND r.relationship_key='category' AND p.company_id IS NULL AND c.company_id IS NULL`
+    );
 
     const sale = byKey.get("sale");
     if (sale) {
