@@ -1823,6 +1823,7 @@ export async function initializeDatabase(pool) {
     ["customer.credit.freeze", "Freeze or Unfreeze Customer Credit"],
     ["customer.credit.statement", "Send Customer Credit Statements"],
     ["loyalty.adjust", "Adjust Customer Loyalty Points"],
+    ["loyalty.use", "Use Customer Loyalty Points"],
     ["purchase.view", "View Purchases"],
     ["purchase.create", "Create Purchase"],
     ["purchase.edit", "Edit Purchase"],

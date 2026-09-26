@@ -230,7 +230,30 @@ test("Staff Core is a non-billable foundation over existing users and attendance
   assert.equal(staff.manifest.upgradeMetadata.preserveExistingUserIds, true);
 });
 
-test("Uber Eats is declared as a licensed package with dependencies and safe metadata", () => {
+test("Loyalty Core is a hidden foundation over the existing loyalty records", () => {
+  const definition = packageDefinitions().find((pkg) => pkg.packageKey === "loyalty");
+  assert.ok(definition);
+  assert.equal(definition.name, "Loyalty Core");
+  assert.equal(definition.moduleKey, "loyalty");
+  assert.equal(definition.manifest.packageType, "FOUNDATION");
+  assert.equal(definition.manifest.billable, false);
+  assert.equal(definition.manifest.visibility, "HIDDEN");
+  assert.deepEqual(definition.dependencies, ["customers", "retail_pos"]);
+  assert.deepEqual(definition.manifest.objects.map((object) => object.sourceTable), [
+    "company_settings",
+    "customer_loyalty_balances",
+    "customer_loyalty_transactions",
+    "customer_loyalty_adjustments",
+  ]);
+  assert.equal(definition.manifest.references.find(({ objectKey }) => objectKey === "payment").packageKey, "retail_pos");
+  assert.deepEqual(definition.manifest.permissionDeclarations.map(({ permission }) => permission), [
+    "customer.view",
+    "loyalty.adjust",
+    "settings.manage",
+  ]);
+});
+
+ with dependencies and safe metadata", () => {
   const definition = packageDefinitions().find((pkg) => pkg.packageKey === "uber_eats");
   assert.ok(definition);
   assert.equal(definition.name, "Uber Eats");

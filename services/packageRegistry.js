@@ -105,6 +105,7 @@ export function packageDefinition(entry) {
     online_orders: "OneOnline",
     integrations: "OneIntegrations",
     uber_eats: "Uber Eats",
+    loyalty: "Loyalty Core",
     finance_core: "Finance Core",
   };
   const packageDescriptions = {
@@ -123,13 +124,14 @@ export function packageDefinition(entry) {
     online_orders: "Online order intake and preparation.",
     integrations: "External delivery, payment and communication integrations.",
     uber_eats: "Uber Eats connection and online order integration.",
+    loyalty: "Canonical loyalty configuration, balances, activity and rules.",
     finance_core: "Reusable financial ledger and supplier-accounting foundation.",
   };
   const entitlementKeys = {
     retail_pos: "pos", products: "pos", inventory: "inventory", batch_expiry: "batch_expiry",
     hospitality: "hospitality", kds: "kds", customer_credit: "credit_control", suppliers: "purchasing", customers: "customers", staff: "staff",
     reports: "reports", online_orders: "online_orders", integrations: "integrations",
-    uber_eats: "integrations", platform: "platform",
+    uber_eats: "integrations", platform: "platform", loyalty: "loyalty",
   };
   const dependencies = {
     retail_pos: ["products"],
@@ -142,6 +144,7 @@ export function packageDefinition(entry) {
     platform: [],
     uber_eats: ["integrations", "online_orders"],
     finance_core: ["suppliers"],
+    loyalty: ["customers", "retail_pos"],
   };
   const packageType = entry.packageType === "FOUNDATION" || entry.technical === true
     ? "FOUNDATION"
@@ -1094,7 +1097,109 @@ export function packageDefinition(entry) {
           },
         ],
       } : {}),
-      ...(entry.key === "uber_eats" ? {
+      ...(entry.key === "loyalty" ? {
+        objects: [
+          {
+            objectKey: "loyalty_configuration",
+            metadataScope: "global",
+            label: "Loyalty Configuration",
+            pluralLabel: "Loyalty Configurations",
+            description: "Company-level loyalty programme settings. Values remain authoritative in company_settings.",
+            sourceTable: "company_settings",
+            fields: [
+              { apiName: "company_id", label: "Company", fieldType: "lookup", required: true, writable: false },
+              { apiName: "loyalty_enabled", label: "Enabled", fieldType: "boolean", writable: false },
+              { apiName: "loyalty_earning_rate", label: "Earn Rate", fieldType: "decimal", writable: false },
+              { apiName: "loyalty_min_sale_total", label: "Minimum Qualifying Sale", fieldType: "currency", writable: false },
+              { apiName: "loyalty_redeem_value_per_point", label: "Redemption Value per Point", fieldType: "decimal", writable: false },
+              { apiName: "loyalty_min_points_redeem", label: "Minimum Redemption Points", fieldType: "number", writable: false },
+              { apiName: "updated_at", label: "Updated", fieldType: "datetime", writable: false },
+            ],
+          },
+          {
+            objectKey: "loyalty_account",
+            metadataScope: "global",
+            label: "Loyalty Account",
+            pluralLabel: "Loyalty Accounts",
+            description: "Customer loyalty balance. The balance remains authoritative in customer_loyalty_balances.",
+            sourceTable: "customer_loyalty_balances",
+            fields: [
+              { apiName: "company_id", label: "Company", fieldType: "lookup", required: true, writable: false },
+              { apiName: "customer_id", label: "Customer", fieldType: "lookup", required: true, writable: false },
+              { apiName: "balance", label: "Balance", fieldType: "decimal", writable: false },
+              { apiName: "updated_at", label: "Updated", fieldType: "datetime", writable: false },
+            ],
+          },
+          {
+            objectKey: "loyalty_activity",
+            metadataScope: "global",
+            label: "Loyalty Activity",
+            pluralLabel: "Loyalty Activity",
+            description: "Canonical loyalty earn, redemption, reversal and adjustment ledger.",
+            sourceTable: "customer_loyalty_transactions",
+            fields: [
+              { apiName: "company_id", label: "Company", fieldType: "lookup", required: true, writable: false },
+              { apiName: "customer_id", label: "Customer", fieldType: "lookup", required: true, writable: false },
+              { apiName: "transaction_type", label: "Entry Type", fieldType: "picklist", required: true, writable: false },
+              { apiName: "amount", label: "Points", fieldType: "decimal", required: true, writable: false },
+              { apiName: "balance_after", label: "Balance After", fieldType: "decimal", writable: false },
+              { apiName: "reference_type", label: "Reference Type", fieldType: "text", writable: false },
+              { apiName: "reference_id", label: "Reference", fieldType: "lookup", writable: false },
+              { apiName: "description", label: "Reason", fieldType: "text", writable: false },
+              { apiName: "created_by", label: "Operator", fieldType: "lookup", writable: false },
+              { apiName: "created_at", label: "Created", fieldType: "datetime", writable: false },
+            ],
+          },
+          {
+            objectKey: "loyalty_adjustment",
+            metadataScope: "global",
+            label: "Loyalty Adjustment",
+            pluralLabel: "Loyalty Adjustments",
+            description: "Auditable manual loyalty adjustments.",
+            sourceTable: "customer_loyalty_adjustments",
+            fields: [
+              { apiName: "company_id", label: "Company", fieldType: "lookup", required: true, writable: false },
+              { apiName: "customer_id", label: "Customer", fieldType: "lookup", required: true, writable: false },
+              { apiName: "points", label: "Points", fieldType: "decimal", required: true, writable: false },
+              { apiName: "reason", label: "Reason", fieldType: "text", writable: false },
+              { apiName: "reference_id", label: "Reference", fieldType: "lookup", writable: false },
+              { apiName: "created_by", label: "Operator", fieldType: "lookup", writable: false },
+              { apiName: "created_at", label: "Created", fieldType: "datetime", writable: false },
+            ],
+          },
+        ],
+        relationships: [
+          { parentObjectKey: "customer", childObjectKey: "loyalty_account", relationshipKey: "loyalty_account", relationshipType: "one_to_many", childFieldApiName: "customer_id" },
+          { parentObjectKey: "customer", childObjectKey: "loyalty_activity", relationshipKey: "loyalty_activity", relationshipType: "one_to_many", childFieldApiName: "customer_id" },
+          { parentObjectKey: "loyalty_activity", childObjectKey: "customer", relationshipKey: "customer", relationshipType: "lookup", childFieldApiName: "customer_id" },
+          { parentObjectKey: "loyalty_activity", childObjectKey: "sale", relationshipKey: "sale", relationshipType: "lookup", childFieldApiName: "reference_id", referenceType: "sale" },
+          { parentObjectKey: "sale", childObjectKey: "loyalty_activity", relationshipKey: "loyalty_activity", relationshipType: "one_to_many", childFieldApiName: "reference_id", referenceType: "sale" },
+        ],
+        permissionDeclarations: [
+          { key: "view", permission: "customer.view", access: "read" },
+          { key: "adjust", permission: "loyalty.adjust", access: "execute" },
+          { key: "configure", permission: "settings.manage", access: "write" },
+        ],
+        actions: [
+          {
+            actionKey: "loyalty.adjust",
+            objectKey: "loyalty_account",
+            label: "Adjust Loyalty",
+            description: "Use the existing customer loyalty adjustment route and ledger.",
+            handlerKey: "CUSTOMER_LOYALTY_ADJUST",
+            requiredPermission: "loyalty.adjust",
+          },
+        ],
+        listViews: [
+          { objectKey: "loyalty_account", viewKey: "all", label: "Customer Loyalty", columns: ["customer_id", "balance", "updated_at"], isDefault: true },
+          { objectKey: "loyalty_activity", viewKey: "all", label: "Loyalty Activity", columns: ["customer_id", "transaction_type", "amount", "reference_type", "created_at"], isDefault: true },
+        ],
+        references: [
+          { packageKey: "retail_pos", objectKey: "sale", purpose: "Sale reference for earning, redemption and reversal activity" },
+          { packageKey: "retail_pos", objectKey: "payment", purpose: "Loyalty redemption remains a Payment Core tender" },
+        ],
+      } : {}),
+
         objects: [
           {
             objectKey: "uber_eats_connection",
