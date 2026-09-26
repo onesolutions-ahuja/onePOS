@@ -7,6 +7,7 @@ const definitions = [
   ["category", "categories", "product.view", "/app/products"],
   ["price_list", "price_lists", "customer.view", "/app/customers"],
   ["employee", "users", "user.view", "/app/employees"],
+  ["attendance", "attendance_records", "attendance.view", "/app/employees"],
   ["store", "stores", "store.view", "/app/stores"],
   ["sale", "sales", "sale.view", "/app/reports"],
   ["sale_line", "sale_items", "sale.view", "/app/reports"],
@@ -35,10 +36,20 @@ export function systemObject(object) {
   return SYSTEM_OBJECTS.find(entry => entry.key === key) || null;
 }
 
+const SYSTEM_OBJECT_RBAC = Object.freeze({
+  employee: Object.freeze({ view: "user.view", edit: "user.edit" }),
+  attendance: Object.freeze({ view: "attendance.view" }),
+});
+
+export function systemObjectRbacPermission(object, action) {
+  const definition = systemObject(object);
+  return definition ? SYSTEM_OBJECT_RBAC[definition.key]?.[action] || null : null;
+}
+
 export function safeSystemFields(object, fields) {
   if (!["users", "stores"].includes(object?.source_table)) return fields;
   const profile = new Set(object.source_table === "users"
-    ? ["full_name", "username", "email", "active", "created_at", "updated_at"]
+    ? ["full_name", "username", "email", "active", "store_id", "created_at", "updated_at"]
     : ["name", "code", "address_line1", "city", "postcode", "phone", "active", "created_at", "updated_at"]);
   return fields.filter(field => !field.source_column || profile.has(field.source_column));
 }

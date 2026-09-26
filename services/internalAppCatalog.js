@@ -90,12 +90,15 @@ const CATALOG = [
   },
   {
     key: "staff",
-    name: "Staff",
-    description: "Users, employees, roles and store access.",
+    name: "Staff Core",
+    description: "Reusable employee and attendance metadata over existing user identities.",
     route: "/app/employees",
-    permissions: ["user.view"],
+    permissions: ["user.view", "user.create", "user.edit", "attendance.view", "attendance.use"],
     storeScoped: false,
     category: "Administration",
+    packageType: "FOUNDATION",
+    billable: false,
+    version: "1.1.0",
   },
   {
     key: "reports",

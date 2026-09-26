@@ -14,6 +14,16 @@ test('Task 3 business apps are independently installable/licensable catalog entr
   }
 });
 
+test('Staff Core is a reusable, independently installed foundation', () => {
+  const staff = byKey.get('staff');
+  assert.ok(staff);
+  assert.equal(staff.manifest.packageType, 'FOUNDATION');
+  assert.equal(staff.manifest.billable, false);
+  assert.deepEqual(staff.dependencies, []);
+  assert.deepEqual(byKey.get('retail_pos').dependencies, ['products']);
+  assert.deepEqual(resolvePackagePlan('staff', defs).map((packageDefinition) => packageDefinition.packageKey), ['staff']);
+});
+
 test('Batch & Expiry installs metadata contract rather than a page-specific CRUD model', () => {
   const m = byKey.get('batch_expiry').manifest;
   assert.deepEqual(m.dependencies, ['inventory','products']);
