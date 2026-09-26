@@ -5,7 +5,7 @@ import { initializePlatformMetadata, platformSchema } from "../services/platform
 import createPlatformRouter from "../routes/platform.js";
 import { requireTestDatabaseUrl } from "./testDatabaseEnv.mjs";
 
-const CORE = ["customer", "employee", "product", "sale", "store", "supplier"];
+const CORE = ["customer", "employee", "product", "sale", "store", "supplier", "supplier_product"];
 
 function metadataDatabase() {
   const objects = new Map(), fields = new Map();

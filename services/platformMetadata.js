@@ -638,11 +638,29 @@ const retailObjects = [
     ],
   },
   {
-    key: "supplier", label: "Supplier", plural: "Suppliers", table: "suppliers",
+    key: "supplier", label: "Supplier", plural: "Suppliers", table: "suppliers", moduleKey: "supplier_core",
     fields: [
       ["name", "Name", "text", "name", true], ["contact_name", "Contact Name", "text", "contact_name", false],
       ["email", "Email", "email", "email", false], ["phone", "Phone", "phone", "phone", false],
       ["address", "Address", "text", "address", false], ["notes", "Notes", "text", "notes", false],
+    ],
+  },
+  {
+    key: "supplier_product", label: "Supplier Product", plural: "Supplier Products",
+    table: "supplier_products", moduleKey: "supplier_core",
+    fields: [
+      ["company_id", "Company", "lookup", "company_id", true],
+      ["supplier_id", "Supplier", "lookup", "supplier_id", true],
+      ["product_id", "Product", "lookup", "product_id", true],
+      ["supplier_sku", "Supplier SKU", "text", "supplier_sku", false],
+      ["supplier_description", "Supplier Description", "text", "supplier_description", false],
+      ["cost_price", "Supplier Cost", "currency", "cost_price", true],
+      ["effective_from", "Effective From", "date", "effective_from", true],
+      ["effective_to", "Effective To", "date", "effective_to", false],
+      ["preferred", "Preferred Supplier", "boolean", "preferred", false],
+      ["active", "Active", "boolean", "active", false],
+      ["created_at", "Created", "datetime", "created_at", false],
+      ["updated_at", "Updated", "datetime", "updated_at", false],
     ],
   },
   {
@@ -871,6 +889,22 @@ export async function initializePlatformMetadata(pool, { includeOperationalObjec
       );
     }
   }
+  await pool.query(
+    `UPDATE platform_fields field
+        SET source_package_id=supplier_core.id,source_package_version=supplier_core.version,managed=true
+       FROM platform_objects supplier_object,package_registry supplier_core
+      WHERE supplier_core.package_key='supplier_core'
+        AND supplier_object.object_key IN ('supplier','supplier_product')
+        AND supplier_object.package_id=supplier_core.id
+        AND field.object_id=supplier_object.id AND field.company_id IS NULL
+        AND field.api_name=ANY($1::text[])
+        AND (field.source_package_id IS NULL OR field.source_package_id=(SELECT id FROM package_registry WHERE package_key='retail_pos'))`,
+    [[
+      "company_id", "name", "contact_name", "phone", "email", "address", "notes", "active",
+      "supplier_id", "product_id", "supplier_sku", "supplier_description", "cost_price",
+      "effective_from", "effective_to", "preferred", "created_at", "updated_at",
+    ]]
+  );
 }
 
   const STANDARD_RELATIONSHIPS = [
