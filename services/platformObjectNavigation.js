@@ -6,6 +6,7 @@ import {
 } from "./authorization.js";
 import { isPackageLicensed } from "./licensing.js";
 import { isSafeIdentifier } from "./platformMetadata.js";
+import { systemObjectRbacPermission } from "./platformSystemObjects.js";
 
 /*
  * METADATA-DRIVEN PLATFORM OBJECT NAVIGATION
@@ -321,7 +322,9 @@ export function objectNavigationEntries({
     }
 
     /* Object-level permission (platform_object_permissions.can_view by role). */
-    if (!isSuperadminRequest && !viewableObjectIds.has(String(object.id))) {
+    const mappedPermission = systemObjectRbacPermission(object, "view");
+    const hasMappedPermission = mappedPermission && permissions.includes(mappedPermission);
+    if (!isSuperadminRequest && !viewableObjectIds.has(String(object.id)) && !hasMappedPermission) {
       fail(OBJECT_NAVIGATION_EXCLUSIONS.NOT_PERMITTED);
       continue;
     }

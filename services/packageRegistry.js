@@ -77,7 +77,7 @@ export function packageDefinition(entry) {
     customer_credit: "OneCustomerCredit",
     suppliers: "OnePurchase",
     customers: "OneCustomer",
-    staff: "OneStaff",
+    staff: "Staff Core",
     reports: "OneReport",
     platform: "OneBuilder",
     online_orders: "OneOnline",
@@ -94,7 +94,7 @@ export function packageDefinition(entry) {
     customer_credit: "Customer credit accounts, payments and protected credit controls.",
     suppliers: "Suppliers and purchasing operations.",
     customers: "Customer records and customer activity.",
-    staff: "Employees, users, roles and store access.",
+    staff: "Reusable employee and attendance foundations over existing user identities.",
     reports: "Operational and custom report administration.",
     platform: "Customer-configurable Platform metadata and builders.",
     online_orders: "Online order intake and preparation.",
@@ -150,6 +150,129 @@ export function packageDefinition(entry) {
       dependencies: Array.isArray(entry.dependencies) ? entry.dependencies : (dependencies[entry.key] || []),
       optionalFeatures: Array.isArray(entry.optionalFeatures) ? entry.optionalFeatures : [],
       capabilities: Array.isArray(entry.capabilities) ? entry.capabilities : [entry.key],
+      ...(entry.key === "staff" ? {
+        objects: [
+          {
+            objectKey: "employee",
+            label: "Staff Member",
+            pluralLabel: "Staff",
+            description: "Business-facing staff fields on the existing authentication user record.",
+            sourceTable: "users",
+            metadataScope: "global",
+            fieldsMetadataScope: "global",
+            fields: [
+              { apiName: "full_name", label: "Name", fieldType: "text", sourceColumn: "full_name", required: true, writable: true },
+              { apiName: "username", label: "User", fieldType: "text", sourceColumn: "username", required: true, writable: false },
+              { apiName: "email", label: "Email", fieldType: "email", sourceColumn: "email", writable: true },
+              { apiName: "active", label: "Status", fieldType: "boolean", sourceColumn: "active", required: true, writable: true },
+              { apiName: "store_id", label: "Store", fieldType: "lookup", sourceColumn: "store_id", writable: true },
+              { apiName: "created_at", label: "Created", fieldType: "datetime", sourceColumn: "created_at", writable: false },
+              { apiName: "updated_at", label: "Updated", fieldType: "datetime", sourceColumn: "updated_at", writable: false },
+            ],
+          },
+          {
+            objectKey: "attendance",
+            label: "Attendance",
+            pluralLabel: "Attendance Records",
+            description: "Existing server-timestamped staff attendance sessions.",
+            sourceTable: "attendance_records",
+            metadataScope: "global",
+            fieldsMetadataScope: "global",
+            storeScoped: true,
+            fields: [
+              { apiName: "user_id", label: "Staff User", fieldType: "lookup", sourceColumn: "user_id", required: true, writable: false },
+              { apiName: "store_id", label: "Store", fieldType: "lookup", sourceColumn: "store_id", required: true, writable: false },
+              { apiName: "status", label: "Status", fieldType: "picklist", sourceColumn: "status", required: true, writable: false, options: ["open", "closed"] },
+              { apiName: "clock_in", label: "Clock In", fieldType: "datetime", sourceColumn: "clock_in", required: true, writable: false },
+              { apiName: "clock_out", label: "Clock Out", fieldType: "datetime", sourceColumn: "clock_out", writable: false },
+              { apiName: "worked_minutes", label: "Worked Minutes", fieldType: "number", sourceColumn: "worked_minutes", writable: false },
+              { apiName: "created_at", label: "Created", fieldType: "datetime", sourceColumn: "created_at", writable: false },
+            ],
+          },
+        ],
+        relationships: [
+          { parentObjectKey: "employee", childObjectKey: "attendance", relationshipKey: "attendance_records", relationshipType: "one_to_many", childFieldApiName: "user_id", required: true },
+          { parentObjectKey: "store", childObjectKey: "employee", relationshipKey: "staff", relationshipType: "one_to_many", childFieldApiName: "store_id" },
+        ],
+        listViews: [
+          {
+            objectKey: "employee",
+            viewKey: "all_staff",
+            label: "All Staff",
+            description: "Existing business-facing user and employee records.",
+            columns: ["full_name", "active", "username", "email", "store_id"],
+            sort: { field: "full_name", direction: "asc" },
+            isDefault: true,
+          },
+        ],
+        layouts: [
+          {
+            objectKey: "employee",
+            pageType: "detail",
+            layoutKey: "staff_record_detail",
+            name: "Staff Record",
+            metadataScope: "global",
+            definition: {
+              sections: [{ id: "staff-details", label: "Staff Details", order: 0, columns: 2, visible: true }],
+              components: [
+                { id: "staff-header", type: "header", label: "Staff Record", section_id: "staff-details", order: 0, width: "full", visible: true },
+                { id: "staff-full-name", type: "field", field_key: "full_name", section_id: "staff-details", order: 1, width: "1/2", visible: true, readOnly: true },
+                { id: "staff-active", type: "field", field_key: "active", section_id: "staff-details", order: 2, width: "1/2", visible: true, readOnly: true },
+                { id: "staff-username", type: "field", field_key: "username", section_id: "staff-details", order: 3, width: "1/2", visible: true, readOnly: true },
+                { id: "staff-email", type: "field", field_key: "email", section_id: "staff-details", order: 4, width: "1/2", visible: true, readOnly: true },
+                { id: "staff-store", type: "field", field_key: "store_id", section_id: "staff-details", order: 5, width: "1/2", visible: true, readOnly: true },
+                { id: "staff-created", type: "field", field_key: "created_at", section_id: "staff-details", order: 6, width: "1/2", visible: true, readOnly: true },
+                { id: "staff-attendance", type: "related_list", relationship_key: "attendance_records", label: "Attendance", section_id: "staff-details", order: 7, width: "full", visible: true },
+              ],
+            },
+          },
+          {
+            objectKey: "employee",
+            pageType: "view",
+            layoutKey: "staff_record_view",
+            name: "Staff Record View",
+            metadataScope: "global",
+            definition: {
+              sections: [{ id: "staff-view", label: "Staff Details", order: 0, columns: 2, visible: true }],
+              components: [
+                { id: "staff-view-header", type: "header", label: "Staff Record", section_id: "staff-view", order: 0, width: "full", visible: true },
+                { id: "staff-view-name", type: "field", field_key: "full_name", section_id: "staff-view", order: 1, width: "1/2", visible: true, readOnly: true },
+                { id: "staff-view-status", type: "field", field_key: "active", section_id: "staff-view", order: 2, width: "1/2", visible: true, readOnly: true },
+                { id: "staff-view-user", type: "field", field_key: "username", section_id: "staff-view", order: 3, width: "1/2", visible: true, readOnly: true },
+                { id: "staff-view-email", type: "field", field_key: "email", section_id: "staff-view", order: 4, width: "1/2", visible: true, readOnly: true },
+                { id: "staff-view-store", type: "field", field_key: "store_id", section_id: "staff-view", order: 5, width: "1/2", visible: true, readOnly: true },
+                { id: "staff-view-attendance", type: "related_list", relationship_key: "attendance_records", label: "Attendance", section_id: "staff-view", order: 6, width: "full", visible: true },
+              ],
+            },
+          },
+        ],
+        rules: [
+          {
+            name: "Staff name is required",
+            objectKey: "employee",
+            triggerKey: "before_save",
+            active: true,
+            required: true,
+            conditions: [{ field: "full_name", operator: "is_empty" }],
+            action: { type: "validation", match: "all", message: "Enter a staff name." },
+          },
+        ],
+        permissionDeclarations: [
+          { key: "staff_records", objectKey: "employee", permission: "user.view", access: "read" },
+          { key: "staff_create", objectKey: "employee", permission: "user.create", access: "create" },
+          { key: "staff_manage", objectKey: "employee", permission: "user.edit", access: "manage" },
+          { key: "attendance_records", objectKey: "attendance", permission: "attendance.view", access: "read" },
+          { key: "attendance_actions", objectKey: "attendance", permission: "attendance.use", access: "execute" },
+        ],
+        permissions: ["user.view", "user.create", "user.edit", "attendance.view", "attendance.use"],
+        capabilities: ["staff_core", "employee_metadata", "attendance_metadata"],
+        ownership: {
+          metadataTypes: ["object", "field", "relationship", "layout", "list_view", "validation", "workflow", "action"],
+          excludes: ["authentication_user_metadata", "roles", "permissions", "user_records", "attendance_record_data"],
+        },
+        upgradeMetadata: { strategy: "additive", preserveExistingUserIds: true, preserveAttendanceRecords: true },
+        migrations: ["staff_core_object_metadata_v1"],
+      } : {}),
       ...(entry.key === "batch_expiry" ? {
         objects: [
           {
@@ -584,6 +707,9 @@ export async function provisionPackageMetadata(db, { packageId, moduleId, compan
     if (typeof definition.label !== "string" || !definition.label.trim()) {
       throw new Error(`Package object label is required: ${objectKey}`);
     }
+    const sourceTable = definition.sourceTable || definition.source_table || null;
+    const storeScoped = typeof definition.storeScoped === "boolean" ? definition.storeScoped : null;
+    if (sourceTable && !safeMetadataKey(sourceTable)) throw new Error(`Invalid package source table: ${sourceTable}`);
     const existing = await db(
       "SELECT id,package_id,module_id,company_id FROM platform_objects WHERE object_key=$1",
       [objectKey]
@@ -598,43 +724,50 @@ export async function provisionPackageMetadata(db, { packageId, moduleId, compan
         throw new Error(`Platform object belongs to another company: ${objectKey}`);
       }
       await db(
-          "UPDATE platform_objects SET package_id=$1,module_id=COALESCE(module_id,$2),company_id=COALESCE(company_id,$3),label=CASE WHEN user_modified THEN label ELSE $4 END,plural_label=CASE WHEN user_modified THEN plural_label ELSE $5 END,description=CASE WHEN user_modified THEN description ELSE $6 END,source_package_version=$8,managed=true,package_required=$9,active=true,updated_at=NOW() WHERE id=$7 RETURNING *",
-          [packageId, moduleId, objectCompanyId, definition.label.trim(), definition.pluralLabel || definition.plural_label || null, definition.description || null, object.id, packageVersion, definition.required === true]
+          "UPDATE platform_objects SET package_id=$1,module_id=COALESCE(module_id,$2),company_id=COALESCE(company_id,$3),label=CASE WHEN user_modified THEN label ELSE $4 END,plural_label=CASE WHEN user_modified THEN plural_label ELSE $5 END,description=CASE WHEN user_modified THEN description ELSE $6 END,source_table=CASE WHEN user_modified THEN source_table ELSE COALESCE($7,source_table) END,store_scoped=CASE WHEN user_modified OR $8::boolean IS NULL THEN store_scoped ELSE $8 END,source_package_version=$10,managed=true,package_required=$11,active=true,updated_at=NOW() WHERE id=$9 RETURNING *",
+          [packageId, moduleId, objectCompanyId, definition.label.trim(), definition.pluralLabel || definition.plural_label || null, definition.description || null, sourceTable, storeScoped, object.id, packageVersion, definition.required === true]
       );
     } else {
       const result = await db(
         `INSERT INTO platform_objects
-         (module_id,package_id,object_key,label,plural_label,description,company_id,source_table,source_package_version,managed,package_required)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,true,$10) RETURNING *`,
-        [moduleId, packageId, objectKey, definition.label.trim(), definition.pluralLabel || definition.plural_label || null, definition.description || null, objectCompanyId, definition.sourceTable || definition.source_table || null, packageVersion, definition.required === true]
+         (module_id,package_id,object_key,label,plural_label,description,company_id,source_table,store_scoped,source_package_version,managed,package_required)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,true,$11) RETURNING *`,
+        [moduleId, packageId, objectKey, definition.label.trim(), definition.pluralLabel || definition.plural_label || null, definition.description || null, objectCompanyId, sourceTable, definition.storeScoped === true, packageVersion, definition.required === true]
       );
       object = result.rows[0];
     }
     objectIds.set(objectKey, object.id);
 
     for (const field of Array.isArray(definition.fields) ? definition.fields : []) {
+      const fieldCompanyId = definition.fieldsMetadataScope === "global" || field.metadataScope === "global"
+        ? null
+        : companyId || null;
       const apiName = field?.apiName || field?.api_name;
+      const sourceColumn = field?.sourceColumn || field?.source_column || null;
       if (!safeMetadataKey(apiName) || typeof field.label !== "string" || !field.label.trim()) {
         throw new Error(`Invalid package field on ${objectKey}`);
       }
+      if (sourceColumn && !safeMetadataKey(sourceColumn)) {
+        throw new Error(`Invalid package field source column on ${objectKey}.${apiName}`);
+      }
       const existingField = await db(
-        "SELECT id,company_id FROM platform_fields WHERE object_id=$1 AND api_name=$2 AND (company_id IS NULL OR company_id=$3)",
-        [object.id, apiName, companyId]
+        "SELECT id,company_id FROM platform_fields WHERE object_id=$1 AND api_name=$2 AND (company_id IS NULL OR company_id=$3) ORDER BY company_id NULLS FIRST LIMIT 1",
+        [object.id, apiName, fieldCompanyId]
       );
       if (existingField.rows.length) {
-        if (existingField.rows[0].company_id && existingField.rows[0].company_id !== companyId) {
+        if (existingField.rows[0].company_id && existingField.rows[0].company_id !== fieldCompanyId) {
           throw new Error(`Platform field belongs to another company: ${objectKey}.${apiName}`);
         }
         await db(
-          "UPDATE platform_fields SET label=CASE WHEN user_modified THEN label ELSE $1 END,field_type=CASE WHEN user_modified THEN field_type ELSE $2 END,required=$3,readable=CASE WHEN user_modified THEN readable ELSE $4 END,writable=CASE WHEN user_modified THEN writable ELSE $5 END,options=CASE WHEN user_modified THEN options ELSE $6::jsonb END,config=CASE WHEN user_modified THEN config ELSE $7::jsonb END,source_package_id=$9,source_package_version=$10,managed=true,package_required=$11,active=true WHERE id=$8",
-          [field.label.trim(), field.fieldType || field.field_type || "text", field.required === true, field.readable !== false, field.writable === true, JSON.stringify(field.options || []), JSON.stringify({ ...(field.config || {}), packageContract: field.required === true ? "required" : "default", packageOwned: true, packageId }), existingField.rows[0].id, packageId, packageVersion, field.required === true]
+          "UPDATE platform_fields SET label=CASE WHEN user_modified THEN label ELSE $1 END,field_type=CASE WHEN user_modified THEN field_type ELSE $2 END,source_column=CASE WHEN user_modified THEN source_column ELSE $3 END,required=$4,readable=CASE WHEN user_modified THEN readable ELSE $5 END,writable=CASE WHEN user_modified THEN writable ELSE $6 END,options=CASE WHEN user_modified THEN options ELSE $7::jsonb END,config=CASE WHEN user_modified THEN config ELSE $8::jsonb END,source_package_id=$10,source_package_version=$11,managed=true,package_required=$12,active=true WHERE id=$9",
+          [field.label.trim(), field.fieldType || field.field_type || "text", sourceColumn, field.required === true, field.readable !== false, field.writable === true, JSON.stringify(field.options || []), JSON.stringify({ ...(field.config || {}), packageContract: field.required === true ? "required" : "default", packageOwned: true, packageId }), existingField.rows[0].id, packageId, packageVersion, field.required === true]
         );
       } else {
         await db(
           `INSERT INTO platform_fields
-           (object_id,api_name,label,field_type,required,readable,writable,options,config,company_id,source_package_id,source_package_version,managed,package_required)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9::jsonb,$10,$11,$12,true,$13)`,
-          [object.id, apiName, field.label.trim(), field.fieldType || field.field_type || "text", field.required === true, field.readable !== false, field.writable === true, JSON.stringify(field.options || []), JSON.stringify({ ...(field.config || {}), packageContract: field.required === true ? "required" : "default", packageOwned: true, packageId }), companyId || null, packageId, packageVersion, field.required === true]
+           (object_id,api_name,label,field_type,source_column,required,readable,writable,options,config,company_id,source_package_id,source_package_version,managed,package_required)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10::jsonb,$11,$12,$13,true,$14)`,
+          [object.id, apiName, field.label.trim(), field.fieldType || field.field_type || "text", sourceColumn, field.required === true, field.readable !== false, field.writable === true, JSON.stringify(field.options || []), JSON.stringify({ ...(field.config || {}), packageContract: field.required === true ? "required" : "default", packageOwned: true, packageId }), fieldCompanyId, packageId, packageVersion, field.required === true]
         );
       }
     }
@@ -684,12 +817,16 @@ export async function provisionPackageMetadata(db, { packageId, moduleId, compan
     }
     await db(
       `INSERT INTO platform_list_views
-       (object_id,company_id,view_key,label,description,columns,filters,sort,page_size,is_default)
-       VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7::jsonb,$8::jsonb,$9,$10)
+       (object_id,company_id,view_key,label,description,columns,filters,sort,page_size,is_default,source_package_id,source_package_version,managed,package_required)
+       VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7::jsonb,$8::jsonb,$9,$10,$11,$12,true,$13)
        ON CONFLICT (object_id,company_id,view_key)
        DO UPDATE SET label=EXCLUDED.label,description=EXCLUDED.description,
          columns=EXCLUDED.columns,filters=EXCLUDED.filters,sort=EXCLUDED.sort,
-         page_size=EXCLUDED.page_size,is_default=EXCLUDED.is_default,active=true,updated_at=NOW()`,
+         page_size=EXCLUDED.page_size,is_default=EXCLUDED.is_default,
+         source_package_id=EXCLUDED.source_package_id,source_package_version=EXCLUDED.source_package_version,
+         managed=true,package_required=EXCLUDED.package_required,active=true,updated_at=NOW()
+       WHERE platform_list_views.source_package_id=EXCLUDED.source_package_id
+          OR platform_list_views.source_package_id IS NULL`,
       [
         objectId,
         companyId || null,
@@ -701,8 +838,41 @@ export async function provisionPackageMetadata(db, { packageId, moduleId, compan
         JSON.stringify(view.sort || { field: null, direction: "asc" }),
         Number.isFinite(Number(view.pageSize)) ? Number(view.pageSize) : 50,
         view.isDefault === true,
+        packageId,
+        packageVersion,
+        view.required === true,
       ]
     );
+  }
+
+  for (const layout of Array.isArray(manifest.layouts) ? manifest.layouts : []) {
+    const objectId = objectIds.get(layout.objectKey || layout.object_key);
+    const pageType = layout.pageType || layout.page_type;
+    const layoutKey = layout.layoutKey || layout.layout_key;
+    if (!objectId || !["list", "detail", "view", "create", "edit", "quick_create"].includes(pageType) ||
+        !safeMetadataKey(layoutKey) || typeof layout.name !== "string" || !layout.name.trim()) {
+      throw new Error("Package layouts require a declared object, supported page type and safe key");
+    }
+    const definition = layout.definition;
+    if (!definition || typeof definition !== "object" || Array.isArray(definition) || !Array.isArray(definition.components)) {
+      throw new Error(`Package layout requires a component definition: ${layoutKey}`);
+    }
+    const layoutCompanyId = layout.metadataScope === "global" ? null : companyId || null;
+    const result = await db(
+      `INSERT INTO platform_layouts
+       (object_id,page_type,role_id,company_id,name,layout_key,definition,active,source_package_id,source_package_version,managed,package_required)
+       VALUES ($1,$2,NULL,$3,$4,$5,$6::jsonb,true,$7,$8,true,$9)
+       ON CONFLICT (object_id,page_type,layout_key) WHERE layout_key <> ''
+       DO UPDATE SET name=CASE WHEN platform_layouts.user_modified THEN platform_layouts.name ELSE EXCLUDED.name END,
+         definition=CASE WHEN platform_layouts.user_modified THEN platform_layouts.definition ELSE EXCLUDED.definition END,
+         source_package_id=EXCLUDED.source_package_id,source_package_version=EXCLUDED.source_package_version,
+         managed=true,package_required=EXCLUDED.package_required,active=true,updated_at=NOW()
+       WHERE platform_layouts.source_package_id=EXCLUDED.source_package_id
+          OR platform_layouts.source_package_id IS NULL
+       RETURNING id`,
+      [objectId, pageType, layoutCompanyId, layout.name, layoutKey, JSON.stringify(definition), packageId, packageVersion, layout.required === true]
+    );
+    if (!result.rows.length) throw new Error(`Package layout key is owned by another declaration: ${layoutKey}`);
   }
 
   for (const page of Array.isArray(manifest.pages) ? manifest.pages : []) {
@@ -745,7 +915,7 @@ export async function provisionPackageMetadata(db, { packageId, moduleId, compan
        WHERE platform_registered_actions.config->>'packageOwned'='true'
          AND platform_registered_actions.config->>'packageId'=EXCLUDED.config->>'packageId'
        RETURNING id`,
-      [companyId || null, objectId, actionKey, action.label.trim(), action.description || null, handlerKey, action.requiredPermission || action.required_permission || null, JSON.stringify({ packageOwned: true, packageId })]
+      [companyId || null, objectId, actionKey, action.label.trim(), action.description || null, handlerKey, action.requiredPermission || action.required_permission || null, JSON.stringify({ packageOwned: true, packageId, ...(action.config || {}) })]
     );
     if (!registered.rows.length) throw new Error(`Package action key is owned by another declaration: ${actionKey}`);
   }
@@ -800,24 +970,44 @@ export async function provisionPackageMetadata(db, { packageId, moduleId, compan
       throw new Error("Package rules must reference declared objects with safe trigger keys");
     }
     const existingRule = await db(
-      "SELECT id,action FROM platform_rules WHERE object_id=$1 AND company_id IS NOT DISTINCT FROM $2 AND name=$3 LIMIT 1",
+      "SELECT id,action,source_package_id,user_modified FROM platform_rules WHERE object_id=$1 AND company_id IS NOT DISTINCT FROM $2 AND name=$3 LIMIT 1",
       [objectId, companyId || null, rule.name.trim()]
     );
     const ruleAction = { ...(rule.action || {}), packageKey: manifest.packageKey || rule.packageKey };
     if (existingRule.rows.length) {
+      if (existingRule.rows[0].source_package_id !== packageId) {
+        if (!existingRule.rows[0].source_package_id) continue;
+        throw new Error(`Package rule is owned by another declaration: ${rule.name}`);
+      }
+      if (existingRule.rows[0].user_modified) continue;
+      await db(
+        `UPDATE platform_rules
+            SET trigger_key=$1,conditions=$2::jsonb,action=$3::jsonb,active=$4,lifecycle_status=$5,
+                source_package_version=$6,managed=true,package_required=$7,updated_at=NOW()
+          WHERE id=$8 AND source_package_id=$9`,
+        [rule.triggerKey || rule.trigger_key, JSON.stringify(rule.conditions || []), JSON.stringify(ruleAction),
+          rule.action?.type === "validation" && rule.active === true,
+          rule.action?.type === "validation" && rule.active === true ? "ACTIVE" : "INACTIVE",
+          packageVersion, rule.required === true, existingRule.rows[0].id, packageId]
+      );
       continue;
     }
     await db(
       `INSERT INTO platform_rules
-       (object_id,name,trigger_key,conditions,action,active,company_id,lifecycle_status)
-       VALUES ($1,$2,$3,$4::jsonb,$5::jsonb,false,$6,'INACTIVE')`,
+       (object_id,name,trigger_key,conditions,action,active,company_id,lifecycle_status,source_package_id,source_package_version,managed,package_required)
+       VALUES ($1,$2,$3,$4::jsonb,$5::jsonb,$6,$7,$8,$9,$10,true,$11)`,
       [
         objectId,
         rule.name.trim(),
         rule.triggerKey || rule.trigger_key,
         JSON.stringify(rule.conditions || []),
         JSON.stringify(ruleAction),
+        rule.action?.type === "validation" && rule.active === true,
         companyId || null,
+        rule.action?.type === "validation" && rule.active === true ? "ACTIVE" : "INACTIVE",
+        packageId,
+        packageVersion,
+        rule.required === true,
       ]
     );
   }
@@ -826,14 +1016,17 @@ export async function provisionPackageMetadata(db, { packageId, moduleId, compan
     `WITH owned AS (
        SELECT 'object'::text AS metadata_type,id FROM platform_objects WHERE package_id=$1
        UNION ALL
-       SELECT 'field',f.id FROM platform_fields f JOIN platform_objects o ON o.id=f.object_id WHERE o.package_id=$1
+       SELECT 'field',f.id FROM platform_fields f WHERE f.source_package_id=$1
+       UNION ALL
+       SELECT 'list_view',id FROM platform_list_views WHERE source_package_id=$1
        UNION ALL
        SELECT 'relationship',r.id FROM platform_relationships r
         WHERE r.source_package_id=$1
        UNION ALL
        SELECT 'layout',id FROM platform_layouts WHERE source_package_id=$1
        UNION ALL
-       SELECT 'workflow',id FROM platform_rules WHERE source_package_id=$1
+       SELECT CASE WHEN action->>'type'='validation' THEN 'validation' ELSE 'workflow' END,id
+         FROM platform_rules WHERE source_package_id=$1
        UNION ALL
        SELECT 'report',id FROM platform_reports WHERE source_package_id=$1
        UNION ALL
@@ -856,10 +1049,10 @@ export async function provisionPackageMetadata(db, { packageId, moduleId, compan
   return { objects: objectIds.size, ownedMetadata: ownedMetadata.rowCount || 0 };
 }
 
-export async function provisionDefaultCompanyPackages(db, { companyId, installedBy = null, packageKeys = ["retail_pos", "products", "customers"] }) {
+export async function provisionDefaultCompanyPackages(db, { companyId, installedBy = null, packageKeys = ["staff", "retail_pos", "products", "customers"] }) {
   for (const packageKey of packageKeys) {
     const packageResult = await db(
-      `SELECT p.id, p.version, p.module_id
+      `SELECT p.id, p.version, p.module_id, p.manifest
        FROM package_registry p
        WHERE p.package_key=$1 AND p.active=true`,
       [packageKey]
@@ -873,6 +1066,15 @@ export async function provisionDefaultCompanyPackages(db, { companyId, installed
        ON CONFLICT (company_id,package_id) DO NOTHING`,
       [companyId, pkg.id, pkg.version, installedBy]
     );
+    if (packageKey === "staff") {
+      await provisionPackageMetadata(db, {
+        packageId: pkg.id,
+        moduleId: pkg.module_id,
+        companyId,
+        manifest: pkg.manifest || {},
+        packageVersion: pkg.version,
+      });
+    }
     if (pkg.module_id) {
       await db(
         `INSERT INTO platform_module_access (module_id,company_id,store_id,enabled)

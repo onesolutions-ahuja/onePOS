@@ -89,6 +89,59 @@ test("a permitted custom Object configured for navigation becomes one Dock entry
   assert.equal(entry.route, "/app/objects/vehicle");
 });
 
+test("Staff and Attendance navigation maps existing read permissions only", () => {
+  const staffPage = {
+    id: "staff-page",
+    app_id: "staff-app",
+    company_id: "c1",
+    page_key: "staff",
+    label: "Staff",
+    page_type: "object",
+    active: true,
+    definition: { objectKey: "employee" },
+  };
+  const attendancePage = {
+    ...staffPage,
+    id: "attendance-page",
+    page_key: "attendance",
+    label: "Attendance",
+    definition: { objectKey: "attendance" },
+  };
+  const pages = [staffPage, attendancePage];
+  const apps = [{ id: "staff-app", app_key: "staff", label: "Staff", active: true, company_id: "c1" }];
+  const objects = [
+    { id: "employee-id", object_key: "employee", source_table: "users", label: "Staff", active: true, company_id: null, module_id: null },
+    { id: "attendance-id", object_key: "attendance", source_table: "attendance_records", label: "Attendance", active: true, company_id: null, module_id: null },
+  ];
+
+  const staff = objectNavigationEntries(fixtures({
+    pages,
+    apps,
+    objects,
+    objectPermissions: [],
+    permissions: ["user.view"],
+  }));
+  assert.deepEqual(staff.entries.map((entry) => entry.objectKey), ["employee"]);
+
+  const attendance = objectNavigationEntries(fixtures({
+    pages,
+    apps,
+    objects,
+    objectPermissions: [],
+    permissions: ["attendance.view"],
+  }));
+  assert.deepEqual(attendance.entries.map((entry) => entry.objectKey), ["attendance"]);
+
+  const denied = objectNavigationEntries(fixtures({
+    pages,
+    apps,
+    objects,
+    objectPermissions: [],
+    permissions: ["attendance.use"],
+  }));
+  assert.deepEqual(denied.entries, []);
+});
+
 test("no developer page is needed per Object: the route is derived from the object key alone", () => {
   assert.equal(objectRuntimeRoute("vehicle"), `${OBJECT_RUNTIME_ROUTE_PREFIX}vehicle`);
   assert.equal(objectRuntimeRoute(""), null);

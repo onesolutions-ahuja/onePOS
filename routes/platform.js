@@ -18,7 +18,7 @@ import {
   validateWorkflowAction,
 } from "../services/platformWorkflow.js";
 import { decidePlatformApproval, submitPlatformApproval } from "../services/platformApprovals.js";
-import { systemObject, tenantFields, isExtensionField, safeSystemFields, hydrateExtensions, appendSystemReadScope, platformFieldSql } from "../services/platformSystemObjects.js";
+import { systemObject, systemObjectRbacPermission, tenantFields, isExtensionField, safeSystemFields, hydrateExtensions, appendSystemReadScope, platformFieldSql } from "../services/platformSystemObjects.js";
 import { readDomainConfiguration, saveDomainConfiguration, withDomainSave } from "../services/platformDomainRecords.js";
 import { internalAppCatalog } from "../services/internalAppCatalog.js";
 import { moduleRuntimeAccess } from "../services/authorization.js";
@@ -193,13 +193,30 @@ function canManageGlobal(req) {
 async function hasPlatformObjectPermission(db, req, objectId, action) {
   if (req.user?.isSuperadmin === true || req.user?.isPlatformDeveloper === true || req.user?.isDeveloper === true) return true;
   if (!objectId) return false;
-  if (!req.user?.roleId) return Boolean(req.user?.companyId);
+  if (!req.user?.roleId || !req.user?.companyId) return false;
   const result = await db(
     "SELECT can_view, can_create, can_edit, can_delete, can_import, can_export FROM platform_object_permissions WHERE object_id=$1 AND role_id=$2 AND company_id=$3",
     [objectId, req.user.roleId, req.user.companyId]
   );
-  if (!result.rows.length) return false;
-  return result.rows[0][`can_${action}`] === true;
+  if (result.rows[0]?.[`can_${action}`] === true) return true;
+  const permission = systemObjectRbacPermission(
+    (await db(
+      "SELECT object_key,source_table FROM platform_objects WHERE id=$1 AND active=true AND (company_id IS NULL OR company_id=$2)",
+      [objectId, req.user.companyId]
+    )).rows[0],
+    action
+  );
+  if (!permission) return false;
+  const rolePermission = await db(
+    `SELECT 1
+       FROM roles r
+       JOIN role_permissions rp ON rp.role_id=r.id
+       JOIN permissions p ON p.id=rp.permission_id
+      WHERE r.id=$1 AND (r.company_id IS NULL OR r.company_id=$2) AND p.code=$3
+      LIMIT 1`,
+    [req.user.roleId, req.user.companyId, permission]
+  );
+  return rolePermission.rows.length > 0;
 }
 
 async function activeFieldReferences(db, field, companyId) {
@@ -1070,7 +1087,21 @@ export default function createPlatformRouter({ authenticate, authorize, db, pool
       [object.id, req.user.roleId || null, req.user.companyId]
     );
     const permission = result.rows[0] || { can_view: false, can_create: false, can_edit: false, can_delete: false };
-    res.json({ success: true, data: { objectId: object.id, roleId: req.user.roleId || null, ...permission, source: result.rows[0] ? "role_override" : "default_deny" } });
+    const [canView, canCreate, canEdit] = await Promise.all(["view", "create", "edit"].map((action) =>
+      hasPlatformObjectPermission(db, req, object.id, action)
+    ));
+    res.json({
+      success: true,
+      data: {
+        objectId: object.id,
+        roleId: req.user.roleId || null,
+        ...permission,
+        can_view: canView,
+        can_create: canCreate,
+        can_edit: canEdit,
+        source: result.rows[0] ? "role_override" : (canView || canCreate || canEdit ? "rbac_bridge" : "default_deny"),
+      },
+    });
   });
 
   router.put("/platform/fields/:fieldId/security/:roleId", ...manage, async (req, res) => {
@@ -3878,6 +3909,9 @@ router.get("/platform/runtime/apps", authenticate, async (req, res) => {
               );
               const parent = parentResult.rows[0];
               if (!parent) return res.status(404).json({ success: false, message: "Object not found" });
+              if (!(await hasPlatformObjectPermission(db, req, parent.id, "view"))) {
+                return res.status(403).json({ success: false, message: "You do not have permission to view records for this object" });
+              }
 
               const parentClauses = ["id=$1"];
               const parentParams = [req.params.recordId];
@@ -3908,6 +3942,9 @@ router.get("/platform/runtime/apps", authenticate, async (req, res) => {
               const child = childMetadata.object;
               if (!child || !child.source_table || !isSafeIdentifier(child.source_table)) {
                 return res.status(404).json({ success: false, message: "Related object is unavailable" });
+              }
+              if (!(await hasPlatformObjectPermission(db, req, child.id, "view"))) {
+                return res.status(403).json({ success: false, message: "You do not have permission to view related records" });
               }
               const childField = childMetadata.fields.find((field) => String(field.id) === String(relationship.child_field_id));
               if (!childField || !platformFieldSql(childField, child)) {

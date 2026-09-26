@@ -56,13 +56,14 @@ export async function searchPlatformRecords(db, req, query, { maxResults = MAX_R
         const access = permission
           ? await db(
             `SELECT 1 FROM role_permissions rp
+             JOIN roles r ON r.id=rp.role_id AND (r.company_id IS NULL OR r.company_id=$5)
              JOIN permissions p ON p.id=rp.permission_id
              WHERE rp.role_id=$1 AND p.code=$2
              UNION ALL
              SELECT 1 FROM platform_object_permissions
              WHERE object_id=$3 AND role_id=$1 AND company_id=$4 AND can_view=true
              LIMIT 1`,
-            [req.user.roleId, permission, object.id, req.user.companyId]
+            [req.user.roleId, permission, object.id, req.user.companyId, req.user.companyId]
           )
           : await db(
             "SELECT 1 FROM platform_object_permissions WHERE object_id=$1 AND role_id=$2 AND company_id=$3 AND can_view=true",

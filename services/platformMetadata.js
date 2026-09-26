@@ -338,6 +338,12 @@ export const platformSchema = `
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     UNIQUE (object_id, company_id, view_key)
   );
+  ALTER TABLE platform_list_views
+    ADD COLUMN IF NOT EXISTS source_package_id UUID REFERENCES package_registry(id) ON DELETE SET NULL,
+    ADD COLUMN IF NOT EXISTS source_package_version VARCHAR(40),
+    ADD COLUMN IF NOT EXISTS managed BOOLEAN NOT NULL DEFAULT FALSE,
+    ADD COLUMN IF NOT EXISTS package_required BOOLEAN NOT NULL DEFAULT FALSE,
+    ADD COLUMN IF NOT EXISTS user_modified BOOLEAN NOT NULL DEFAULT FALSE;
   CREATE TABLE IF NOT EXISTS platform_reports (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     object_id UUID NOT NULL REFERENCES platform_objects(id) ON DELETE CASCADE,
@@ -612,8 +618,16 @@ const retailObjects = [
     ],
   },
   {
-    key: "employee", label: "Employee", plural: "Employees", table: "users",
-    fields: [["full_name", "Full Name", "text", "full_name", true], ["username", "Username", "text", "username", true], ["email", "Email", "email", "email", false], ["active", "Active", "boolean", "active", false]],
+    key: "employee", label: "Staff Member", plural: "Staff", table: "users", moduleKey: "staff",
+    fields: [
+      ["full_name", "Name", "text", "full_name", true],
+      ["username", "Username", "text", "username", true],
+      ["email", "Email", "email", "email", false],
+      ["active", "Status", "boolean", "active", false],
+      ["store_id", "Store", "lookup", "store_id", false],
+      ["created_at", "Created", "datetime", "created_at", false],
+      ["updated_at", "Updated", "datetime", "updated_at", false],
+    ],
   },
 ];
 
@@ -741,6 +755,37 @@ export async function initializePlatformMetadata(pool, { includeOperationalObjec
   await pool.query(platformSchema);
   await seedInternalAppCatalog(pool);
   await seedPackageRegistry(pool);
+  await pool.query(
+    `UPDATE platform_objects employee
+        SET module_id=staff.module_id,package_id=staff.id,source_package_version=staff.version,managed=true
+       FROM package_registry staff,platform_modules legacy_module
+      WHERE staff.package_key='staff' AND legacy_module.module_key='retail_pos'
+        AND employee.object_key='employee' AND employee.source_table='users' AND employee.company_id IS NULL
+        AND employee.module_id=legacy_module.id
+        AND (employee.package_id IS NULL OR employee.package_id=(SELECT id FROM package_registry WHERE package_key='retail_pos'))`
+  );
+  await pool.query(
+    `DELETE FROM package_metadata_ownership ownership
+      WHERE ownership.package_id=(SELECT id FROM package_registry WHERE package_key='retail_pos')
+        AND ownership.metadata_id IN (
+          SELECT employee.id FROM platform_objects employee
+           WHERE employee.object_key='employee' AND employee.source_table='users' AND employee.company_id IS NULL
+          UNION ALL
+          SELECT field.id FROM platform_fields field
+            JOIN platform_objects employee ON employee.id=field.object_id
+           WHERE employee.object_key='employee' AND employee.source_table='users'
+             AND employee.company_id IS NULL AND field.company_id IS NULL
+        )`
+  );
+  await pool.query(
+    `UPDATE platform_fields field
+        SET source_package_id=staff.id,source_package_version=staff.version,managed=true
+       FROM platform_objects employee,package_registry staff
+      WHERE employee.object_key='employee' AND employee.source_table='users'
+        AND employee.company_id IS NULL AND employee.package_id=staff.id
+        AND staff.package_key='staff' AND field.object_id=employee.id AND field.company_id IS NULL
+        AND (field.source_package_id IS NULL OR field.source_package_id=(SELECT id FROM package_registry WHERE package_key='retail_pos'))`
+  );
   const moduleResult = await pool.query(
     `INSERT INTO platform_modules (module_key, name, version, description, installed)
      VALUES ('retail_pos', 'Retail POS', '1.0.0', 'Core onePOS retail application', TRUE)
