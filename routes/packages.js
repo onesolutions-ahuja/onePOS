@@ -260,7 +260,7 @@ export default function createPackagesRouter({ authenticate, authorize, db, pool
       }
       const response = await withTransaction(async (txDb) => {
         const rootPackageResult = await txDb(
-          "SELECT id FROM package_registry WHERE package_key=$1 AND active=true",
+          "SELECT id,version FROM package_registry WHERE package_key=$1 AND active=true",
           [root.packageKey]
         );
         if (!rootPackageResult.rows.length) throw new Error(`Package not found: ${root.packageKey}`);
@@ -268,9 +268,10 @@ export default function createPackagesRouter({ authenticate, authorize, db, pool
         for (const item of plan) {
           const moduleResult = await txDb("SELECT id FROM platform_modules WHERE module_key=$1", [item.moduleKey]);
           if (!moduleResult.rows.length) throw new Error(`Package module is not registered: ${item.moduleKey}`);
-          const packageResult = await txDb("SELECT id,version,package_type,installable FROM package_registry WHERE package_key=$1 AND active=true", [item.packageKey]);
+          const packageResult = await txDb("SELECT id,version FROM package_registry WHERE package_key=$1 AND active=true", [item.packageKey]);
           if (!packageResult.rows.length) throw new Error(`Package not found: ${item.packageKey}`);
-          if (packageResult.rows[0].installable === false) throw new Error(`Package is not installable: ${item.packageKey}`);
+          const installability = await txDb("SELECT installable FROM package_registry WHERE package_key=$1 AND active=true", [item.packageKey]);
+          if (installability.rows[0]?.installable === false) throw new Error(`Package is not installable: ${item.packageKey}`);
           await provisionPackageMetadata(txDb, {
             packageId: packageResult.rows[0].id,
             moduleId: moduleResult.rows[0].id,
@@ -279,13 +280,14 @@ export default function createPackagesRouter({ authenticate, authorize, db, pool
             packageVersion: packageResult.rows[0].version,
           });
           await txDb(
-          `INSERT INTO company_package_installations (company_id,package_id,version,status,installed_by,selected_features,installation_type,available_version)
-           VALUES ($1,$2,$3,'active',$4,$5::jsonb,$6,$3)
+          `INSERT INTO company_package_installations (company_id,package_id,version,status,installed_by,selected_features)
+           VALUES ($1,$2,$3,'active',$4,$5::jsonb)
            ON CONFLICT (company_id,package_id) DO UPDATE SET status='active',
-             selected_features=CASE WHEN EXCLUDED.installation_type='DIRECT' THEN EXCLUDED.selected_features ELSE company_package_installations.selected_features END,
+             selected_features=CASE WHEN EXCLUDED.version = company_package_installations.version THEN EXCLUDED.selected_features ELSE COALESCE(company_package_installations.selected_features,'[]'::jsonb) END,
              installed_by=COALESCE(EXCLUDED.installed_by,company_package_installations.installed_by),
-             installation_type=CASE WHEN EXCLUDED.installation_type='DIRECT' THEN 'DIRECT' ELSE company_package_installations.installation_type END,
-             available_version=EXCLUDED.available_version,updated_at=NOW()`,
+             installation_type=CASE WHEN $6='DIRECT' THEN 'DIRECT' ELSE company_package_installations.installation_type END,
+             available_version=CASE WHEN $6='DIRECT' THEN EXCLUDED.version ELSE company_package_installations.available_version END,
+             updated_at=NOW()`,
           [
             req.user.companyId,
             packageResult.rows[0].id,
